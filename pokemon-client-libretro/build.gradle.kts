@@ -6,18 +6,18 @@
  * pokemon-client itself never depends on an emulator: this module is the only bridge.
  */
 import com.vanniktech.maven.publish.JavadocJar
-import com.vanniktech.maven.publish.KotlinJvm
+import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
-    alias(libs.plugins.kotlinJvm)
+    alias(libs.plugins.multiplatform)
     alias(libs.plugins.kover)
     alias(libs.plugins.dokka)
     alias(libs.plugins.maven)
 }
 
 mavenPublishing {
-    configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
+    configure(KotlinMultiplatform(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
     publishToMavenCentral()
     signAllPublications()
     pom {
@@ -44,27 +44,42 @@ mavenPublishing {
     }
 }
 
+/*
+ * Kotlin Multiplatform, with the JVM target only for now: the code lives in commonMain, and jvmMain only holds the
+ * `actual`s of the platform services declared in commonMain (files metadata, hashes, gzip, HTTP, PNG, the bench's
+ * window), so another target only needs its own actuals.
+ */
 kotlin {
     jvmToolchain(21)
+    jvm {
+        testRuns.named("test") {
+            executionTask.configure {
+                useJUnitPlatform()
+            }
+        }
+    }
+
+    sourceSets {
+        commonMain.dependencies {
+            api(projects.pokemonClient)
+            api(libs.libretro.kmp)
+            api(libs.kotlinx.io.core)
+        }
+        commonTest.dependencies {
+            implementation(libs.kotlin.test)
+        }
+    }
 }
 
-dependencies {
-    api(projects.pokemonClient)
-    api(libs.libretro.kmp)
-    testImplementation(libs.kotlin.test)
-}
-
-tasks.test {
-    useJUnitPlatform()
-}
-
-// The headless bench (see Bench.kt): runs commands and typed actions on a ROM, without the app, e.g.
+// The headless bench (see Bench.kt, started by BenchMain.kt on the JVM): runs commands and typed actions on a ROM,
+// without the app, e.g.
 // POKEMON_ROM=/path/rom.nds ./gradlew -q :pokemon-client-libretro:bench -PbenchArgs="<data dir>|<out dir>|load:x.state|step:1|state"
 // (BENCH_WINDOW=1 shows the game live, muted).
 tasks.register<JavaExec>("bench") {
     group = "verification"
     description = "Runs the headless bench on the ROM of POKEMON_ROM."
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass = "dev.kotlinds.pokemonclient.libretro.bench.BenchKt"
+    val main = kotlin.jvm().compilations["main"]
+    classpath = files(main.output.allOutputs, main.runtimeDependencyFiles)
+    mainClass = "dev.kotlinds.pokemonclient.libretro.bench.BenchMainKt"
     args = providers.gradleProperty("benchArgs").map { it.split("|") }.getOrElse(emptyList())
 }

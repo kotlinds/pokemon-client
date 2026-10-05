@@ -55,11 +55,17 @@ dependencies {
 Between releases the version is a `-SNAPSHOT`: publish it locally with `./gradlew publishToMavenLocal` and consume it
 from `mavenLocal()` (as ai-plays-pokemon does while developing).
 
-Tests: `./gradlew jvmTest test`. The tests reading a ROM run only when its path is given (they are skipped
+Both modules are Kotlin Multiplatform with the JVM target only for now, and written to take more targets: the code and
+the tests live in `commonMain` / `commonTest`, and `jvmMain` / `jvmTest` only hold the `actual`s of what the platform
+provides (declared in `PlatformServices.kt`, `BundledResources.kt` and the tests' `TestPlatform.kt`), plus one test
+that runs real threads. Files go through [kotlinx-io](https://github.com/Kotlin/kotlinx-io).
+
+Tests: `./gradlew jvmTest`. The tests reading a ROM run only when its path is given (they are skipped
 otherwise): `POKEMON_ROM` (HeartGold US) and `PLATINUM_ROM` (Platinum US). Coverage with `./gradlew koverHtmlReport`.
 
-The headless **bench** (`dev.kotlinds.pokemonclient.libretro.bench.BenchKt`, see its KDoc) runs commands and actions on
-a ROM without any app (`BENCH_WINDOW=1` shows it live, muted) and writes the sparse RAM fixtures of the unit tests:
+The headless **bench** (`runBench` in `dev.kotlinds.pokemonclient.libretro.bench`, see its KDoc; common code, started
+by `BenchMain.kt` on the JVM) runs commands and actions on a ROM without any app (`BENCH_WINDOW=1` shows it live,
+muted, where the platform has a window) and writes the sparse RAM fixtures of the unit tests:
 
 ```bash
 POKEMON_ROM=/path/to/rom.nds EMULATOR_CORE=desmume ./gradlew -q :pokemon-client-libretro:bench \
