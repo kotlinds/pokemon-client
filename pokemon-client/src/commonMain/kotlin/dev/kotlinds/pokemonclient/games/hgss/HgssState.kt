@@ -174,8 +174,6 @@ data class StoryInfo(
     val flags: Set<Int> = emptySet(),
     /** Vars of interest (id -> value). */
     val vars: Map<Int, Int> = emptyMap(),
-    val hasRunningShoes: Boolean = false,
-    val hasPokedex: Boolean = false,
     /** Badges owned, by index: 0..7 Johto (Zephyr...Rising), 8..15 Kanto (Boulder...Earth). */
     val badges: Set<Int> = emptySet(),
 ) : StoryFacts {
@@ -358,36 +356,12 @@ data class MapObjectInfo(
 )
 
 @Serializable
-data class WarpInfo(
-    val index: Int,
-    val x: Int,
-    val z: Int,
-    val dx: Int,
-    val dz: Int,
-    val destMapId: Int,
-    val destMapName: String,
-    val destLocationName: String? = null,
-    val destWarpId: Int,
-    /** door, stairs, exit mat, entrance, ladder, escalator, warp panel, exit (from the tile behavior). */
-    val kind: String = "exit",
-    /**
-     * Direction to press while standing on the warp tile (stairs, exit mats, ladders); null when walking onto the
-     * tile (or into the door) is enough (src/field/field_control.c FieldSystem_CheckMapTransition).
-     */
-    val pressDirection: String? = null,
-)
-
-@Serializable
 data class BgEventInfo(
     val x: Int,
     val z: Int,
-    val dx: Int,
-    val dz: Int,
     /** normal, sign, hidden_item */
     val type: String,
     val scriptId: Int,
-    /** "sign", "PC", "TV", "bookshelf"... or "something to examine". */
-    val label: String = type,
     /** Tile has the collision bit (objects on walls/furniture) */
     val blocked: Boolean = true,
 )
@@ -432,17 +406,6 @@ data class LocalGrid(
     fun at(x: Int, z: Int): Char = rows.getOrNull(z - originZ)?.getOrNull(x - originX) ?: '-'
 }
 
-/** A map next to the current one in the same matrix (walk past the edge to get there). */
-@Serializable
-data class NeighborArea(
-    /** north, south, west, east */
-    val direction: String,
-    val mapId: Int,
-    val name: String,
-    /** First global coordinate (x for west/east, z for north/south) that belongs to it. */
-    val boundary: Int,
-)
-
 @Serializable
 data class Surroundings(
     val matrixWidth: Int? = null,
@@ -451,10 +414,8 @@ data class Surroundings(
     val mapType: String? = null,
     val grid: LocalGrid? = null,
     val objects: List<MapObjectInfo> = emptyList(),
-    val warps: List<WarpInfo> = emptyList(),
     val bgEvents: List<BgEventInfo> = emptyList(),
     val triggers: List<TriggerInfo> = emptyList(),
-    val neighbors: List<NeighborArea> = emptyList(),
 )
 
 @Serializable

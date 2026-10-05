@@ -1,8 +1,6 @@
 package dev.kotlinds.pokemonclient.runtime
 
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BattleKind
@@ -19,7 +17,6 @@ import dev.kotlinds.pokemonclient.state.PcBoxContents
 import dev.kotlinds.pokemonclient.state.PcStorage
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.SpeciesId
-import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -49,7 +46,6 @@ class RecorderTypedEventsTest {
         var current = states.first()
         val game = object : PokemonGame {
             override val name = "Scripted"
-            override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
             override fun state(memory: Memory) = current
             override val inputProbe = InputProbe { emptySet() }
         }

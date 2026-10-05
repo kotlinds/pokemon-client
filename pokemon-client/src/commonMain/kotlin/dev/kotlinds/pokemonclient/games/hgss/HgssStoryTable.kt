@@ -584,6 +584,9 @@ object HgssStoryTable {
         }
     }
 
+    /** Every step done, in the table's order (a checkpoint done counts the steps before it as done: see [steps]). */
+    fun completed(facts: StoryFacts): List<HgssStoryStep> = steps.filter { it.done.holds(facts) }
+
     private val indexOf: Map<String, Int> by lazy { steps.withIndex().associate { (i, step) -> step.id to i } }
 
     /** The step with id [id], or null. */

@@ -29,6 +29,10 @@ import dev.kotlinds.pokemonclient.world.ZoneLink
  * - `frontier`: when the agent doesn't know where to go, the nearest reachable tile of this map next to a way out
  *   (an edge towards a neighbouring map, a warp, a hole) other than those within [FRONTIER_SKIP] tiles of the player
  *   (the way they came in). The walk stops before taking it, so the agent sees what is there.
+ *
+ * When the application hides where the ways out lead ([ActionSettings.hideDestinations]), only the targets of the
+ * current map are accepted (its warps, holes and exits are the way to explore) and walks never plan through another
+ * map ([hidden]).
  */
 internal object WorldTravel {
 
@@ -44,7 +48,8 @@ internal object WorldTravel {
         }
         // The walk to another map, planned once from here: when there is none, the error may suggest a flight. A long
         // walk is never refused for a shorter flight: walking is the agent's choice (training on the way...).
-        val onFoot = otherMap(world, field, goal)?.let { (area, goalArea) -> worldRoute(context, world, field, area, goalArea, goal, action.options) }?.tiles
+        // Destinations hidden: every goal is on this map, nothing is planned across maps.
+        val onFoot = otherMap(world, field, goal)?.takeIf { !context.settings.hideDestinations }?.let { (area, goalArea) -> worldRoute(context, world, field, area, goalArea, goal, action.options) }?.tiles
         // A long trip (minutes of surfing) says how far it has got: tiles walked of the planned route, current map.
         val meter = TravelMeter("go_to ${describeGoal(context, field, goal)}", context.scope::report)
         val trip = context.navigator.watching(meter::observe) { travel(context, world, goal, action.options, meter) }
@@ -64,6 +69,8 @@ internal object WorldTravel {
      */
     private fun ActionOutcome.withFly(context: PlanContext, start: FieldState, goal: Goal, onFoot: Int?): ActionOutcome {
         val error = (this as? ActionOutcome.Failed)?.error as? ActionError.Unavailable ?: return this
+        // A fly suggestion names where the destination is: never while destinations are hidden.
+        if (context.settings.hideDestinations) return this
         if (error.reason != UnavailableReason.NO_PATH || onFoot != null || goal.zone == start.mapId) return this
         val suggestion = FlyAdvisor(context.game).suggest(context.state(), goal.zone, onFoot = null) ?: return this
         val fly = "or fly: ${suggestion.landing}"
@@ -122,6 +129,7 @@ internal object WorldTravel {
 
     private fun resolve(context: PlanContext, field: FieldState, world: WorldSource, action: GameAction.GoTo): Resolved {
         val area = world.areaOf(field.mapId) ?: return Resolved.Failed(noMap(field))
+        if (context.settings.hideDestinations) return hidden(context, field, area, action)
         val target = action.target
         val near = nearZones(world, area, field)
         if (action.map != null) {
@@ -155,6 +163,59 @@ internal object WorldTravel {
         return Resolved.Failed(MovePlans.unknownTarget(context, target, exits + maps))
     }
 
+    /**
+     * [resolve] while destinations are hidden ([ActionSettings.hideDestinations]): a thing of the current map (person,
+     * warp, hole, sign, tile, `exit:<direction>`, `frontier`), or a refusal that names no other map. Whatever names
+     * another map (its name, `map:<id>`, x / y with `map`, a tile of a neighbouring map) gets the same
+     * [UnavailableReason.DESTINATIONS_HIDDEN]: the answer never tells whether that map exists, is near, or how to get
+     * there. A name the target doesn't resolve to on this map is refused the same way (no list of nearby maps).
+     */
+    private fun hidden(context: PlanContext, field: FieldState, area: Area, action: GameAction.GoTo): Resolved {
+        val target = action.target
+        if (action.map != null) {
+            if (!namesThisMap(context, field, action.map)) return Resolved.Failed(hiddenElsewhere(field, action.map))
+            if (action.x == null || action.y == null) return Resolved.Failed(alreadyHere(field))
+            return local(context, field, area, null, action.x, action.y, "${action.x},${action.y}")
+        }
+        if (target == null) return local(context, field, area, null, action.x, action.y, "${action.x},${action.y}")
+        if (target == FRONTIER) return frontier(context.game.world ?: return Resolved.Failed(noMap(field)), area, field)
+        if (target.startsWith("exit:")) return exit(context, area, field, target)
+        MovePlans.resolve(context, target, null, null)?.let { return Resolved.Found(Goal(field.mapId, it)) }
+        if (namesThisMap(context, field, target)) return Resolved.Failed(alreadyHere(field))
+        // An id of this map's kinds that resolved to nothing (person:99): the usual list of valid ids. Anything else
+        // (a map's name, map:<id>) is another map's.
+        if (':' in target && !target.startsWith("map:")) {
+            return Resolved.Failed(MovePlans.unknownTarget(context, target, WorldLinks.connections(area, field.mapId).map { it.id }.distinct() + FRONTIER))
+        }
+        return Resolved.Failed(hiddenElsewhere(field, target))
+    }
+
+    /** A tile ([x], [y]) of the current map; refused when it is known to be on another map of the area. */
+    private fun local(context: PlanContext, field: FieldState, area: Area, target: String?, x: Int?, y: Int?, asked: String): Resolved {
+        val zone = if (x != null && y != null) area.zoneAt(x, y) else null
+        if (zone != null && zone != field.mapId) return Resolved.Failed(hiddenElsewhere(field, asked))
+        return MovePlans.resolve(context, target, x, y)?.let { Resolved.Found(Goal(field.mapId, it)) }
+            ?: Resolved.Failed(MovePlans.unknownTarget(context, target))
+    }
+
+    /** True when [name] is the current map: its name (as [sameMapName] compares) or `map:<its id>`. */
+    private fun namesThisMap(context: PlanContext, field: FieldState, name: String): Boolean {
+        if (name.startsWith("map:")) return name.removePrefix("map:").toIntOrNull() == field.mapId
+        return sameMapName(field.mapName, name) || context.game.zoneName(field.mapId)?.let { sameMapName(it, name) } == true
+    }
+
+    private fun alreadyHere(field: FieldState) =
+        ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "You are already on ${field.mapName}"))
+
+    /** The refusal of a target off the current map while destinations are hidden: the same words whatever it is. */
+    internal fun hiddenElsewhere(field: FieldState, asked: String) = ActionOutcome.Failed(ActionError.Unavailable(
+        UnavailableReason.DESTINATIONS_HIDDEN,
+        "`$asked` isn't a place of the map you are on (${field.mapName}), and destinations are hidden: go_to only reaches " +
+            "places of this map",
+        "walk to one of its exits (go_to warp:N, hole:N, exit:<direction> or frontier) and take it to find out where it " +
+            "leads; read signs, listen to people and keep your own notes",
+    ))
+
     /** Entering zone [zone]: any tile of it (its area is shared with other zones on the overworld). */
     private fun zoneTarget(id: String, world: WorldSource, zone: Int): MovePlans.Target {
         val area = world.areaOf(zone)
@@ -167,12 +228,16 @@ internal object WorldTravel {
         val direction = Direction.parse(target.substringAfter(':'))
         val chosen = connections.filter { it.direction == direction }
         if (direction == null || chosen.isEmpty()) {
-            val allowed = connections.map { "${it.id} (${context.game.zoneName(it.toZone) ?: "map:${it.toZone}"})" }.distinct()
+            // Destinations hidden: the exits by id only (where they lead is for the agent to find out).
+            val allowed = if (context.settings.hideDestinations) connections.map { it.id }.distinct()
+            else connections.map { "${it.id} (${context.game.zoneName(it.toZone) ?: "map:${it.toZone}"})" }.distinct()
             val detail = if (connections.isEmpty()) "${field.mapName} has no edge leading to another map: use its warps (see exits)" else "No exit that way"
             return Resolved.Failed(ActionOutcome.Failed(if (connections.isEmpty()) ActionError.Unavailable(UnavailableReason.NO_PATH, detail) else ActionError.InvalidParameter("target", target, allowed)))
         }
         val beyond = chosen.flatMap { c -> c.tiles.map { (x, y) -> x + c.direction.dx to y + c.direction.dy } }.toSet()
-        return Resolved.Found(Goal(field.mapId, MovePlans.Target(target, null, null, isGoal = { node -> (node.x to node.y) in beyond })))
+        // Walks kept on this map (destinations hidden) may still step onto the neighbour's first tiles: the exit asked for.
+        val enter = if (context.settings.hideDestinations) beyond else emptySet()
+        return Resolved.Found(Goal(field.mapId, MovePlans.Target(target, null, null, isGoal = { node -> (node.x to node.y) in beyond }, enter = enter)))
     }
 
     /** `frontier`: the nearest reachable tile next to a way out of this map, away from where the player stands. */
@@ -312,6 +377,7 @@ internal object WorldTravel {
      * (from where the player really is), so the progress always has a total.
      */
     private fun travel(context: PlanContext, world: WorldSource, goal: Goal, options: MoveOptions, notes: MutableList<String>, meter: TravelMeter?): Trip {
+        if (context.settings.hideDestinations) return hiddenTravel(context, goal, options, notes)
         val taken = mutableListOf<ZoneLink>()
         var localFailure: MovePlans.Walk.NoRoute? = null
         // One pass per link taken, and one more for the walk on the destination's map: a route of [MAX_HOPS] links
@@ -361,6 +427,20 @@ internal object WorldTravel {
             localFailure = null
         }
         return Trip(MovePlans.Walk.Stuck("still not there after ${taken.size} warps: ${describe(taken)}"), taken, emptySet())
+    }
+
+    /**
+     * The trip while destinations are hidden ([ActionSettings.hideDestinations]): one walk on the player's map (kept on
+     * it by [MovePlans.overlay]), never a route through warps or other maps, even to reach a place of this map (the
+     * way round would reveal where the warps lead). A warp or hole asked for is taken: that is how the agent explores.
+     */
+    private fun hiddenTravel(context: PlanContext, goal: Goal, options: MoveOptions, notes: MutableList<String>): Trip {
+        BikeRide.mount(context, options)?.let { if (it !in notes) notes += it }
+        val state = context.navigator.settle()
+        val field = state.field
+        if (field == null || state.screen !is Screen.Overworld) return Trip(MovePlans.Walk.Interrupted(state, 0), emptyList(), emptySet())
+        val triggers = MovePlans.activeTriggers(context, field)
+        return Trip(MovePlans.walkTo(context, goal.target, options), emptyList(), triggers)
     }
 
     /**

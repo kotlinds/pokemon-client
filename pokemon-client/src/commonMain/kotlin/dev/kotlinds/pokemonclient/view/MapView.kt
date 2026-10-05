@@ -22,7 +22,8 @@ import kotlinx.serialization.json.put
  * The text map of the player's surroundings, the same for every game: built from the ROM's [Area] (tiles, warps,
  * signs) and the live [FieldState] (position, people). Everything listed has the id actions take (`warp:N`, `hole:N`,
  * `exit:<direction>`, `person:N`, `item:N`, `sign:N`, `hidden_item:N`, `examine:N`) and both absolute coordinates (for `go_to`) and
- * relative ones ("3 west, 2 north"). Exits name the destination map and the arrival tile, when [world] is given.
+ * relative ones ("3 west, 2 north"). Exits name the destination map and the arrival tile, when [world] is given,
+ * unless destinations are hidden (then every exit leads to [UNKNOWN_DESTINATION]).
  */
 object MapView {
 
@@ -31,16 +32,22 @@ object MapView {
      * map a warp leads to, when known; [world] gives the arrival tiles of warps (and the other zones' maps).
      * [showHidden]: show the hidden items and the invisible examinables without a cue (never seen by the player:
      * walkthrough knowledge, see [Sightings]); without it, an examinable with a cue is only "something to examine".
+     * [hideDestinations] (`ActionSettings.hideDestinations`): warps, holes and map-edge exits are listed with their
+     * place on this map but lead to [UNKNOWN_DESTINATION]: neither the map nor the arrival tile (the names of the
+     * neighbouring maps would give the geography away too). Everything of the current map stays shown.
      */
     fun render(
         area: Area,
         field: FieldState,
         zoneName: (Int) -> String? = { null },
-        width: Int = 15,
-        height: Int = 11,
+        width: Int = VIEW_WIDTH,
+        height: Int = VIEW_HEIGHT,
         world: WorldSource? = null,
         showHidden: Boolean = true,
+        hideDestinations: Boolean = false,
     ): JsonObject {
+        // Where an exit leads, as the agent may read it: unknown while destinations are hidden.
+        fun destination(zone: Int): String? = if (hideDestinations) UNKNOWN_DESTINATION else zoneName(zone)
         val left = field.x - width / 2
         val top = field.y - height / 2
         val warps = area.warps.filter { it.zone == field.mapId || area.zoneAt(it.x, it.y) == field.mapId }
@@ -64,7 +71,7 @@ object MapView {
         val rows = (top until top + height).map { y ->
             val cells = (left until left + width).joinToString(" ") { x ->
                 val c = when {
-                    x == field.x && y == field.y -> PLAYER.getValue(field.facing ?: Direction.SOUTH)
+                    x == field.x && y == field.y -> player(field.facing)
                     else -> objects.firstOrNull { it.x == x && it.y == y }?.let(::objectSymbol)
                         ?: warps.firstOrNull { it.x == x && it.y == y }?.let { 'E' }
                         ?: teleports[x to y]
@@ -98,18 +105,18 @@ object MapView {
             put("position", "${field.x},${field.y} facing ${field.facing?.name?.lowercase() ?: "?"}, ${field.movement.name.lowercase()}, height ${field.height}")
             val exits = buildList {
                 warps.forEach { w ->
-                    val arrival = arrivals["warp:${w.id}"]?.takeIf { it.zone == w.zone }
-                    val to = zoneName(w.targetZone)?.let { name -> " → $name" + (arrival?.toX?.let { " (${it},${arrival.toY})" } ?: "") } ?: ""
+                    val arrival = arrivals["warp:${w.id}"]?.takeIf { it.zone == w.zone && !hideDestinations }
+                    val to = destination(w.targetZone)?.let { name -> " → $name" + (arrival?.toX?.let { " (${it},${arrival.toY})" } ?: "") } ?: ""
                     add(distance(field, w.x, w.y) to "warp:${w.id} at ${w.x},${w.y} (${relative(field, w.x, w.y)})$to" +
                         (w.exitDirection?.let { " (step on it, then press ${it.name.lowercase()})" } ?: ""))
                 }
                 holes.forEach { h ->
-                    add(distance(field, h.x, h.y) to "${h.id} at ${h.x},${h.y} (${relative(field, h.x, h.y)}) → " +
-                        "${zoneName(h.targetZone) ?: "map:${h.targetZone}"} (${h.toX},${h.toY}) (a hole: you fall through, one way)")
+                    val to = if (hideDestinations) UNKNOWN_DESTINATION else "${zoneName(h.targetZone) ?: "map:${h.targetZone}"} (${h.toX},${h.toY})"
+                    add(distance(field, h.x, h.y) to "${h.id} at ${h.x},${h.y} (${relative(field, h.x, h.y)}) → $to (a hole: you fall through, one way)")
                 }
                 connections.forEach { c ->
                     val (nx, ny) = c.tiles.minBy { (x, y) -> distance(field, x, y) }
-                    add(distance(field, nx, ny) to "${c.id} → ${zoneName(c.toZone) ?: "map:${c.toZone}"} along ${span(c)} (nearest ${nx},${ny}: ${relative(field, nx, ny)})" +
+                    add(distance(field, nx, ny) to "${c.id} → ${destination(c.toZone) ?: "map:${c.toZone}"} along ${span(c)} (nearest ${nx},${ny}: ${relative(field, nx, ny)})" +
                         (if (c.byWater) " (partly over water)" else ""))
                 }
             }
@@ -194,6 +201,29 @@ object MapView {
     /** Field heights are in units of 8 BDHC height units ([dev.kotlinds.pokemonclient.world.TileInfo.heights]). */
     private const val PLAYER_HEIGHT_UNITS = 8
 
+    /**
+     * The terrain of the window [render] shows around [field] (same size, same symbols), without people or puzzle
+     * state: each tile's [symbol], and 'E' on the exits (warps) of the player's map; tiles not loaded are left out.
+     * What a player has seen of the map from where they stand, e.g. for a memory of the explored tiles.
+     */
+    fun terrain(area: Area, field: FieldState, width: Int = VIEW_WIDTH, height: Int = VIEW_HEIGHT): Map<Pair<Int, Int>, Char> {
+        val left = field.x - width / 2
+        val top = field.y - height / 2
+        val warps = area.warps.filter { it.zone == field.mapId || area.zoneAt(it.x, it.y) == field.mapId }.map { it.x to it.y }.toSet()
+        return buildMap {
+            for (y in top until top + height) for (x in left until left + width) {
+                val c = if ((x to y) in warps) 'E' else area.tile(x, y)?.let { symbol(it.kind, it.blocked) } ?: continue
+                put(x to y, c)
+            }
+        }
+    }
+
+    /** The symbol of the player facing [facing] (south when unknown). */
+    fun player(facing: Direction?): Char = PLAYER.getValue(facing ?: Direction.SOUTH)
+
+    /** The meaning of a map symbol, as the [render] legend says it, or null for an unknown one. */
+    fun legend(symbol: Char): String? = LEGEND[symbol]
+
     /** The symbol of a tile kind. */
     fun symbol(kind: TileKind, blocked: Boolean): Char = when (kind) {
         TileKind.Floor, TileKind.Sand, TileKind.Cave, is TileKind.Railing -> if (blocked) '#' else '.'
@@ -223,6 +253,9 @@ object MapView {
 
     private fun distance(field: FieldState, x: Int, y: Int) = kotlin.math.abs(x - field.x) + kotlin.math.abs(y - field.y)
 
+    /** Where an exit leads while destinations are hidden (`ActionSettings.hideDestinations`). */
+    const val UNKNOWN_DESTINATION = "unknown"
+
     /** People listed off screen at most (the nearest ones). */
     private const val MAX_FAR_PEOPLE = 12
 
@@ -244,6 +277,12 @@ object MapView {
         FieldObjectKind.ITEM_BALL to 'o',
         FieldObjectKind.OBSTACLE to 'R',
     )
+    /** Width of the map rendered around the player, in tiles (the DS screen shows about 15 × 11). */
+    const val VIEW_WIDTH = 15
+
+    /** Height of the map rendered around the player, in tiles. */
+    const val VIEW_HEIGHT = 11
+
     private val LEGEND = mapOf(
         'A' to "you (facing north)", 'V' to "you (facing south)", '{' to "you (facing west)", '}' to "you (facing east)",
         '.' to "floor", '#' to "wall / obstacle", '"' to "tall grass (wild Pokémon)", '^' to "ledge (jump north only)",

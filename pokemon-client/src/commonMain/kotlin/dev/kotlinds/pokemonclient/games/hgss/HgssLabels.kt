@@ -1,9 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-/**
- * Human-readable names for what the player sees on the map: people (from their sprite), exits (from the tile
- * behavior under the warp), and objects that can be examined (from the tile behavior or the BG event).
- */
+/** Human-readable names of the people on the map (from their sprite), for display only. */
 object HgssLabels {
 
     /** Sprites that always show the same character (include/constants/sprites.h). */
@@ -176,46 +173,4 @@ object HgssLabels {
      * Snorlax tiles of Routes 11 and 12 use it (files/fielddata/eventdata/zone_event 016_R11, 017_R12).
      */
     const val BIG_SPRITE_PART_MOVEMENT = 53
-
-    /** How an exit is used, from the behavior of its tile. */
-    data class ExitKind(val name: String, val pressDirection: String? = null)
-
-    fun exitKind(behaviorName: String?, interior: Boolean): ExitKind = when (behaviorName) {
-        "DOOR" -> ExitKind("door")
-        "WARP_STAIRS_EAST" -> ExitKind("stairs", "east")
-        "WARP_STAIRS_WEST" -> ExitKind("stairs", "west")
-        "WARP_ENTRANCE_SOUTH", "WARP_SOUTH" -> ExitKind(if (interior) "exit mat" else "exit", "south")
-        "WARP_ENTRANCE_EAST", "WARP_EAST" -> ExitKind(if (interior) "exit mat" else "exit", "east")
-        "WARP_ENTRANCE_WEST", "WARP_WEST" -> ExitKind(if (interior) "exit mat" else "exit", "west")
-        "WARP_ENTRANCE_NORTH", "WARP_NORTH" -> ExitKind("entrance")
-        "LADDER_NORTH" -> ExitKind("ladder", "north")
-        "LADDER_SOUTH" -> ExitKind("ladder", "south")
-        "LADDER_DOWN" -> ExitKind("ladder")
-        "ESCALATOR", "ESCALATOR_FLIP_FACE" -> ExitKind("escalator")
-        "WARP_PANEL" -> ExitKind("warp panel")
-        else -> ExitKind(if (interior) "exit" else "entrance")
-    }
-
-    /** Things the player can examine with A, by tile behavior (src/field/field_control.c GetInteractedMetatileScript). */
-    fun examinableBehavior(behaviorName: String?): String? = when (behaviorName) {
-        "PC" -> "PC"
-        "TV" -> "TV"
-        "TOWN_MAP" -> "town map"
-        "SMALL_BOOKSHELF_1", "SMALL_BOOKSHELF_2", "BOOKSHELF_1", "BOOKSHELF_2" -> "bookshelf"
-        "EMPTY_TRASH_CAN" -> "trash can"
-        "MART_SHELF_1", "MART_SHELF_2", "MART_SHELF_3" -> "shop shelf"
-        else -> null
-    }
-
-    /** bg_labels.tsv: (map id, x, z) -> label of a BG event, from the first message its script prints. */
-    private val bgLabels: Map<Triple<Int, Int, Int>, String> by lazy {
-        HgssData.lines("bg_labels.tsv").mapNotNull { line ->
-            val p = line.split('\t')
-            if (p.size < 4) return@mapNotNull null
-            val key = Triple(p[0].toIntOrNull() ?: return@mapNotNull null, p[1].toIntOrNull() ?: 0, p[2].toIntOrNull() ?: 0)
-            key to p[3]
-        }.toMap()
-    }
-
-    fun bgLabel(mapId: Int, x: Int, z: Int): String? = bgLabels[Triple(mapId, x, z)]
 }

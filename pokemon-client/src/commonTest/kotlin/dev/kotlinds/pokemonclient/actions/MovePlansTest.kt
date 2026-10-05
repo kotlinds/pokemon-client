@@ -1,9 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.ConsolePort
@@ -31,7 +29,6 @@ import dev.kotlinds.pokemonclient.world.FieldMoveRule
 import dev.kotlinds.pokemonclient.world.TileInfo
 import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.WorldSource
-import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -87,7 +84,6 @@ private class WalkingGame(
     }
     override val inputProbe = InputProbe { held }
     override fun fieldMoveRule(move: FieldMoveKind) = FieldMoveRule(MoveId(57), "Fog")
-    override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
     override fun state(memory: Memory): GameState {
         val height = (area.tile(x, y)?.heights?.firstOrNull() ?: 0) / MovePlans.HEIGHT_UNITS
         val field = FieldState(1, "test", x, y, height, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted,

@@ -1,8 +1,6 @@
 package dev.kotlinds.pokemonclient.runtime
 
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BagItem
@@ -16,7 +14,6 @@ import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.PartyMon
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.SpeciesId
-import kotlinx.serialization.json.JsonObject
 import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.BattleKind
 import dev.kotlinds.pokemonclient.state.TextSource
@@ -51,7 +48,6 @@ class RecorderEventsTest {
         var current = states.first()
         val game = object : PokemonGame {
             override val name = "Scripted"
-            override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
             override fun state(memory: Memory) = current
             override val inputProbe = InputProbe { emptySet() }
         }

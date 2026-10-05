@@ -1,9 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.ConsolePort
@@ -27,7 +25,6 @@ import dev.kotlinds.pokemonclient.world.Trigger
 import dev.kotlinds.pokemonclient.world.TriggerWarp
 import dev.kotlinds.pokemonclient.world.Warp
 import dev.kotlinds.pokemonclient.world.WorldSource
-import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertEquals
@@ -71,7 +68,6 @@ private class FloorsGame(
     override fun zoneName(id: Int) = "Floor $id"
     override fun scriptVariable(memory: Memory, id: Int) = 0
     override val inputProbe = InputProbe { held }
-    override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
     override fun state(memory: Memory): GameState {
         val field = FieldState(zone, "Floor $zone", x, y, 0, facing, MovementMode.WALK, moving = false, objects = people[zone].orEmpty())
         val screen = if (scene) Screen.Dialogue(TextSource.FIELD, null, "A scene!", Awaiting.INPUT)
@@ -377,5 +373,98 @@ class WorldTravelTest {
         assertTrue(WorldTravel.sameMapName("New Bark", "New Bark Town"))
         assertTrue(WorldTravel.sameMapName("Goldenrod City", "goldenrod"))
         assertFalse(WorldTravel.sameMapName("Route 3", "Route 30"))
+    }
+}
+
+/**
+ * `go_to` while destinations are hidden ([ActionSettings.hideDestinations]): targets of the current map only (its
+ * warps, holes and exits are taken: that is how the agent explores), walks kept on the player's map, and refusals
+ * that never name another map or the way there.
+ */
+class HiddenDestinationsTravelTest {
+
+    private fun hidden(game: FloorsGame) = PlanContext(ActionScope(game.console, game.inputProbe), game, settings = ActionSettings(hideDestinations = true))
+
+    /** Floor 1's start (0,0) is walled off from (4,0); a ladder at (0,2) leads to floor 2, whose hole falls next to it. */
+    private fun dungeon() = FloorsGame(
+        mapOf(
+            1 to floor(1, listOf(".#...", ".#...", ".#..."), warps = listOf(Warp(1, 0, 0, 2, 2, 0, Direction.SOUTH))),
+            2 to floor(2, listOf(".....", "....."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, Direction.NORTH)), holes = listOf(TriggerWarp(2, 0, 4, 1, 1, 4, 1)), triggers = listOf(Trigger(2, 0, 4, 1, 1, 1, 1, 0x4000, 0))),
+        ),
+        zone = 1, x = 0, y = 0, transitionFrames = 10,
+    )
+
+    private fun refusedAsHidden(outcome: ActionOutcome): ActionError.Unavailable {
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(outcome).error)
+        assertEquals(UnavailableReason.DESTINATIONS_HIDDEN, error.reason, error.message)
+        return error
+    }
+
+    @Test
+    fun anotherMapByNameByIdOrWithATileIsRefusedWithoutMoving() {
+        val game = dungeon()
+        val byName = refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 2"), hidden(game)))
+        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "map:2"), hidden(game)))
+        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(3, 0, null, map = "Floor 2"), hidden(game)))
+        // A name of no map at all gets the same answer: the refusal never tells whether a map exists.
+        val nowhere = refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "Atlantis"), hidden(game)))
+        assertEquals(byName.hint, nowhere.hint)
+        assertEquals(listOf(1), game.zonesVisited)
+        assertEquals(0 to 0, game.x to game.y)
+        // Nothing about the way there: no warp, no hole, no other map's name.
+        listOf("warp:0", "hole:0", "ladder").forEach { assertFalse(it in byName.message, byName.message) }
+    }
+
+    @Test
+    fun aPlaceOfThisMapReachableOnlyThroughOtherFloorsIsNotRoutedThere() {
+        val game = dungeon()
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), hidden(game))).error)
+        assertEquals(UnavailableReason.NO_PATH, error.reason)
+        assertEquals(listOf(1), game.zonesVisited)
+        assertFalse("Floor 2" in error.message || "warp:0" in error.message || "hole:0" in error.message, error.message)
+        assertTrue("destinations are hidden" in error.message, error.message)
+    }
+
+    @Test
+    fun aWarpOfThisMapIsTakenAndTheAnswerOnlyTellsWhereThePlayerStands() {
+        val game = dungeon()
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), hidden(game)))
+        assertEquals(2, game.zone, done.detail)
+        // The arrival is discovery (the game shows it); the target isn't described by where it leads.
+        assertFalse("Floor 2" in done.detail.orEmpty(), done.detail)
+    }
+
+    @Test
+    fun theMapSelfAndItsTilesStayAllowed() {
+        val game = dungeon()
+        val here = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 1"), hidden(game))).error)
+        assertEquals(UnavailableReason.NO_PATH, here.reason)
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(0, 1, null, map = "map:1"), hidden(game)))
+        assertEquals(Triple(1, 0, 1), Triple(game.zone, game.x, game.y))
+    }
+
+    @Test
+    fun anExitOfASharedAreaIsTakenButANeighbourTileIsRefusedAndExitsAreListedByIdOnly() {
+        val outdoor = floor(1, listOf("......", "..#..."), zones = listOf("111222", "111222"))
+        val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 1)
+        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(5, 0, null), hidden(game)))
+        assertEquals(1, game.zone)
+        val wrong = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "exit:north"), hidden(game)))
+        assertEquals(listOf("exit:east"), assertIs<ActionError.InvalidParameter>(wrong.error).allowed)
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "exit:east"), hidden(game)))
+        assertEquals(2, game.zone, done.detail)
+        assertEquals(3, game.x)
+    }
+
+    @Test
+    fun walksNeverCrossANeighbouringMapOfTheArea() {
+        // Zone 1's two halves (0,0) and (2,0) are joined only through zone 2's row below.
+        val outdoor = floor(1, listOf(".#.", "..."), zones = listOf("111", "222"))
+        val shown = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 0)
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null), shown.context()))
+        val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 0)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null), hidden(game))).error)
+        assertEquals(UnavailableReason.NO_PATH, error.reason)
+        assertEquals(listOf(1), game.zonesVisited)
     }
 }

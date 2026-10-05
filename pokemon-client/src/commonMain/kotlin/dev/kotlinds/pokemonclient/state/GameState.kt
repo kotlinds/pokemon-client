@@ -58,6 +58,11 @@ data class StoryState(
      * choice (the Kanto gyms...), each saying where. [goal] is the first.
      */
     val openGoals: List<StoryStep> = listOfNotNull(goal),
+    /**
+     * Every step of the main story already done, in the story's order (the same steps as [openGoals]): how far the
+     * player got, e.g. to measure a run's milestones. Empty when the game has no story table.
+     */
+    val completed: List<StoryStep> = emptyList(),
 )
 
 /** One step of a game's story table. */

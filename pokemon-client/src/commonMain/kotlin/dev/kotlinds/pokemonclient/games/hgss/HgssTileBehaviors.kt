@@ -176,7 +176,7 @@ object HgssTileBehaviors {
         else -> if (blocked && behavior in EXAMINABLE_WALLS) TileKind.Wall else TileKind.Unknown(behavior)
     }
 
-    /** Headbutt trees and the furniture examined with A (HgssLabels.examinableBehavior). */
+    /** Headbutt trees and the furniture examined with A (PC, TV, town map, bookshelves, trash cans, shop shelves). */
     private val EXAMINABLE_WALLS = setOf(HEADBUTT, 0x83, 0x85, 0x86, 0xE0, 0xE1, 0xE2, 0xE4, 0xE5, 0xEA, 0xEB, 0xEC)
 
     /**

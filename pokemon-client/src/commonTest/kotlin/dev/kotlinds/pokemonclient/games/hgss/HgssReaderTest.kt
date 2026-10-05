@@ -57,11 +57,6 @@ class HgssReaderTest {
         assertEquals("south", loc.facing)
         assertEquals(false, loc.moving)
         assertTrue(state.party.isEmpty())
-        val warp = state.surroundings?.warps?.single()
-        assertEquals(63, warp?.destMapId) // stairs to 1F
-        assertEquals(3 to 4, warp?.let { it.x to it.z })
-        assertEquals("stairs", warp?.kind)
-        assertEquals("west", warp?.pressDirection)
         // Terrain only, cropped to the room: the void beyond the walls is '-'.
         val grid = assertNotNull(state.surroundings?.grid)
         assertEquals('.', grid.at(6, 6))

@@ -32,6 +32,18 @@ import kotlinx.serialization.json.putJsonObject
  */
 object StateView {
 
+    /**
+     * One line for a person watching (the app's panel, a decision history): the screen kind and, in the field, the map
+     * and position, e.g. "overworld · New Bark Town (12, 8) facing west". Same for every game.
+     */
+    fun summary(state: GameState): String = buildString {
+        append(state.screen.kind)
+        state.field?.let { f ->
+            append(" · ${f.mapName} (${f.x}, ${f.y})")
+            f.facing?.let { append(" facing ${it.name.lowercase()}") }
+        }
+    }
+
     /** The screen: what the game waits for, the menu entries with the highlighted one, or the text shown. */
     fun screen(screen: Screen): JsonObject = buildJsonObject {
         put("kind", screen.kind)
@@ -227,8 +239,10 @@ object StateView {
      * The full compact state: screen, party, battle, position, money and badges, warnings. [showHidden]: show what the
      * game hides or the player hasn't seen (a puzzle's hidden switches, teleports never on screen), for agents allowed a
      * walkthrough; without it, [sightings] (what was seen so far) decides which teleports are listed.
+     * [hideDestinations] (`ActionSettings.hideDestinations`): says so in the field ([DESTINATIONS_HIDDEN]), so the
+     * agent understands the exits leading to "unknown" and the refusals of go_to to other maps.
      */
-    fun state(state: GameState, showHidden: Boolean = true, sightings: Sightings? = null): JsonObject = buildJsonObject {
+    fun state(state: GameState, showHidden: Boolean = true, sightings: Sightings? = null, hideDestinations: Boolean = false): JsonObject = buildJsonObject {
         put("screen", screen(state.screen))
         state.battle?.let { put("battle", battle(it)) }
         state.field?.let { f ->
@@ -240,6 +254,7 @@ object StateView {
                 put("movement", f.movement.name.lowercase())
                 put("height", f.height)
             }
+            if (hideDestinations) put("destinations", DESTINATIONS_HIDDEN)
             f.puzzle?.let { p ->
                 val shown = if (showHidden) p else p.copy(teleports = p.teleports.filter { t -> sightings?.seen(f, t) ?: t.from.any { Sightings.onScreen(f, it) } })
                 put("puzzle", puzzle(shown, showHidden))
@@ -258,6 +273,15 @@ object StateView {
         state.field?.radioMusic?.let { put("radio_music", "${it.wire} (the Pokégear radio keeps playing it)") }
         if (state.warnings.isNotEmpty()) put("warnings", JsonArray(state.warnings.map { JsonPrimitive(it.detail) }))
     }
+
+    /**
+     * What the agent reads when destinations are hidden (`ActionSettings.hideDestinations`): why exits lead to
+     * "unknown", what go_to still does, and that exploring and remembering is its own job.
+     */
+    const val DESTINATIONS_HIDDEN = "hidden: warps, holes and map edges are listed without where they lead (→ unknown), " +
+        "and go_to only reaches places of the map you are on (its exits included: go_to warp:N / exit:<direction> takes it). " +
+        "Explore: take exits to see where they lead, read signs and listen to people, and keep your own notes " +
+        "(nothing is remembered for you)"
 
     /**
      * The PC boxes, compact: one line per non-empty box ("BOX 1 (7/30): mon:… HOOTHOOT Lv4, …"), the box the PC

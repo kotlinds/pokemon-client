@@ -16,9 +16,12 @@ internal object FlyHints {
 
     /**
      * "the nearest place where Fly works: Violet City, via warp:0 (go_to "Violet City")": the closest zone (in steps,
-     * through warps) whose map allows Fly, or null when the world doesn't say where Fly works or none is reachable.
+     * through warps) whose map allows Fly, or null when the world doesn't say where Fly works or none is reachable, or
+     * destinations are hidden ([ActionSettings.hideDestinations]).
      */
     fun nearestFlyable(context: PlanContext): String? {
+        // It names a map and the warp leading towards it: never while destinations are hidden (the plain hint stays).
+        if (context.settings.hideDestinations) return null
         val field = context.state().field ?: return null
         val world = context.game.world ?: return null
         val area = world.areaOf(field.mapId) ?: return null

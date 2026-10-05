@@ -221,6 +221,11 @@ internal object MovePlans {
         val isGoal: ((Node) -> Boolean)? = null,
         /** For warps taken by pressing a direction once on them (exit mats, stairs): that direction. */
         val exit: Direction? = null,
+        /**
+         * Without a tile ([x] null): the tiles that end the walk and may be entered although they are on another map
+         * (`exit:<direction>`: the neighbour's first tiles), for walks kept on the player's map ([Overlay.zone]).
+         */
+        val enter: Set<Pair<Int, Int>> = emptySet(),
     )
 
     internal fun resolve(context: PlanContext, target: String?, x: Int?, y: Int?): Target? {
@@ -597,7 +602,7 @@ internal object MovePlans {
 
     /** Tiles that end the walk: the target itself, or the tiles from which it can be reached with A. */
     internal fun goalTiles(area: Area, target: Target): Set<Pair<Int, Int>> {
-        val x = target.x ?: return emptySet()
+        val x = target.x ?: return target.enter
         val y = target.y ?: return emptySet()
         if (!target.adjacent) return setOf(x to y)
         return Direction.entries.flatMap { d ->
@@ -613,7 +618,8 @@ internal object MovePlans {
      * only walk ([PuzzleSolving.walkOnly]: no lift, no platform trigger, no ice block pushed).
      */
     internal fun overlay(context: PlanContext, field: FieldState, refused: Set<Pair<Node, Direction>>, solve: Boolean = context.settings.solvePuzzles): Overlay {
-        val live = liveOverlay(context, field, refused)
+        // Destinations hidden: routes stay on the player's map (a way across the next map would reveal it).
+        val live = liveOverlay(context, field, refused).let { if (context.settings.hideDestinations) it.copy(zone = field.mapId) else it }
         return if (solve) live else PuzzleSolving.walkOnly(live, field)
     }
 
@@ -915,7 +921,9 @@ internal object MovePlans {
     internal fun Walk.toOutcome(context: PlanContext, done: (FieldState) -> String): ActionOutcome = when (this) {
         is Walk.Arrived -> ActionOutcome.Done(done(field))
         is Walk.NoRoute -> ActionOutcome.Failed(ActionError.Unavailable(if (failure is NeedsMechanism) UnavailableReason.PUZZLE_LEFT_TO_AGENT else UnavailableReason.NO_PATH, detail,
-            (failure as? RouteFailure.NeedsFieldMove)?.let { FieldMoveWalk.hint(it, access[it.move]) } ?: failure.hint(context.state().field)))
+            (failure as? RouteFailure.NeedsFieldMove)?.let { FieldMoveWalk.hint(it, access[it.move]) }
+                ?: (if (context.settings.hideDestinations && failure == RouteFailure.Unreachable) UNREACHABLE_ON_THIS_MAP else null)
+                ?: failure.hint(context.state().field)))
         is Walk.Stuck -> ActionOutcome.Failed(ActionError.Timeout(detail))
         is Walk.Failed -> ActionOutcome.Failed(error)
         is Walk.Interrupted -> ActionOutcome.Failed(ActionError.Interrupted(cause(state), "$steps step(s)" + notes.joinToString("") { "; $it" } +
@@ -929,6 +937,13 @@ internal object MovePlans {
         val objects = state.field.objects.ifEmpty { context.state().field?.objects.orEmpty() }
         return objects.firstOrNull { it.trainer?.trainerId == id }?.let { "${it.id} (${it.label})" }
     }
+
+    /**
+     * The hint of an unreachable target while destinations are hidden ([ActionSettings.hideDestinations]): the walks
+     * never plan through other maps then, so the usual "nor through its warps" would be wrong.
+     */
+    private const val UNREACHABLE_ON_THIS_MAP = "not connected to where you stand by walking on this map (walls, heights); " +
+        "destinations are hidden, so walks never go through other maps: take one of the exits and explore"
 
     /** Why there is no route, for the agent: what blocks and what to do about it. */
     internal fun RouteFailure.hint(field: FieldState?): String? {

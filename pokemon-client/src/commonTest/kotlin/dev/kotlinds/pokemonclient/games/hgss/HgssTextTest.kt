@@ -32,10 +32,11 @@ class HgssTextTest {
     @Test
     fun goalsFollowTheStory() {
         fun story(flags: Set<Int> = emptySet(), vararg vars: Pair<Int, Int>) = StoryInfo(flags, vars.toMap())
-        assertEquals(listOf("Talk to Mom on the first floor of your house"), HgssProgress.openGoals(story(), null, 63))
+        fun goals(story: StoryInfo, mapId: Int) = HgssStoryTable.openGoals(story).map { it.describe(mapId) }
+        assertEquals(listOf("Talk to Mom on the first floor of your house"), goals(story(), 63))
         assertEquals(
             listOf("Leave the house (exit mat at the bottom of the first floor)"),
-            HgssProgress.openGoals(story(setOf(HgssProgress.FLAG_GOT_BAG), HgssProgress.VAR_PLAYERS_HOUSE_1F to 1), null, 63),
+            goals(story(setOf(HgssProgress.FLAG_GOT_BAG), HgssProgress.VAR_PLAYERS_HOUSE_1F to 1), 63),
         )
         val afterEgg = story(
             setOf(HgssProgress.FLAG_GOT_STARTER, HgssProgress.FLAG_GOT_POKEGEAR, HgssProgress.FLAG_GOT_POKEDEX, HgssProgress.FLAG_RIVAL_CHERRYGROVE),
@@ -43,9 +44,8 @@ class HgssTextTest {
             HgssProgress.VAR_NEW_BARK_WEST_EXIT to 1, HgssProgress.VAR_CHERRYGROVE to 4, HgssProgress.VAR_MR_POKEMONS_HOUSE to 1,
             HgssProgress.VAR_ROUTE_30 to 3,
         )
-        assertEquals(listOf("Return to Prof. Elm's lab in New Bark Town with the Mystery Egg"), HgssProgress.openGoals(afterEgg, null, 60))
-        val badge = PlayerInfo("A", "male", 0, 0, 0, listOf("Zephyr"), 1)
+        assertEquals(listOf("Return to Prof. Elm's lab in New Bark Town with the Mystery Egg"), goals(afterEgg, 60))
         // With the Zephyr Badge, the steps before it count as done: the table goes on (Togepi Egg in Violet City).
-        assertEquals(listOf(HgssStoryTable.step("johto:togepi_egg")!!.description), HgssProgress.openGoals(afterEgg, badge, 60))
+        assertEquals(listOf(HgssStoryTable.step("johto:togepi_egg")!!.description), goals(afterEgg.copy(badges = setOf(HgssStoryTable.ZEPHYR)), 60))
     }
 }

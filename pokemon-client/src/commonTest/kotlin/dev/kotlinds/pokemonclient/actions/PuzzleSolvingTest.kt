@@ -1,9 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.ConsolePort
@@ -43,7 +41,6 @@ import dev.kotlinds.pokemonclient.world.TeleportLink
 import dev.kotlinds.pokemonclient.world.TileInfo
 import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.WorldSource
-import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -188,7 +185,6 @@ private class PuzzleGame(val area: Area, var x: Int, var y: Int, val puzzle: Puz
         override fun areaOf(zoneId: Int) = area
     }
     override val inputProbe = InputProbe { held }
-    override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
     override fun state(memory: Memory): GameState {
         val field = FieldState(1, "test", x, y, 0, facing, MovementMode.WALK, moving = false, puzzle = puzzle, examinables = examinables)
         return GameState(0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null, field)

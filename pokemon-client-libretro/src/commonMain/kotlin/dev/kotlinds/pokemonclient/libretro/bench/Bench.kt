@@ -63,6 +63,8 @@ import kotlinx.io.readByteArray
  *   a long one prints its progress about every 5 s of game time, like the app's progress notifications);
  *   `actions`: lists the actions available now; `solve:on|off`: whether walks solve movement puzzles by themselves
  *   (ActionSettings.solvePuzzles); `reveal:on|off`: whether actions may use hidden items (ActionSettings.revealHidden);
+ *   `hide:on|off`: whether where the ways out lead is hidden (ActionSettings.hideDestinations: `mapview`, `view` and
+ *   `go_to` follow it); `view`: the agents' JSON state (StateView, without the map: see `mapview`);
  * - `log`: prints the events recorded since the previous `log` (texts shown, screen changes, level ups...);
  * - `ram:<name>`: writes the full main RAM; `fixture:<name>`: writes a sparse RAM fixture (only the bytes the
  *   decoders read) for unit tests.
@@ -159,7 +161,7 @@ private class Bench(
     private var lastProgressPrint = Long.MIN_VALUE / 2
     private val registry = ActionRegistry.of()
 
-    /** What `act` lets the recipes do by themselves (`solve:on|off`, `reveal:on|off`), like the app's settings. */
+    /** What `act` lets the recipes do by themselves (`solve:on|off`, `reveal:on|off`, `hide:on|off`), like the app's settings. */
     private var settings = dev.kotlinds.pokemonclient.actions.ActionSettings()
 
     /** Walks back and forth (one tile left, one right) up to [times] times, until the phone rings or the overworld is left. */
@@ -198,7 +200,6 @@ private class Bench(
                 println("  loc=${st.location?.let { "${it.mapName} ${it.x},${it.z} ${it.facing}" }}")
                 println("  menu=${st.menu} app=${st.app} dialogue=${st.dialogue?.text?.take(120)}")
                 st.surroundings?.bgEvents?.forEach { println("  bg $it") }
-                st.surroundings?.warps?.forEach { println("  warp ${it.x},${it.z} -> ${it.destMapName} ${it.kind} ${it.pressDirection}") }
                 st.surroundings?.grid?.let { g -> println("  origin ${g.originX},${g.originZ}"); g.rows.forEachIndexed { i, row -> println("  | ${g.originZ + i} $row") } }
                 st.surroundings?.objects?.forEach { println("  obj ${it.label} ${it.x},${it.z} id=${it.id} zone=${it.mapId} sprite=${it.sprite} flag=${it.eventFlag} script=${it.scriptId} hidden=${it.hidden} move=${it.movement}") }
             }
@@ -246,7 +247,7 @@ private class Bench(
             "fixture" -> fixture(arg)
             "world" -> world(arg)
             "mapview" -> game.state(scope.memory()).field?.let { f ->
-                game.world?.areaOf(f.mapId)?.let { area -> MapView.render(area, f, game::zoneName, world = game.world) }
+                game.world?.areaOf(f.mapId)?.let { area -> MapView.render(area, f, game::zoneName, world = game.world, hideDestinations = settings.hideDestinations) }
             }?.forEach { (k, v) -> println("  $k: " + (v as? kotlinx.serialization.json.JsonArray)?.joinToString("\n    ", "\n    ") { it.toString().trim('"') }.orEmpty().ifEmpty { v.toString() }) }
             "area" -> area(arg.split(',').map { it.trim().toInt() })
             "tiles" -> arg.split(',').map { it.trim().toInt() }.let { (x0, x1, y) ->
@@ -355,6 +356,10 @@ private class Bench(
             }
             "solve" -> settings = settings.copy(solvePuzzles = arg != "off")
             "reveal" -> settings = settings.copy(revealHidden = arg != "off")
+            "hide" -> settings = settings.copy(hideDestinations = arg != "off")
+            "view" -> game.state(scope.memory()).let { state ->
+                println("  " + dev.kotlinds.pokemonclient.view.StateView.state(state, hideDestinations = settings.hideDestinations))
+            }
             "actions" -> registry.available(game.state(scope.memory()), ActionMode.ASSISTED).forEach { println("  $it") }
             "pausemusic" -> pauseMusic.check(arg)
             "pausemusicstats" -> pauseMusic.stats(arg)
@@ -826,7 +831,6 @@ private class Bench(
     private fun fixture(name: String) {
         val recording = RecordingMemory(RamMemory(ram()))
         game.state(recording)
-        game.observe(recording)
         writeFixture(name, recording)
     }
 

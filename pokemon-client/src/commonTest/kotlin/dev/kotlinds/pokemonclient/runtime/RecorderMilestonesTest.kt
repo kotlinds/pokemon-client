@@ -1,8 +1,6 @@
 package dev.kotlinds.pokemonclient.runtime
 
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.GameEvent
@@ -13,7 +11,6 @@ import dev.kotlinds.pokemonclient.state.PartyMon
 import dev.kotlinds.pokemonclient.state.PlayerInfo
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.SpeciesId
-import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -37,7 +34,6 @@ class RecorderMilestonesTest {
         var current = states.first()
         val game = object : PokemonGame {
             override val name = "Scripted"
-            override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
             override fun state(memory: Memory) = current
             override val inputProbe = InputProbe { emptySet() }
         }

@@ -1,7 +1,6 @@
 package dev.kotlinds.pokemonclient.games.platinum
 
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.Awaiting
@@ -66,7 +65,6 @@ class PlatinumIntroFixtureTest {
         val s = state("pt_rowan_dialogue")
         assertEquals(Screen.Dialogue(TextSource.INTRO, null, "Hello there! It’s so very nice to meet you!", Awaiting.INPUT), s.screen)
         assertNull(s.field)
-        assertEquals(GameMode.INTRO, game.observe(PlatinumFixtures.load("pt_rowan_dialogue")).mode)
     }
 
     @Test
@@ -174,7 +172,8 @@ class PlatinumIntroFixtureTest {
         assertEquals(4 to 6, field.x to field.y)
         assertEquals(Direction.NORTH, field.facing)
         assertEquals(false, field.moving)
-        assertEquals(GameMode.OVERWORLD, game.observe(PlatinumFixtures.load("pt_bedroom")).mode)
+        // The one-line summary of the common view (the app's panel), the same for every game.
+        assertEquals("overworld · ${field.mapName} (4, 6) facing north", dev.kotlinds.pokemonclient.view.StateView.summary(s))
     }
 
     @Test

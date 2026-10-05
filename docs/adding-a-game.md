@@ -25,9 +25,8 @@ contract, and don't put generic things in `games/gen4/`.
 
 | Member | What it does | Required |
 |---|---|---|
-| `state(memory)` | RAM → `GameState`: the `Screen` on display (with entries, cursor, topology), party, bag, battle, field, story | yes |
+| `state(memory)` | RAM → `GameState`: the `Screen` on display (with entries, cursor, topology), party, bag, battle, field, story (`StoryState`: open goals, steps completed, blockers) | yes |
 | `inputProbe` | which buttons the game has registered this frame (self-checking taps: hold until the game saw it) | yes (`Gen4Game` gives it) |
-| `observe(memory)` | the older agent view; defaults to `Observation.of(state)` | no |
 | `world` | the ROM's maps as `Area`s: tiles (`TileKind`, heights), warps, signs, people, triggers | for movement actions |
 | `data` | `GameData` from the ROM: species, moves, items, type chart, machines, text | for `lookup` and effectiveness |
 | `scriptVariable(memory, id)` | read a script variable (active triggers, puzzles) | for triggers |

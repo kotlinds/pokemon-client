@@ -1,8 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.runtime.InputProbe
 import dev.kotlinds.pokemonclient.runtime.Recorder
@@ -20,7 +18,6 @@ import dev.kotlinds.pokemonclient.state.PartyPurpose
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.TextSource
 import dev.kotlinds.pokemonclient.state.VolatileStatus
-import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -196,7 +193,6 @@ class HgssLiveChecksFixtureTest {
         var current = states.first()
         val scripted = object : PokemonGame {
             override val name = "Scripted"
-            override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
             override fun state(memory: Memory) = current
             override val inputProbe = InputProbe { emptySet() }
         }

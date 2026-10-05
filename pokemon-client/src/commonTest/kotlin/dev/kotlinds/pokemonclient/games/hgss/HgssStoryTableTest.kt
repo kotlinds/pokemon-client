@@ -156,9 +156,9 @@ class HgssStoryTableTest {
     @Test
     fun severalGoalsAreSeparateEntries() {
         val story = StoryInfo(badges = (0..3).toSet(), flags = setOf(HgssStoryTable.Flags.GOT_HM03))
-        assertEquals(3, HgssProgress.openGoals(story, null, null).size)
+        assertEquals(3, HgssStoryTable.openGoals(story).size)
         // One goal: a list of one.
-        assertEquals(listOf(HgssStoryTable.step("johto:surf")!!.description), HgssProgress.openGoals(StoryInfo(badges = setOf(HgssStoryTable.FOG)), null, null))
+        assertEquals(listOf(HgssStoryTable.step("johto:surf")!!.description), HgssStoryTable.openGoals(StoryInfo(badges = setOf(HgssStoryTable.FOG))).map { it.description })
     }
 
     @Test
@@ -182,8 +182,12 @@ class HgssStoryTableTest {
     }
 
     @Test
-    fun theProgressAdapterFollowsTheTable() {
-        assertEquals(listOf(HgssStoryTable.steps.first().describe(63)), HgssProgress.openGoals(StoryInfo(), null, 63))
-        assertEquals(emptyList(), HgssProgress.openGoals(null, null, 63))
+    fun completedStepsAreTheDoneOnesInOrder() {
+        assertEquals(emptyList(), HgssStoryTable.completed(StoryInfo()).map { it.id })
+        // Mom's talk done: the first step only.
+        assertEquals(listOf("johto:talk_to_mom"), HgssStoryTable.completed(StoryInfo(flags = setOf(HgssProgress.FLAG_GOT_BAG))).map { it.id })
+        // A checkpoint (the Zephyr Badge) counts every step before it as done.
+        val ids = HgssStoryTable.steps.map { it.id }
+        assertEquals(ids.take(ids.indexOf("johto:badge_zephyr") + 1), HgssStoryTable.completed(StoryInfo(badges = setOf(HgssStoryTable.ZEPHYR))).map { it.id })
     }
 }

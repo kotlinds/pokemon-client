@@ -340,7 +340,6 @@ object HgssAddresses {
     const val SAVE_BAG = 3
     const val SAVE_FLAGS = 4                 // SaveVarsFlags {u16 vars[0x170]; u8 flags[...]}
     const val SAVE_LOCAL_FIELD_DATA = 5
-    const val SAVE_POKEDEX = 6
     const val FLAGS_OFFSET = 0x2E0L          // SaveVarsFlags.flags: flag id -> byte id/8, bit id%8
     const val NUM_SAVE_FLAGS = 0xB60         // NUM_FLAGS (include/save_vars_flags.h): u8 flags[0x16C]
     const val SAVE_MISC = 9                  // SAVE_MISC_DATA (include/save_misc_data.h)
@@ -348,8 +347,6 @@ object HgssAddresses {
     // (rivalName follows at 0x270, unk_0280 at 0x280: consistent with the 0x24-byte Gymmick at 0x24C).
     const val MISC_GYMMICK = 0x24CL
     const val GYMMICK_SIZE = 0x24
-    const val LFD_RUNNING_SHOES = 0x6CL      // LocalFieldData.playerSaveData.hasRunningShoes (u16)
-    const val POKEDEX_ENABLED = 0x336L       // Pokedex.dexEnabled (u8)
 
     // PLAYERDATA (include/player_data.h): Options options; PlayerProfile profile; u16 coins; IGT igt
     const val PD_PROFILE = 0x04L

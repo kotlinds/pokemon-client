@@ -189,6 +189,12 @@ data class Overlay(
      * are left out of the routes (movement puzzles left to the agent).
      */
     val avoidPushes: Boolean = false,
+    /**
+     * When set, routes stay on the tiles of this zone (map) of the area: a tile of another zone (the next route on the
+     * overworld) is entered only as a goal tile. Used when the application hides where the ways out lead
+     * (`ActionSettings.hideDestinations`): a route crossing a neighbouring map would tell the agent what lies there.
+     */
+    val zone: Int? = null,
 )
 
 /**
@@ -526,6 +532,8 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
             val x = node.x + dir.dx
             val y = node.y + dir.dy
             val tile = tile(x, y) ?: return@mapNotNull null
+            // Routes kept on one map (Overlay.zone): another map's tile only as the destination, whatever the move.
+            if (offZone(x, y) && (x to y) !in goalTiles) return@mapNotNull null
             if (railingBlocks(here, tile, dir)) return@mapNotNull null
             // A bridge over water is floor only for a player already on the bridge (water to surf otherwise).
             if ((tile.kind as? TileKind.Bridge)?.overWater == true && options.mode != MovementMode.SURF && here.kind !is TileKind.Bridge) {
@@ -805,7 +813,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         ignoreBarriers: Boolean = false,
     ): Boolean {
         if ((x to y) in goalTiles) return true
-        if ((x to y) in overlay.forbiddenTiles) return false
+        if ((x to y) in overlay.forbiddenTiles || offZone(x, y)) return false
         if (gate(tile, x, y, options) != null) return relaxed
         if ((x to y) in overlay.openTiles) return (ignorePeople || (x to y) !in occupied) && (ignoreBarriers || (x to y) !in overlay.blockedTiles)
         if (tile.blocked || (!ignorePeople && (x to y) in occupied) || (!ignoreBarriers && (x to y) in overlay.blockedTiles)) return false
@@ -813,6 +821,12 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         val kind = tile.kind
         if (kind is TileKind.Water) return kind.surfable
         return kind != TileKind.Wall && kind != TileKind.Lava && kind != TileKind.Pc
+    }
+
+    /** True when routes are kept on one zone ([Overlay.zone]) and (x, y) is known to be on another one. */
+    private fun offZone(x: Int, y: Int): Boolean {
+        val zone = overlay.zone ?: return false
+        return area.zoneAt(x, y)?.let { it != zone } == true
     }
 
     /** The level reached on [tile] from a surface at [fromHeight], or null when too high or too low. */

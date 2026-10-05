@@ -25,7 +25,6 @@ import kotlin.concurrent.Volatile
  *  - map_locations.txt  in-game location name of each map (map header mapsec -> msg_0279)
  *  - map_sections.txt   msgdata msg_0279 (mapsec names)
  *  - map_types.txt      map header mapType of each map (src/data/map_headers.h), index = map id
- *  - bg_labels.tsv      map id, x, z, label of examinable BG events (keyword of the first message their script prints)
  *  - trainer_classes.txt msgdata msg_0730
  *  - sprites.tsv        include/constants/sprites.h (id \t name)
  *  - species_types.txt  files/poketool/personal/personal.json ("Grass/Poison")

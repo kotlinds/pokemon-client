@@ -351,7 +351,9 @@ object CommonActions {
             "can still use its field moves outside battle): Surf from the shore, " +
             "Waterfall, Whirlpool, Cut, Rock Smash, Rock Climb (up and down rocky walls), Strength (boulders pushed as needed) and ice blocks; otherwise the error says " +
             "which move or badge is missing and the tile and direction to use it from. Movement puzzles (boulders, ice blocks, " +
-            "moving platforms, lifts) are solved by itself unless the state says movement_puzzles are left to you.",
+            "moving platforms, lifts) are solved by itself unless the state says movement_puzzles are left to you. " +
+            "When the state says destinations are hidden, only places of the current map are accepted (its warps and exits " +
+            "are taken; another map, by name or with map, is refused with DESTINATIONS_HIDDEN) and walks never go through other maps.",
         parameters = listOf(
             Parameter("x", ParameterType.INTEGER, "Tile x (with y).", required = false),
             Parameter("y", ParameterType.INTEGER, "Tile y (with x).", required = false),

@@ -179,6 +179,13 @@ enum class UnavailableReason {
      * and the application left movement puzzles to the agent ([ActionSettings.solvePuzzles] off): do it yourself.
      */
     PUZZLE_LEFT_TO_AGENT,
+
+    /**
+     * The target is on another map, while the application hides where the ways out lead
+     * ([ActionSettings.hideDestinations]): `go_to` only reaches places of the current map (its warps and exits among
+     * them). Walk to an exit, take it and see where it leads.
+     */
+    DESTINATIONS_HIDDEN,
 }
 
 /** What interrupted an action. */

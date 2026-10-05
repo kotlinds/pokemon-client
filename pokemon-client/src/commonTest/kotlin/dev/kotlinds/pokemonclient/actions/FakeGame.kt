@@ -1,8 +1,6 @@
 package dev.kotlinds.pokemonclient.actions
 
-import dev.kotlinds.pokemonclient.GameMode
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.Observation
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.ConsolePort
@@ -16,7 +14,6 @@ import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.runtime.InputProbe
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.Screen
-import kotlinx.serialization.json.JsonObject
 
 /**
  * A scripted game for testing recipes without an emulator: the current [screen] reacts to button presses through
@@ -53,7 +50,6 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
 
     /** The game's data, when a test needs some (see [StubGameData]). */
     override var data: GameData? = null
-    override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
     override fun state(memory: Memory): GameState = state(screen)
 
     /** Held buttons as the game sees them (updated by the console every frame). */

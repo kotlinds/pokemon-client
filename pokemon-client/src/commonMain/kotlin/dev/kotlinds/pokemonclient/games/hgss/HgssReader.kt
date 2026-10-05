@@ -706,15 +706,13 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
         val vf = saveArray(saveData, A.SAVE_FLAGS) ?: return null
         val flags = STORY_FLAGS.filter { id -> u8(vf + A.FLAGS_OFFSET + id / 8) shr (id % 8) and 1 == 1 }.toSet()
         val vars = STORY_VARS.associateWith { id -> u16(vf + 2L * (id - A.VAR_BASE)) }
-        val shoes = saveArray(saveData, A.SAVE_LOCAL_FIELD_DATA)?.let { u16(it + A.LFD_RUNNING_SHOES) != 0 } ?: false
-        val dex = saveArray(saveData, A.SAVE_POKEDEX)?.let { u8(it + A.POKEDEX_ENABLED) != 0 } ?: false
         val badges = saveArray(saveData, A.SAVE_PLAYERDATA)?.let { pd ->
             val prof = pd + A.PD_PROFILE
             val johto = u8(prof + A.PP_JOHTO_BADGES)
             val kanto = u8(prof + A.PP_KANTO_BADGES)
             (0 until 8).filter { johto shr it and 1 == 1 }.toSet() + (0 until 8).filter { kanto shr it and 1 == 1 }.map { it + 8 }
         } ?: emptySet()
-        return StoryInfo(flags, vars, shoes, dex, badges)
+        return StoryInfo(flags, vars, badges)
     }
 
     /** The value of script variable [varId] right now (save vars; ids below 0x4000 are literal values), or null. */
@@ -905,33 +903,15 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
         val interior = mapType == "INTERIOR"
         val tiles = TileReader(fs)
         val objects = readMapObjects(fs, playerMo, px, pz)
-        val (warps, bgs, triggers) = readEvents(ctx, fs, saveData, px, pz, mapId, tiles, interior)
-        val grid = buildArea(tiles, px, pz, interior)
-        // Furniture the player can examine (PC, TV, bookshelves...) that has no BG event of its own.
-        val examinables = grid?.let { g ->
-            (0 until g.height).flatMap { r ->
-                (0 until g.width).mapNotNull { c ->
-                    val x = g.originX + c
-                    val z = g.originZ + r
-                    if (g.rows[r][c] == '-' || bgs.any { it.x == x && it.z == z }) return@mapNotNull null
-                    val attr = tiles.attr(x, z) ?: return@mapNotNull null
-                    val label = HgssLabels.examinableBehavior(HgssData.tileBehaviorNames.getOrNull(attr and 0xFF)) ?: return@mapNotNull null
-                    // Only furniture the player can stand next to.
-                    if (listOf(-1 to 0, 1 to 0, 0 to -1, 0 to 1).none { (dx, dz) -> g.at(x + dx, z + dz) in "._\"" }) return@mapNotNull null
-                    BgEventInfo(x, z, x - px, z - pz, "tile", 0, label, attr and A.TILE_COLLISION_BIT != 0)
-                }
-            }
-        } ?: emptyList()
+        val (bgs, triggers) = readEvents(ctx, fs, saveData, mapId, tiles)
         return Surroundings(
             matrixWidth = tiles.width.takeIf { it > 0 },
             matrixHeight = tiles.height.takeIf { it > 0 },
             mapType = mapType,
-            grid = grid,
+            grid = buildArea(tiles, px, pz, interior),
             objects = objects,
-            warps = warps,
-            bgEvents = bgs + examinables,
+            bgEvents = bgs,
             triggers = triggers,
-            neighbors = if (interior) emptyList() else readNeighbors(fs, mapId, px, pz),
         )
     }
 
@@ -985,26 +965,9 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
         return HgssLabels.bigSpriteParts(out).sortedBy { Math.abs(it.dx) + Math.abs(it.dz) }
     }
 
-    private fun readEvents(
-        ctx: Ctx, fs: Long, saveData: Long?, px: Int, pz: Int, mapId: Int, tiles: TileReader, interior: Boolean,
-    ): Triple<List<WarpInfo>, List<BgEventInfo>, List<TriggerInfo>> {
-        val me = ptr(fs + A.FS_MAP_EVENTS) ?: return Triple(emptyList(), emptyList(), emptyList())
+    private fun readEvents(ctx: Ctx, fs: Long, saveData: Long?, mapId: Int, tiles: TileReader): Pair<List<BgEventInfo>, List<TriggerInfo>> {
+        val me = ptr(fs + A.FS_MAP_EVENTS) ?: return Pair(emptyList(), emptyList())
         fun count(off: Long) = u32(me + off).toInt().takeIf { it in 0..256 } ?: 0.also { ctx.warnings += "bad event count" }
-        fun behavior(x: Int, z: Int) = tiles.attr(x, z)?.let { HgssData.tileBehaviorNames.getOrNull(it and 0xFF) }
-
-        val warps = ptr(me + A.ME_WARP, 2)?.let { base ->
-            (0 until count(A.ME_NUM_WARP)).map { i ->
-                val w = base + i * A.WARP_SIZE
-                val x = u16(w + A.WARP_X)
-                val z = u16(w + A.WARP_Z)
-                val dest = u16(w + A.WARP_DEST_MAP)
-                val kind = HgssLabels.exitKind(behavior(x, z), interior)
-                WarpInfo(
-                    i, x, z, x - px, z - pz, dest, HgssData.mapName(dest), HgssData.mapLocation(dest), u16(w + A.WARP_DEST_WARP),
-                    kind = kind.name, pressDirection = kind.pressDirection,
-                )
-            }
-        } ?: emptyList()
 
         val bgs = ptr(me + A.ME_BG, 2)?.let { base ->
             (0 until count(A.ME_NUM_BG)).map { i ->
@@ -1018,12 +981,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
                     else -> "type${u16(b + A.BG_TYPE)}"
                 }
                 val attr = tiles.attr(x, z)
-                val label = when (type) {
-                    "sign" -> "sign"
-                    "hidden_item" -> "hidden item"
-                    else -> HgssLabels.bgLabel(mapId, x, z) ?: HgssLabels.examinableBehavior(behavior(x, z)) ?: "something to examine"
-                }
-                BgEventInfo(x, z, x - px, z - pz, type, u16(b + A.BG_SCRIPT), label, blocked = attr != null && attr and A.TILE_COLLISION_BIT != 0)
+                BgEventInfo(x, z, type, u16(b + A.BG_SCRIPT), blocked = attr != null && attr and A.TILE_COLLISION_BIT != 0)
             }
         } ?: emptyList()
 
@@ -1047,41 +1005,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
                 )
             }
         } ?: emptyList()
-        return Triple(warps, bgs, triggers)
-    }
-
-    /**
-     * Other maps of the same matrix next to the player's (e.g. Route 29 west of New Bark Town): for each direction,
-     * the first block within 2 blocks whose map id differs (MAPMATRIX.headers, include/map_matrix.h).
-     */
-    private fun readNeighbors(fs: Long, mapId: Int, px: Int, pz: Int): List<NeighborArea> {
-        val matrix = ptr(fs + A.FS_MAP_MATRIX, 2) ?: return emptyList()
-        val w = u8(matrix + A.MM_WIDTH)
-        val h = u8(matrix + A.MM_HEIGHT)
-        if (w !in 1..255 || h !in 1..255 || w * h <= 1) return emptyList()
-        fun header(bx: Int, bz: Int): Int? =
-            if (bx in 0 until w && bz in 0 until h) u16(matrix + A.MM_HEADERS + 2L * (bz * w + bx)) else null
-        val bx = px / A.BLOCK_TILES
-        val bz = pz / A.BLOCK_TILES
-        val out = mutableListOf<NeighborArea>()
-        for ((name, d) in listOf("north" to (0 to -1), "south" to (0 to 1), "west" to (-1 to 0), "east" to (1 to 0))) {
-            for (step in 1..2) {
-                val nx = bx + d.first * step
-                val nz = bz + d.second * step
-                val id = header(nx, nz) ?: break
-                if (id == mapId) continue
-                if (id !in 1 until 1000 || HgssData.mapName(id).startsWith("Everywhere")) break
-                val boundary = when (name) {
-                    "north" -> (nz + 1) * A.BLOCK_TILES - 1
-                    "south" -> nz * A.BLOCK_TILES
-                    "west" -> (nx + 1) * A.BLOCK_TILES - 1
-                    else -> nx * A.BLOCK_TILES
-                }
-                out += NeighborArea(name, id, HgssData.mapLocation(id) ?: HgssData.mapName(id), boundary)
-                break
-            }
-        }
-        return out
+        return Pair(bgs, triggers)
     }
 
     private companion object {

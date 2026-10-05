@@ -10,19 +10,13 @@ import dev.kotlinds.pokemonclient.runtime.InputProbe
  * Part of the `pokemon-client` library (dev.kotlinds.pokemonclient): a common interface to read Pokémon
  * games (position, dialogue, team, battle...) and drive them, with one implementation per game.
  *
- * The AI doesn't look at the screen: it reads text/JSON. Each supported game therefore provides a
- * reader turning raw RAM into an [Observation] (what's going on + a JSON description for the AI).
+ * The AI doesn't look at the screen: it reads text/JSON. Each supported game therefore provides a reader turning raw
+ * RAM into the common typed [GameState] (the same model for every game; the views turn it into what agents read).
  * Supporting another game (SoulSilver, Platinum, Emerald...) means implementing this interface.
  */
 interface PokemonGame {
     /** Human-readable name, e.g. "Pokémon HeartGold (USA)". */
     val name: String
-
-    /**
-     * Reads the current situation from a snapshot of the console's main RAM (older agent-facing view). By default it
-     * is derived from [state] ([Observation.of]): a game only overrides it to give more (its legacy text map...).
-     */
-    fun observe(memory: Memory): Observation = Observation.of(state(memory))
 
     /** Reads the current situation into the common typed model. */
     fun state(memory: Memory): GameState
