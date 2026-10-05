@@ -8,6 +8,7 @@ import dev.kotlinds.pokemonclient.state.StoryCondition.VarAtLeast
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -98,6 +99,68 @@ class HgssStoryTableTest {
         assertEquals("kanto:badge_thunder", goal(story))
     }
 
+    private fun open(story: StoryInfo) = HgssStoryTable.openGoals(story).map { it.id }
+
+    @Test
+    fun everyAfterNamesAnEarlierStep() {
+        val ids = HgssStoryTable.steps.map { it.id }
+        HgssStoryTable.steps.forEachIndexed { i, step ->
+            step.after?.forEach { id -> assertTrue(id in ids.take(i), "${step.id} comes after $id, which must be an earlier step") }
+        }
+    }
+
+    @Test
+    fun inOrderOnlyOneGoalIsOpen() {
+        assertEquals(listOf("johto:talk_to_mom"), open(StoryInfo()))
+        assertEquals(listOf("johto:surf"), open(StoryInfo(badges = setOf(HgssStoryTable.FOG))))
+    }
+
+    @Test
+    fun afterSurfJasmineChuckAndTheLakeOfRageAreOpen() {
+        val story = StoryInfo(badges = (0..3).toSet(), flags = setOf(HgssStoryTable.Flags.GOT_HM03))
+        assertEquals(listOf("johto:lighthouse", "johto:badge_storm", "johto:red_gyarados"), open(story))
+        // Pryce first: his side is done, the two others are still open; the Radio Tower waits for them.
+        val pryce = story.copy(badges = story.badges + HgssStoryTable.GLACIER)
+        assertEquals(listOf("johto:lighthouse", "johto:badge_storm"), open(pryce))
+        val all = pryce.copy(badges = pryce.badges + HgssStoryTable.STORM + HgssStoryTable.MINERAL, flags = pryce.flags + HgssStoryTable.Flags.GOT_HM02)
+        assertEquals(listOf("johto:radio_tower"), open(all))
+    }
+
+    @Test
+    fun fromVermilionEveryKantoGymAndThePowerPlantAreOpen() {
+        val story = StoryInfo(badges = (0..7).toSet(), flags = setOf(HgssStoryTable.Flags.GAME_CLEAR, HgssStoryTable.Flags.ARRIVED_IN_VERMILION))
+        assertEquals(
+            listOf("kanto:badge_thunder", "kanto:badge_marsh", "kanto:badge_rainbow", "kanto:badge_soul", "kanto:badge_volcano", "kanto:power_plant"),
+            open(story),
+        )
+        // The Cerulean Gym scene opens two lines: the grunt on Route 24 (→ power → the way west) and Misty on Route 25.
+        val gym = story.copy(flags = story.flags + HgssStoryTable.Flags.POWER_PLANT_STORY, vars = mapOf(HgssStoryTable.Vars.ROUTE_24_ROCKET to 1))
+        assertEquals(listOf("kanto:route_24_rocket", "kanto:misty"), open(gym).filterNot { it.contains("badge_") })
+    }
+
+    @Test
+    fun theKantoGymsLeftAreAllOpenNotOnlyTheFirstOne() {
+        // The user's save (story_kanto_cinnabar): Thunder, Rainbow, Soul, Marsh, Volcano; Misty back; west Kanto open.
+        val story = StoryInfo(
+            badges = (0..7).toSet() + setOf(HgssStoryTable.THUNDER, HgssStoryTable.RAINBOW, HgssStoryTable.SOUL, HgssStoryTable.MARSH, HgssStoryTable.VOLCANO),
+            flags = setOf(HgssStoryTable.Flags.GAME_CLEAR, HgssStoryTable.Flags.ARRIVED_IN_VERMILION, HgssStoryTable.Flags.RESTORED_POWER, HgssStoryTable.Flags.UNLOCKED_WEST_KANTO),
+            vars = mapOf(HgssStoryTable.Vars.MISTY to 2),
+        )
+        assertEquals(listOf("kanto:badge_cascade", "kanto:badge_boulder"), open(story))
+        assertEquals("kanto:badge_cascade", goal(story))
+        // With the seven badges, Blue is next, alone.
+        val seven = story.copy(badges = story.badges + HgssStoryTable.CASCADE + HgssStoryTable.BOULDER)
+        assertEquals(listOf("kanto:blue_cinnabar"), open(seven))
+    }
+
+    @Test
+    fun severalGoalsAreSeparateEntries() {
+        val story = StoryInfo(badges = (0..3).toSet(), flags = setOf(HgssStoryTable.Flags.GOT_HM03))
+        assertEquals(3, HgssProgress.openGoals(story, null, null).size)
+        // One goal: a list of one.
+        assertEquals(listOf(HgssStoryTable.step("johto:surf")!!.description), HgssProgress.openGoals(StoryInfo(badges = setOf(HgssStoryTable.FOG)), null, null))
+    }
+
     @Test
     fun conditionsAreTypedAndListTheirIds() {
         val c = Or(FlagSet(1), StoryCondition.And(VarAtLeast(0x4100, 2), HasBadge(3)))
@@ -120,7 +183,7 @@ class HgssStoryTableTest {
 
     @Test
     fun theProgressAdapterFollowsTheTable() {
-        assertEquals(HgssStoryTable.steps.first().describe(63), HgssProgress.nextGoal(StoryInfo(), null, 63))
-        assertNull(HgssProgress.nextGoal(null, null, 63))
+        assertEquals(listOf(HgssStoryTable.steps.first().describe(63)), HgssProgress.openGoals(StoryInfo(), null, 63))
+        assertEquals(emptyList(), HgssProgress.openGoals(null, null, 63))
     }
 }

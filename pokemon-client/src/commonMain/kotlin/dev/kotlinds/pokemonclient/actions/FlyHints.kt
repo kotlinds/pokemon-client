@@ -9,7 +9,8 @@ import dev.kotlinds.pokemonclient.world.WorldRouter
 /**
  * What the agent needs to know when Fly can't take it where it asks: the nearest place where Fly works (from indoors,
  * a cave...), and destinations in another region (HGSS: Fly only reaches the region the player is in, Johto or
- * Kanto, except from Indigo Plateau).
+ * Kanto, except from Indigo Plateau). `fly` itself goes through Indigo Plateau once it was visited (see
+ * [FieldPlans.fly]): the region errors below are for when it can't.
  */
 internal object FlyHints {
 
@@ -50,13 +51,16 @@ internal object FlyHints {
         return regionError(context.game.zoneName(zone) ?: destination, here.name, there.name)
     }
 
-    /** The OTHER_REGION error for a town of [there] asked from [here]. */
+    /**
+     * The OTHER_REGION error for a town of [there] asked from [here], when `fly` can't go through Indigo Plateau (not
+     * visited yet: it isn't a destination of the fly map).
+     */
     fun regionError(town: String, here: String, there: String): ActionError = ActionError.Unavailable(
         UnavailableReason.OTHER_REGION,
         "$town is in $there and you are in $here: Fly only reaches towns of the region you are in",
         // The game's own rule (src/application/pokegear/map/overlay_101_021E9270.c ov101_021EA7E4): from Indigo
         // Plateau every visited town of both regions can be chosen, and Indigo Plateau / Route 26 always can.
-        "fly to Indigo Plateau first (it links both regions: from there Fly reaches $there), or travel on foot, by boat or by train",
+        "Fly reaches both regions only from Indigo Plateau, not visited yet (once it is, fly goes through it by itself): travel on foot, by boat or by train",
     )
 
     /**

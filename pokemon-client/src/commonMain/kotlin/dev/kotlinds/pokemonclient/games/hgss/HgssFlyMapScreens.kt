@@ -26,6 +26,8 @@ import dev.kotlinds.pokemonclient.games.hgss.HgssFlyMapAddresses as F
  * - selectable when the game would accept A on it: its fly point flag (`FLAG_SYS_FLYPOINT_PALLET + flypoint`) is
  *   set (the town was visited) and it is in the player's region, or the player is at Indigo Plateau
  *   (`PokegearMap_GetFlyDestinationAtCoord`, overlay_101_021E9270.c:739). Unvisited points are listed, not selectable;
+ *   a visited point of the other region is in [Screen.FlyMap.otherRegion], and `fly:58` (Indigo Plateau, where the
+ *   map's region is `POKEGEAR_REGION_INDIGO`) is [Screen.FlyMap.regionHub]: the `fly` action goes through it;
  * - label: the location name (display only, never matched).
  *
  * ## Cursor and why the D-pad is not the way to pick a destination
@@ -161,6 +163,7 @@ internal object HgssFlyMapScreens : HgssScreenDecoder {
             cursorCell = Screen.MapCell(view.cursorX, view.cursorY),
             cells = points.associate { p -> p.id to Screen.MapCell(p.x + (p.width - 1) / 2, p.y + (p.height - 1) / 2) },
             otherRegion = points.filter { view.visited(it) && !view.inRegion(it) }.map { it.id }.toSet(),
+            regionHub = points.firstOrNull { it.warpMap == F.MAP_INDIGO_PLATEAU }?.id,
         )
     }
 
@@ -242,8 +245,14 @@ internal object HgssFlyMapAddresses {
     const val REGION_INDIGO = 1
     const val REGION_JOHTO = 2
 
+    /**
+     * `MAP_INDIGO_PLATEAU`: the region hub. Standing there, the map's region is `POKEGEAR_REGION_INDIGO` and every
+     * visited town of both regions can be chosen (`ov101_021EA7E4`).
+     */
+    const val MAP_INDIGO_PLATEAU = 58
+
     /** `MAP_INDIGO_PLATEAU`, `MAP_ROUTE_26`: flyable from any region (`ov101_021EA804`). */
-    val ALWAYS_FLYABLE = setOf(58, 30)
+    val ALWAYS_FLYABLE = setOf(MAP_INDIGO_PLATEAU, 30)
 
     /** Touchable map tiles on screen (clamp of `ov101_021EC980`, unzoomed). */
     const val TOUCH_MAX_COLUMN = 22

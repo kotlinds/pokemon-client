@@ -23,8 +23,25 @@ class Navigator(
     private val game: PokemonGame,
     private val retry: RetryPolicy = RetryPolicy(),
 ) {
+    /** Told every state the recipes decode while [watching] runs (a [TravelMeter] counting the tiles walked). */
+    private var watcher: ((GameState) -> Unit)? = null
+
     /** The current state, decoded from this frame's RAM. */
-    fun state(): GameState = game.state(scope.memory())
+    fun state(): GameState = game.state(scope.memory()).also { state -> watcher?.invoke(state) }
+
+    /**
+     * Runs [block] with [watcher] told every state decoded meanwhile: every recipe reads the game through [state], so
+     * a walk is seen tile by tile without decoding anything more.
+     */
+    internal fun <T> watching(watcher: (GameState) -> Unit, block: () -> T): T {
+        val previous = this.watcher
+        this.watcher = watcher
+        try {
+            return block()
+        } finally {
+            this.watcher = previous
+        }
+    }
 
     /**
      * Waits until the game expects input (two consecutive polls), at most [maxFrames] frames, and returns the state.

@@ -314,7 +314,7 @@ object CommonActions {
             "hole:N (goes through), exit:north|south|east|west (into the neighbouring map that way), a map's name " +
             "(\"Route 26\", \"Victory Road 2F\": walks until entering it), or frontier (the nearest way out of this map " +
             "you are not standing at; stops before it). With map, x / y are on that map (another floor or a neighbour). " +
-            "Goes through warps, stairs, holes and map edges when needed; walks onto a scene trigger only when it is the " +
+            "Goes through warps, stairs, holes and map edges when needed (a target of this map reachable only by a long detour through other maps is refused before moving, with the way). Walks onto a scene trigger only when it is the " +
             "destination or the only way (and says so). Stops early when something happens (battle, trainer, phone call, script). " +
             "Uses field moves by itself when the party can (a Pokémon knows the move and the badge is owned; a fainted Pokémon " +
             "can still use its field moves outside battle): Surf from the shore, " +
@@ -439,7 +439,8 @@ object CommonActions {
     val buy = ActionDefinition(GameAction.Buy::class, spec(
         name = "buy",
         description = "Buy items at this Poké Mart in one visit to the counter (walks to the clerk; also works from the clerk's menu " +
-            "or the shop list): one `item` + `quantity`, or a list `items` of {item, quantity}. Without an item, the answer lists what is sold.",
+            "or the shop list): one `item` + `quantity`, or a list `items` of {item, quantity}. Without any item nothing is bought and " +
+            "the answer's `detail` lists what is sold (item id, name, price; it may talk to the clerk to read the list).",
         parameters = listOf(
             Parameter("item", ParameterType.STRING, "The item: its id (item:4) or its name.", required = false),
             Parameter("quantity", ParameterType.INTEGER, "How many, 1 to 99 (default 1).", required = false),
@@ -540,8 +541,8 @@ object CommonActions {
         parse = { json -> GameAction.Fish(ItemRef(string(json, "rod"))) },
     ), FieldPlans.fish)
 
-    /** The Fly move id and the badge it needs (Gen 4; badges are named by the game data layer, not shown text). */
-    private const val MOVE_FLY = 19
+    /** The Fly move id (Gen 4), and below the badge it needs (badges are named by the game data layer, not shown text). */
+    internal const val MOVE_FLY = 19
     /** The Storm Badge: by id (BADGE_STORM, include/constants/badge.h), never by its name (the game may be in French). */
     private const val FLY_BADGE_ID = 4
 
@@ -602,7 +603,8 @@ object CommonActions {
 
     val fly = ActionDefinition(GameAction.Fly::class, spec(
         name = "fly",
-        description = "Fly to a town already visited (needs a Pokémon knowing Fly and its badge; outdoors only).",
+        description = "Fly to a town already visited (needs a Pokémon knowing Fly and its badge; outdoors only). In HGSS a town of the " +
+            "other region (Johto / Kanto) is reached through Indigo Plateau by itself (two flights) once Indigo Plateau was visited.",
         parameters = listOf(Parameter("destination", ParameterType.STRING, "fly:<map id> as listed on the fly map, or the town's name.")),
         modes = assisted,
         availability = { state ->

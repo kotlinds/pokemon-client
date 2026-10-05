@@ -112,7 +112,7 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
             map = if (state.mode in FIELD_MODES) state.surroundings?.let { HgssMapView.localMap(it) } else null,
             menu = menu?.toMenuState(),
             progress = HgssProgress.milestones(state.story, state.player, state.party.size),
-            storyGoal = HgssProgress.nextGoal(state.story, state.player, state.location?.mapId),
+            storyGoals = HgssProgress.openGoals(state.story, state.player, state.location?.mapId),
         )
     }
 

@@ -20,6 +20,12 @@ data class HgssStoryStep(
      * Fame...): once it is done, the earlier steps count as done too (see [HgssStoryTable.steps]).
      */
     val checkpoint: Boolean = false,
+    /**
+     * When the step can be done: null once every earlier step is done (the story's order), else as soon as the steps
+     * of these ids are (a side of the story the game lets the player do in any order with the others: the Kanto
+     * gyms, Chuck / Jasmine / Pryce in Johto). See [HgssStoryTable.openGoals].
+     */
+    val after: List<String>? = null,
 ) {
     /** What to do, said from map [mapId] when known. */
     fun describe(mapId: Int?): String = mapId?.let { descriptionAt[it] } ?: description
@@ -27,7 +33,9 @@ data class HgssStoryStep(
 
 /**
  * The whole main story of HeartGold, in order: Johto (starter → 8 badges → Elite Four and Lance) then Kanto (S.S.
- * Aqua → 8 Kanto badges → Red at Mt. Silver). The goal is the first step that isn't [HgssStoryStep.done].
+ * Aqua → 8 Kanto badges → Red at Mt. Silver). Where the game leaves a choice (the Kanto gyms, the middle of Johto), the
+ * steps say which ones must come first ([HgssStoryStep.after]): the open goals ([openGoals]) are every step not done
+ * whose earlier steps are; the goal ([goal]) is the first of them in the table's order.
  *
  * Every condition comes from the decomp (pret/pokeheartgold): include/constants/flags.h, vars.h and the scripts that
  * set them, files/fielddata/script/scr_seq/scr_seq_<n>_<map>.s (cited per constant). Rules followed:
@@ -253,7 +261,7 @@ object HgssStoryTable {
     }
 
     private val johtoFirstHalf: List<HgssStoryStep> = listOf(
-        // region New Bark Town → first badge (the former HgssProgress.nextGoal)
+        // region New Bark Town → first badge (formerly hardcoded in HgssProgress)
         HgssStoryStep(
             "johto:talk_to_mom", "Talk to Mom on the first floor of your house",
             Or(flag(Flags.GOT_BAG), atLeast(Vars.PLAYERS_HOUSE_1F, 1)),
@@ -354,40 +362,56 @@ object HgssStoryTable {
             "johto:surf", "Visit the Ecruteak Dance Theater (south of the Pokémon Center): beat the Rocket grunt bothering the Kimono Girls, then talk to the old man to get HM03 Surf",
             Or(flag(Flags.GOT_HM03), badge(STORM)),
         ),
+        // After Surf, three sides in any order (none checks a badge: scr_seq T29 / R43 / D35R01 / T24 / D27R01):
+        // Jasmine's errand and her Gym, Chuck (then Fly), the Lake of Rage and Pryce. The Radio Tower waits for them all.
         HgssStoryStep(
             "johto:lighthouse", "Go west through Route 38 and 39 to Olivine City; the Gym leader Jasmine is away: climb the Olivine Lighthouse (by the sea, south) and talk to her at the top, next to the sick Ampharos",
             Or(atLeast(Vars.LIGHTHOUSE_JASMINE, 1), flag(Flags.TALKED_TO_JASMINE_LIGHTHOUSE), badge(MINERAL)),
+            after = listOf("johto:surf"),
         ),
         HgssStoryStep(
             "johto:badge_storm", "Surf west from Olivine City across Routes 40 and 41 to Cianwood City and challenge Chuck at the Gym (Fighting type: Flying and Psychic moves work well)",
             badge(STORM),
+            after = listOf("johto:surf"),
         ),
         HgssStoryStep(
             "johto:fly", "Leave the Cianwood Gym: Chuck's wife waits outside with HM02 Fly",
             Or(flag(Flags.GOT_HM02), badge(MINERAL)),
+            after = listOf("johto:badge_storm"),
         ),
         HgssStoryStep(
-            "johto:secretpotion", "Get the SecretPotion for the sick Ampharos at the Cianwood City pharmacy",
+            "johto:secretpotion", "Get the SecretPotion for the sick Ampharos at the Cianwood City pharmacy (surf west from Olivine City across Routes 40 and 41)",
             Or(flag(Flags.GOT_SECRETPOTION), atLeast(Vars.LIGHTHOUSE_JASMINE, 2), badge(MINERAL)),
+            after = listOf("johto:lighthouse"),
         ),
         HgssStoryStep(
             "johto:medicine", "Bring the SecretPotion to Jasmine at the top of the Olivine Lighthouse",
             Or(atLeast(Vars.LIGHTHOUSE_JASMINE, 2), badge(MINERAL)),
+            after = listOf("johto:secretpotion"),
         ),
-        HgssStoryStep("johto:badge_mineral", "Challenge Jasmine at the Olivine City Gym (Steel type: Fire, Fighting and Ground moves work well)", badge(MINERAL)),
+        HgssStoryStep(
+            "johto:badge_mineral", "Challenge Jasmine at the Olivine City Gym (Steel type: Fire, Fighting and Ground moves work well)", badge(MINERAL),
+            after = listOf("johto:medicine"),
+        ),
         HgssStoryStep(
             "johto:red_gyarados", "Go east from Ecruteak (Route 42, through Mt. Mortar) to Mahogany Town, then north on Route 43 to the Lake of Rage: surf to the red Gyarados and defeat or catch it",
             Or(flag(Flags.GOT_RED_SCALE), atLeast(Vars.LANCE_LAKE_OF_RAGE, 1), flag(Flags.ROCKET_HIDEOUT_CLEARED), badge(GLACIER)),
+            after = listOf("johto:surf"),
         ),
         HgssStoryStep(
             "johto:lance_lake", "Talk to Lance on the Lake of Rage shore: he asks you to meet him in Mahogany Town",
             Or(atLeast(Vars.LANCE_LAKE_OF_RAGE, 1), flag(Flags.ROCKET_HIDEOUT_CLEARED), badge(GLACIER)),
+            after = listOf("johto:red_gyarados"),
         ),
         HgssStoryStep(
             "johto:rocket_hideout", "Enter the Mahogany Town souvenir shop with Lance and clear the Team Rocket hideout below it (beat the Executives, then the Electrode powering the radio wave)",
             Or(flag(Flags.ROCKET_HIDEOUT_CLEARED), badge(GLACIER)),
+            after = listOf("johto:lance_lake"),
         ),
-        HgssStoryStep("johto:badge_glacier", "Challenge Pryce at the Mahogany Town Gym (Ice type: Fire, Fighting, Rock and Steel moves work well)", badge(GLACIER)),
+        HgssStoryStep(
+            "johto:badge_glacier", "Challenge Pryce at the Mahogany Town Gym (Ice type: Fire, Fighting, Rock and Steel moves work well)", badge(GLACIER),
+            after = listOf("johto:rocket_hideout"),
+        ),
         HgssStoryStep(
             "johto:radio_tower", "Team Rocket has taken over the Goldenrod Radio Tower: get the Basement Key (Radio Tower 5F) and the Card Key (Director, Goldenrod Underground Warehouse), then free every floor and beat Archer at the top",
             Or(atLeast(Vars.ROCKET_TAKEOVER, 5), flag(Flags.BEAT_RADIO_TOWER_ROCKETS)),
@@ -452,47 +476,83 @@ object HgssStoryTable {
             Or(atLeast(Vars.SS_AQUA, 6), flag(Flags.ARRIVED_IN_VERMILION)),
         ),
         HgssStoryStep("kanto:vermilion", "Get off the ship at Vermilion City, Kanto", flag(Flags.ARRIVED_IN_VERMILION), checkpoint = true),
+        // From Vermilion, Kanto is open: every gym in any order, and two story lines (the Power Plant, then Misty on
+        // one side and the way west through Snorlax and Brock on the other). Blue waits for the seven other badges.
         HgssStoryStep(
             "kanto:badge_thunder", "Challenge Lt. Surge at the Vermilion City Gym (find the switches under the trash cans; Electric type: Ground moves work well)",
             badge(THUNDER),
+            after = listOf("kanto:vermilion"),
         ),
-        HgssStoryStep("kanto:badge_marsh", "Go north to Saffron City and challenge Sabrina at the Gym (Psychic type: Dark, Ghost and Bug moves work well)", badge(MARSH)),
-        HgssStoryStep("kanto:badge_rainbow", "Go west to Celadon City and challenge Erika at the Gym (Grass type: Fire, Ice and Flying moves work well)", badge(RAINBOW)),
+        HgssStoryStep(
+            "kanto:badge_marsh", "Challenge Sabrina at the Saffron City Gym (Saffron is north of Vermilion; Psychic type: Dark, Ghost and Bug moves work well)", badge(MARSH),
+            after = listOf("kanto:vermilion"),
+        ),
+        HgssStoryStep(
+            "kanto:badge_rainbow", "Challenge Erika at the Celadon City Gym (Celadon is west of Saffron; Grass type: Fire, Ice and Flying moves work well)", badge(RAINBOW),
+            after = listOf("kanto:vermilion"),
+        ),
+        HgssStoryStep(
+            "kanto:badge_soul", "Challenge Janine at the Fuchsia City Gym (south Kanto: Routes 12 to 15 from Lavender Town, or the Cycling Road from Celadon; invisible walls; Poison type: Ground and Psychic moves work well)", badge(SOUL),
+            after = listOf("kanto:vermilion"),
+        ),
+        HgssStoryStep(
+            "kanto:badge_volcano", "Challenge Blaine: his Gym is inside the Seafoam Islands on Route 20 (surf south from Fuchsia City by Route 19, or from Pallet Town by Route 21 and Cinnabar Island; Fire type: Water and Ground moves work well)",
+            badge(VOLCANO),
+            after = listOf("kanto:vermilion"),
+        ),
         HgssStoryStep(
             "kanto:power_plant", "Go to the Power Plant (Route 10, north of Lavender Town via Route 9 from Cerulean City) and talk to the manager: a Machine Part was stolen",
             Or(flag(Flags.POWER_PLANT_STORY), flag(Flags.RESTORED_POWER)),
+            after = listOf("kanto:vermilion"),
         ),
         HgssStoryStep(
-            "kanto:route_24_rocket", "Go to the Cerulean City Gym (a Rocket grunt runs away), then beat him on Route 24 north of Cerulean City (Nugget Bridge)",
+            // The Gym's scene (scr_seq_0760_T04GYM0101.s:116) sends the grunt to Route 24 and Misty to Route 25.
+            "kanto:cerulean_gym_rocket", "Go to the Cerulean City Gym: a Rocket grunt is there and runs away",
+            Or(atLeast(Vars.ROUTE_24_ROCKET, 1), atLeast(Vars.MISTY, 1), flag(Flags.RESTORED_POWER), badge(CASCADE)),
+            after = listOf("kanto:power_plant"),
+        ),
+        HgssStoryStep(
+            "kanto:route_24_rocket", "Beat the Rocket grunt who ran from the Cerulean City Gym, on Route 24 north of Cerulean City (Nugget Bridge)",
             Or(atLeast(Vars.ROUTE_24_ROCKET, 3), flag(Flags.RESTORED_POWER)),
+            after = listOf("kanto:cerulean_gym_rocket"),
         ),
         HgssStoryStep(
             "kanto:machine_part", "Get the Machine Part hidden in the Cerulean City Gym: it lies on the pool's left edge by the buoys (tiles 3,10 and 4,10, nothing drawn there): stand north of it (4,9), face south and press A (examine:N in examinables)",
             Or(atLeast(Vars.ROUTE_24_ROCKET, 4), flag(Flags.RESTORED_POWER)),
+            after = listOf("kanto:route_24_rocket"),
         ),
-        HgssStoryStep("kanto:restore_power", "Bring the Machine Part back to the Power Plant manager", flag(Flags.RESTORED_POWER)),
+        HgssStoryStep(
+            "kanto:restore_power", "Bring the Machine Part back to the Power Plant manager (Route 10)", flag(Flags.RESTORED_POWER),
+            after = listOf("kanto:machine_part"),
+        ),
         HgssStoryStep(
             "kanto:misty", "Find Misty on Route 25 (Cerulean Cape, north-east of Cerulean City): she then returns to her Gym",
             Or(atLeast(Vars.MISTY, 2), badge(CASCADE)),
+            after = listOf("kanto:cerulean_gym_rocket"),
         ),
-        HgssStoryStep("kanto:badge_cascade", "Challenge Misty at the Cerulean City Gym (Water type: Electric and Grass moves work well)", badge(CASCADE)),
         HgssStoryStep(
+            "kanto:badge_cascade", "Challenge Misty at the Cerulean City Gym (Water type: Electric and Grass moves work well)", badge(CASCADE),
+            after = listOf("kanto:misty"),
+        ),
+        HgssStoryStep(
+            // The director gives it only once the power is back (scr_seq_0775_T05R0701.s:22).
             "kanto:expansion_card", "Go to the Lavender Town Radio Station and talk to the director (top floor) to get the Expansion Card for the Pokégear radio",
             Or(flag(Flags.GOT_EXPN_CARD), flag(Flags.SNORLAX_BEATEN), flag(Flags.UNLOCKED_WEST_KANTO)),
+            after = listOf("kanto:restore_power"),
         ),
         HgssStoryStep(
             "kanto:snorlax", "Wake the sleeping Snorlax in front of Diglett's Cave (Route 11, east of Vermilion City): play the Poké Flute channel on the Pokégear radio next to it, then defeat or catch it",
             Or(flag(Flags.SNORLAX_BEATEN), flag(Flags.UNLOCKED_WEST_KANTO)),
+            after = listOf("kanto:expansion_card"),
         ),
         HgssStoryStep(
             "kanto:viridian", "Go through Diglett's Cave and north along Route 2 to reach western Kanto (Viridian City)",
             flag(Flags.UNLOCKED_WEST_KANTO),
+            after = listOf("kanto:snorlax"),
         ),
-        HgssStoryStep("kanto:badge_boulder", "Go north to Pewter City and challenge Brock at the Gym (Rock type: Water, Grass and Fighting moves work well)", badge(BOULDER)),
-        HgssStoryStep("kanto:badge_soul", "Go to Fuchsia City and challenge Janine at the Gym (invisible walls; Poison type: Ground and Psychic moves work well)", badge(SOUL)),
         HgssStoryStep(
-            "kanto:badge_volcano", "Surf from Pallet Town down Route 21 to Cinnabar Island, then on to the Seafoam Islands: Blaine's Gym is inside (Fire type: Water and Ground moves work well)",
-            badge(VOLCANO),
+            "kanto:badge_boulder", "Challenge Brock at the Pewter City Gym (north of Viridian City; Rock type: Water, Grass and Fighting moves work well)", badge(BOULDER),
+            after = listOf("kanto:viridian"),
         ),
         HgssStoryStep(
             "kanto:blue_cinnabar", "With seven Kanto badges, talk to Blue on Cinnabar Island: he goes back to open the Viridian City Gym",
@@ -510,8 +570,21 @@ object HgssStoryTable {
         ),
     )
 
-    /** The next step: the first one that isn't done, or null when the whole story is done. */
-    fun goal(facts: StoryFacts): HgssStoryStep? = steps.firstOrNull { !it.done.holds(facts) }
+    /** The next step: the first open one ([openGoals]) in the table's order, or null when the whole story is done. */
+    fun goal(facts: StoryFacts): HgssStoryStep? = openGoals(facts).firstOrNull() ?: steps.firstOrNull { !it.done.holds(facts) }
+
+    /**
+     * Every step the player can do now, in the table's order: not done, and the steps it comes [HgssStoryStep.after]
+     * are (every earlier step when it doesn't say). Several when the game leaves a choice (the Kanto gyms...).
+     */
+    fun openGoals(facts: StoryFacts): List<HgssStoryStep> {
+        val done = steps.map { it.done.holds(facts) }
+        return steps.filterIndexed { i, step ->
+            !done[i] && (step.after?.all { id -> done[indexOf.getValue(id)] } ?: (0 until i).all { done[it] })
+        }
+    }
+
+    private val indexOf: Map<String, Int> by lazy { steps.withIndex().associate { (i, step) -> step.id to i } }
 
     /** The step with id [id], or null. */
     fun step(id: String): HgssStoryStep? = steps.firstOrNull { it.id == id }

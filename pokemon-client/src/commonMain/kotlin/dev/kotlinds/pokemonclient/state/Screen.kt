@@ -161,6 +161,11 @@ sealed interface Screen {
         val cells: Map<String, MapCell> = emptyMap(),
         /** Destinations visited but in another region than the player's (not selectable for that reason), by entry id. */
         val otherRegion: Set<String> = emptySet(),
+        /**
+         * The destination that links the regions, by entry id, when the game has one: once there, Fly reaches the
+         * visited towns of every region (HGSS: Indigo Plateau). A [otherRegion] town is reached by flying there first.
+         */
+        val regionHub: String? = null,
     ) : Selectable
 
     /** A cell of a map screen's grid (the fly map), x to the east, y to the south. */

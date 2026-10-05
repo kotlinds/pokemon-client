@@ -57,4 +57,15 @@ class HgssStoryFixtureTest {
         // The sage is a live person of the map.
         assertTrue(state.field!!.objects.any { it.id == "person:0" })
     }
+
+    @Test
+    fun inKantoEveryGymLeftIsAnOpenGoal() {
+        // The user's save on Cinnabar Island (bench `load` of the save, then `go_to "Cinnabar Island"`): Thunder,
+        // Rainbow, Soul, Marsh and Volcano. Misty and Brock are both open, not only the first in the table.
+        val story = assertNotNull(state("story_kanto_cinnabar").story)
+        assertEquals(listOf("kanto:badge_cascade", "kanto:badge_boulder"), story.openGoals.map { it.id })
+        assertEquals("kanto:badge_cascade", story.goal?.id)
+        val (cerulean, pewter) = story.openGoals.map { it.description }
+        assertTrue("Cerulean City" in cerulean && "Pewter City" in pewter, "$cerulean / $pewter")
+    }
 }

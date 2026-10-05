@@ -25,13 +25,18 @@ import dev.kotlinds.pokemonclient.console.TouchPoint
  * @param interruption checked before every frame: returns why the action must stop now (the human took the
  *   controller, the user pressed stop...), or null to go on.
  * @param onFrame called after every emulated frame (the app paces frames for display and plays audio there).
+ * @param onProgress told how far a long action has got ([report]), e.g. the tiles of a long `go_to`.
  */
 class ActionScope(
     private val port: ConsolePort,
     private val inputProbe: InputProbe,
     private val interruption: () -> Interruption? = { null },
     private val onFrame: () -> Unit = {},
+    private val onProgress: (ActionProgress) -> Unit = {},
 ) {
+    /** Tells the app how far the running action has got (called often: the app decides when to show it). */
+    fun report(progress: ActionProgress) = onProgress(progress)
+
     /** Frames emulated by this scope so far. */
     var framesUsed = 0L
         private set

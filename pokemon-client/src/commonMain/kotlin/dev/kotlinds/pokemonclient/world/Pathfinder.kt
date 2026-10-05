@@ -201,6 +201,13 @@ sealed interface RouteFailure {
 
     /** The only way is through ([x], [y]), closed right now by the map's live state (a shutter: [Overlay.blockedTiles]). */
     data class BlockedByBarrier(val x: Int, val y: Int) : RouteFailure
+
+    /**
+     * A route exists, but only as a detour through [links] warps and other maps (a beach walled off by rocks, reached
+     * only from the far side of the region): not taken by itself, the agent decides ([maps]: the maps on the way, in
+     * order, as zone ids).
+     */
+    data class LongDetour(val links: Int, val maps: List<Int>) : RouteFailure
 }
 
 /**

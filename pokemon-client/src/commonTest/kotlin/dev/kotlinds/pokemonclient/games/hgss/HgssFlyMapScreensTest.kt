@@ -123,4 +123,15 @@ class HgssFlyMapScreensTest {
         val at = map.cursorCell!!
         assertTrue(kotlin.math.abs(here.x - at.x) <= 1 && kotlin.math.abs(here.y - at.y) <= 1, "cursor $at on the town's cell $here")
     }
+
+    @Test
+    fun inKantoJohtoTownsAreOtherRegionAndIndigoPlateauIsTheHub() {
+        // Pewter City, late game (Indigo Plateau visited): Kanto towns selectable, the visited Johto ones in another region.
+        val map = assertIs<Screen.FlyMap>(screen("fly_map_pewter"))
+        assertEquals("fly:58", map.regionHub)
+        assertTrue(map.entries.first { it.id == "fly:58" }.selectable, "Indigo Plateau visited")
+        assertTrue(map.entries.first { it.id == "fly:51" }.selectable, "Pewter City")
+        assertTrue("fly:73" in map.otherRegion && !map.entries.first { it.id == "fly:73" }.selectable, "Violet City is in Johto")
+        assertTrue(map.otherRegion.none { it == "fly:58" || it == "fly:30" }, "Indigo Plateau and Route 26 are always flyable")
+    }
 }

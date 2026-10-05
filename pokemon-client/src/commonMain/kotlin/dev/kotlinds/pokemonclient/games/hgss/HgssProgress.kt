@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+
 /**
  * Early-game story progress from the save's event flags and scene vars (HeartGold, new game until the first gym):
  * the milestones, and the next goal as text (an adapter over [HgssStoryTable], which holds the whole story).
@@ -81,15 +82,17 @@ object HgssProgress {
     }
 
     /**
-     * The next objective of the main story ([HgssStoryTable.goal]), said from map [mapId]; null when the story is
-     * over (or unknown). [player]'s badges count when [story] has none (a [StoryInfo] built without them).
+     * The open objectives of the main story ([HgssStoryTable.openGoals]), said from map [mapId], in the table's
+     * order; empty when the story is over (or unknown). [player]'s badges count when [story] has none (a
+     * [StoryInfo] built without them).
      */
-    fun nextGoal(story: StoryInfo?, player: PlayerInfo?, mapId: Int?): String? {
-        story ?: return null
+    fun openGoals(story: StoryInfo?, player: PlayerInfo?, mapId: Int?): List<String> {
+        story ?: return emptyList()
         val facts = if (story.badges.isEmpty() && player != null) {
             story.copy(badges = player.badges.mapNotNull { name -> BADGE_NAMES.indexOf(name).takeIf { it >= 0 } }.toSet())
         } else story
-        return HgssStoryTable.goal(facts)?.describe(mapId)
+        return HgssStoryTable.openGoals(facts).map { it.describe(mapId) }
+            .ifEmpty { listOfNotNull(HgssStoryTable.goal(facts)?.describe(mapId)) }
     }
 
     /** Badge names as [PlayerInfo.badges] lists them, by badge index. */

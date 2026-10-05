@@ -195,13 +195,14 @@ class HgssStateMapper {
 
     // region Story
 
-    /** The next step of [HgssStoryTable] and the blockers of the current map ([HgssBlockers]), from flags and vars. */
+    /** The open steps of [HgssStoryTable] and the blockers of the current map ([HgssBlockers]), from flags and vars. */
     private fun story(state: HgssState): StoryState? {
         val story = state.story ?: return null
         val mapId = state.location?.mapId
-        val goal = HgssStoryTable.goal(story)?.let { StoryStep(it.id, it.describe(mapId)) }
+        val open = HgssStoryTable.openGoals(story).map { StoryStep(it.id, it.describe(mapId)) }
+        val goal = open.firstOrNull() ?: HgssStoryTable.goal(story)?.let { StoryStep(it.id, it.describe(mapId)) }
         val blockers = if (state.mode in FIELD_MODES) HgssBlockers.of(state) else emptyList()
-        return StoryState(goal, blockers)
+        return StoryState(goal, blockers, open.ifEmpty { listOfNotNull(goal) })
     }
 
     // endregion

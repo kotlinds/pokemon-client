@@ -131,6 +131,47 @@ class ServicesRecipesTest {
         assertEquals(2000, ui.money)
     }
 
+    @Test
+    fun buyWithoutAnItemListsTheShopListAndBuysNothing() {
+        val ui = shopUi(money = 20000)
+        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        assertEquals("nothing bought; sold here: item:2 (Ultra Ball, ₽1200)", done.detail)
+        assertTrue(Button.A !in ui.game.presses)
+        assertEquals(20000, ui.money)
+    }
+
+    @Test
+    fun buyWithoutAnItemGivesTheClerksCatalogWithoutMoving() {
+        val clerk = FieldObject(
+            "person:0", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK,
+            catalog = listOf(dev.kotlinds.pokemonclient.state.ShopItem(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.ItemId(4), "Poké Ball"), 200)),
+        )
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), world = world(3, 3))
+        ui.field = field(1, 2, Direction.NORTH, listOf(clerk))
+        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        assertEquals("nothing bought; sold here: item:4 (Poké Ball, ₽200)", done.detail)
+        assertTrue(ui.game.presses.isEmpty())
+    }
+
+    @Test
+    fun buyWithoutAnItemReadsTheShopListWhenTheCatalogIsUnknown() {
+        val clerk = FieldObject("person:0", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK)
+        val list = Screen.Shop(3000, listOf(Entry("item:17", "Potion ₽300"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), world = world(3, 3))
+        ui.field = field(1, 1, Direction.NORTH, listOf(clerk))
+        ui.onA = { screen, id ->
+            when {
+                // The clerk's BUY / SELL / SEE YA! menu (ids by position, whatever the language).
+                screen is Screen.Overworld -> Screen.ListMenu(MenuKind.MULTICHOICE, (0..2).map { Entry("option:$it", "") }, Cursor.At(0), Topology.vertical(3))
+                screen is Screen.ListMenu && id == "option:0" -> list
+                else -> screen
+            }
+        }
+        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        assertEquals("nothing bought; sold here: item:17 (Potion, ₽300)", done.detail)
+        assertIs<Screen.Overworld>(ui.game.screen)
+    }
+
     // endregion
 
     // region pc

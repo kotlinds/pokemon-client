@@ -129,36 +129,80 @@ internal object FieldPlans {
     private const val CAST_FRAMES = 90
 
     /**
-     * Flies to a visited town: start menu → POKéMON → a Pokémon with Fly → FLY → the town on the map (touched; when
-     * it's scrolled off screen, the D-pad moves the map one press at a time until it shows) → YES. Checked on the
-     * map the player lands on.
+     * Flies to a visited town: start menu → POKéMON → the Pokémon that knows Fly (read from the party in RAM, by move
+     * id) → FLY → the town on the map (touched; when it's scrolled off screen, the D-pad moves the map one press at a
+     * time until it shows) → YES. Checked on the map the player lands on.
+     *
+     * A visited town of the other region (HGSS: Fly only reaches the region the player is in) is reached in two
+     * flights when the map has a region hub the player visited ([Screen.FlyMap.regionHub], Indigo Plateau): to the
+     * hub, then from there to the town. Without it: OTHER_REGION ([FlyHints.regionError]).
      */
     val fly = ActionPlan<GameAction.Fly> { action, context ->
         val startMap = context.state().field?.mapId
-        val result = PartyBagPlans.openParty(context).andThen { state ->
-            val grid = state.screen as? Screen.PartyGrid ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", state.screen.toString()))
-            // Try the Pokémon in party order: the first whose menu has FLY.
-            for (entry in grid.entries.filter { it.id.startsWith("mon:") && it.selectable }) {
-                val opened = context.navigator.choose(Screen.PartyGrid::class, entry.label) { it.id == entry.id }
+        val first = flyOnce(context, action.destination, startMap, hubAllowed = true)
+        if (first is Step.Failed) {
+            PartyBagPlans.closeToOverworld(context)
+            return@ActionPlan ActionOutcome.Failed(first.error)
+        }
+        val (landed, viaHub) = (first as Step.Done).value
+        if (viaHub == null) return@ActionPlan ActionOutcome.Done(landedDetail(landed, startMap))
+        // On the hub now: the second flight, from where every region can be chosen.
+        when (val second = flyOnce(context, action.destination, landed.field?.mapId, hubAllowed = false)) {
+            is Step.Failed -> {
+                PartyBagPlans.closeToOverworld(context)
+                ActionOutcome.Failed(ActionError.BatchStepFailed(1, "fly(${action.destination})", listOf("flew to $viaHub (Fly only reaches the other region from there)"), second.error))
+            }
+            is Step.Done -> ActionOutcome.Done(landedDetail(second.value.first, startMap) + " (flew via $viaHub: Fly only reaches the other region from there)")
+        }
+    }
+
+    private fun landedDetail(state: GameState, startMap: Int?) =
+        "landed in ${state.field?.mapName}" + if (state.field?.mapId == startMap) " (the town you were in: in front of its Pokémon Center)" else ""
+
+    /**
+     * One flight from the overworld: to [destination], or to the region hub when [destination] is a visited town of
+     * the other region and [hubAllowed]. Returns the state after landing and, when it flew to the hub instead, the
+     * hub's name.
+     */
+    private fun flyOnce(context: PlanContext, destination: String, startMap: Int?, hubAllowed: Boolean): Step<Pair<GameState, String?>> {
+        var hub: String? = null
+        return openFlyMap(context).andThen { state ->
+            flyTarget(context, destination, state, startMap, hubAllowed)
+        }.andThen { target ->
+            hub = target.hub
+            context.scope.touch(target.touch)
+            context.navigator.awaitChange(context.state().screen)
+            context.navigator.advanceUntil(FLY_WAITS) { it.screen is Screen.YesNo }
+        }.andThen {
+            context.navigator.choose(Screen.YesNo::class, "YES (fly)") { it.id == "option:yes" }
+        }.andThen { awaitLanding(context, startMap) }
+            .andThen { landed -> Step.Done(landed to hub) }
+    }
+
+    /**
+     * Start menu → POKéMON → a Pokémon that knows Fly → FLY, up to the fly map. The flyer is read from the party (move
+     * id, never a name), able to fight first. Its menu is still checked for FLY before confirming; the next Pokémon
+     * knowing Fly is tried only if the game doesn't offer it.
+     */
+    private fun openFlyMap(context: PlanContext): Step<GameState> {
+        val flyers = context.state().party.filter { mon -> !mon.isEgg && mon.moves.any { it.move.id.value == CommonActions.MOVE_FLY } }
+            .sortedBy { it.fainted }
+        if (flyers.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly"))
+        return PartyBagPlans.openParty(context).andThen { state ->
+            if (state.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", state.screen.kind))
+            for (flyer in flyers) {
+                val opened = context.navigator.choose(Screen.PartyGrid::class, flyer.displayName) { it.id == flyer.id.toString() }
                 if (opened is Step.Failed) return@andThen opened
                 val menu = context.navigator.settle().screen as? Screen.ContextMenu
                 if (menu?.entries?.any { it.id == "fieldmove:fly" } == true) {
                     return@andThen context.navigator.choose(Screen.ContextMenu::class, "FLY") { it.id == "fieldmove:fly" }
                 }
+                // Not offered: back to the party, then the next one.
                 context.scope.tap(Button.B)
                 context.navigator.awaitChange(menu ?: context.state().screen)
             }
-            Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party can use Fly"))
+            Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "The game doesn't offer FLY for ${flyers.joinToString { it.displayName }}", "heal them first"))
         }.andThen { awaitFlyMap(context) }
-            .andThen { state -> flyTarget(context, action.destination, state, startMap) }.andThen { target ->
-                context.scope.touch(target)
-                context.navigator.awaitChange(context.state().screen)
-                context.navigator.advanceUntil(FLY_WAITS) { it.screen is Screen.YesNo }
-            }.andThen {
-                context.navigator.choose(Screen.YesNo::class, "YES (fly)") { it.id == "option:yes" }
-            }.andThen { awaitLanding(context, startMap) }
-        if (result is Step.Failed) PartyBagPlans.closeToOverworld(context)
-        result.then { state -> ActionOutcome.Done("landed in ${state.field?.mapName}" + if (state.field?.mapId == startMap) " (the town you were in: in front of its Pokémon Center)" else "") }
     }
 
     /**
@@ -211,27 +255,43 @@ internal object FieldPlans {
         return Step.Failed(ActionError.Timeout("the flight didn't land"))
     }
 
+    /** Where to touch on the fly map, and the hub's name when it is the region hub instead of the town asked. */
+    private data class FlyTarget(val touch: dev.kotlinds.pokemonclient.console.TouchPoint, val hub: String? = null)
+
     /**
      * The touch point of [destination] on the fly map (`fly:<map id>` or the town's name), moving the map with the
-     * D-pad when it's off screen (each press re-read). Fails for towns not visited yet.
+     * D-pad when it's off screen (each press re-read). Fails for towns not visited yet. A visited town of the other
+     * region gives the region hub's touch point instead when [hubAllowed] and the hub can be chosen.
      */
-    private fun flyTarget(context: PlanContext, destination: String, start: GameState, startMap: Int?): Step<dev.kotlinds.pokemonclient.console.TouchPoint> {
+    private fun flyTarget(context: PlanContext, destination: String, start: GameState, startMap: Int?, hubAllowed: Boolean): Step<FlyTarget> {
         // `fly:<id>`, the town's label, or its map's name with or without "Town" / "City" ("Cerulean" = "Cerulean City").
         fun names(e: Entry): Boolean {
             val id = e.id.removePrefix("fly:").toIntOrNull() ?: return false
             return matchesRef(destination, "fly", id, e.label) || WorldTravel.sameMapName(e.label, destination) ||
                 context.game.zoneName(id)?.let { WorldTravel.sameMapName(it, destination) } == true
         }
-        fun find(state: GameState) = (state.screen as? Screen.FlyMap)?.entries?.firstOrNull { e ->
-            e.id == destination || (e.id.startsWith("fly:") && names(e))
-        }
-        val entry = find(start)
+        val map = start.screen as? Screen.FlyMap ?: return Step.Failed(ActionError.UnexpectedScreen("the fly map", start.screen.kind))
+        val asked = map.entries.firstOrNull { e -> e.id == destination || (e.id.startsWith("fly:") && names(e)) }
             ?: return Step.Failed(FlyHints.otherRegion(context, destination, startMap) ?: ActionError.InvalidParameter("destination", destination,
-                (start.screen as? Screen.FlyMap)?.entries?.filter { it.selectable && it.id.startsWith("fly:") }?.map { "${it.id} (${it.label})" }.orEmpty()))
-        if (!entry.selectable) return Step.Failed(FlyHints.notSelectable(context, entry, start.screen, startMap))
+                map.entries.filter { it.selectable && it.id.startsWith("fly:") }.map { "${it.id} (${it.label})" }))
+        val hub = map.regionHub?.let { id -> map.entries.firstOrNull { it.id == id } }
+        val entry = when {
+            asked.selectable -> asked
+            // Another region: by the hub when it can be chosen (visited), else the OTHER_REGION error.
+            asked.id in map.otherRegion && hubAllowed && hub != null && hub.selectable && hub.id != asked.id -> hub
+            else -> return Step.Failed(FlyHints.notSelectable(context, asked, map, startMap))
+        }
+        val viaHub = if (entry === asked) null else entry.label
+        return steerTo(context, entry).andThen { Step.Done(FlyTarget(it, viaHub)) }
+    }
+
+    /**
+     * The touch point of [entry] of the fly map: at once when it's on screen; else the cursor is steered towards the
+     * town's cell, one press at a time (the map scrolls with it), until it can be touched. Each press is read back.
+     */
+    private fun steerTo(context: PlanContext, entry: Entry): Step<dev.kotlinds.pokemonclient.console.TouchPoint> {
+        fun find(state: GameState) = (state.screen as? Screen.FlyMap)?.entries?.firstOrNull { it.id == entry.id }
         entry.touch?.let { return Step.Done(it) }
-        // Off screen: steer the cursor towards the town's cell, one press at a time (the map scrolls with it), until
-        // the town can be touched. Each press is read back.
         repeat(MAP_STEER_PRESSES) {
             val map = context.navigator.settle().screen as? Screen.FlyMap ?: return Step.Failed(ActionError.UnexpectedScreen("the fly map", context.state().screen.kind))
             find(context.state())?.touch?.let { return Step.Done(it) }

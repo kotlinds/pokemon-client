@@ -21,6 +21,22 @@ class MapNamesTest {
         assertTrue(WorldTravel.looseMatch("Goldenrod Dept Store 1F", "Dept Store"))
     }
 
+    /**
+     * NOTES (Kanto): `go_to "Seafoam Gym"` was refused as an unknown map. Blaine's gym moved into the Seafoam Islands:
+     * its map is "Seafoam Islands Cinnabar Gym", every other one "<Town> Gym".
+     */
+    @Test
+    fun aMapIsNamedByItsWordsInOrderSomeLeftOut() {
+        assertTrue(WorldTravel.wordsMatch("Seafoam Islands Cinnabar Gym", "Seafoam Gym"))
+        assertTrue(WorldTravel.wordsMatch("Seafoam Islands Cinnabar Gym", "seafoam islands gym"))
+        assertTrue(WorldTravel.wordsMatch("Viridian Gym", "Viridian City Gym"))
+        // In order, whole words, and two of them at least (one word is the suffix rule).
+        assertFalse(WorldTravel.wordsMatch("Seafoam Islands Cinnabar Gym", "Gym Seafoam"))
+        assertFalse(WorldTravel.wordsMatch("Seafoam Islands Cinnabar Gym", "Sea Gym"))
+        assertFalse(WorldTravel.wordsMatch("Seafoam Islands Cinnabar Gym", "Gym"))
+        assertFalse(WorldTravel.wordsMatch("Cerulean Gym", "Seafoam Gym"))
+    }
+
     @Test
     fun townsAreNamedWithOrWithoutTownOrCity() {
         assertTrue(WorldTravel.sameMapName("Cerulean City", "Cerulean"))

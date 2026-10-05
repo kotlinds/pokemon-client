@@ -98,6 +98,36 @@ class SsChainRunnerTest {
     }
 
     @Test
+    fun theChainStopsCleanlyWhenTheLastFoeFaintedAndTheTrainerBattleIsWon() = runTest {
+        // The K.O. of Misty's last Pokémon ends the battle during the step: the attacks left have nothing to act on.
+        val after = state(me, golduck).copy(screen = Screen.Overworld(null, Awaiting.INPUT), battle = null)
+        val (result, executed) = run(state(me, golduck), listOf(after, after), attack(1), attack(1), attack(2))
+        assertEquals(listOf(0), executed)
+        assertNull(result.failed)
+        val stop = assertIs<ChainStop.BattleOver>(result.stop)
+        assertEquals(BattleEnd.WON, stop.outcome)
+        assertEquals("BATTLE_WON", stop.code)
+        assertEquals(listOf("attack(move:1)", "attack(move:2)"), result.skipped.map { it.key })
+        assertEquals(listOf("attack(move:1)"), result.performed)
+    }
+
+    @Test
+    fun aWildBattleOverStopsTheBattleStepsWithoutClaimingAWin() = runTest {
+        val wild = state(me, golduck).let { it.copy(battle = it.battle!!.copy(kind = BattleKind.WILD, trainers = emptyList())) }
+        val after = wild.copy(screen = Screen.Overworld(null, Awaiting.INPUT), battle = null)
+        val (result, _) = run(wild, listOf(after, after), attack(1), GameAction.ThrowBall(ItemRef("item:4")))
+        assertEquals("BATTLE_OVER", result.stop?.code)
+    }
+
+    @Test
+    fun stepsMeantForAfterTheBattleGoOnOnceItIsOver() = runTest {
+        val after = state(me, golduck).copy(screen = Screen.Overworld(null, Awaiting.INPUT), battle = null)
+        val (result, executed) = run(state(me, golduck), listOf(after, after), attack(1), GameAction.Wait())
+        assertEquals(listOf(0, 1), executed)
+        assertNull(result.stop)
+    }
+
+    @Test
     fun theChainStopsWhenOurPokemonFainted() = runTest {
         val (result, executed) = run(state(me, golduck), listOf(state(me.copy(hp = 0), golduck), state(me, golduck)), attack(1), attack(1))
         assertEquals(listOf(0), executed)

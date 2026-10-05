@@ -24,6 +24,9 @@ class WorldRouter(
     data class WorldRoute(val links: List<ZoneLink>, val end: Place, val cost: Int, val places: List<Place> = emptyList()) {
         /** True when it takes a hole: no way back the same way. */
         val oneWay: Boolean get() = links.any { it.oneWay }
+
+        /** How many moves it takes (tiles walked, a link taken counting as one), or null when [places] isn't known. */
+        val tiles: Int? get() = if (places.isEmpty()) null else places.size - 1
     }
 
     private class AreaInfo(val pathfinder: Pathfinder, val links: Map<Pair<Int, Int>, ZoneLink>, val goalTiles: Set<Pair<Int, Int>>)

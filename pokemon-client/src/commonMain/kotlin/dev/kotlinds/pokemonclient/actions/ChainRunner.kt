@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.state.BattleKind
 import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.BattlerState
 import dev.kotlinds.pokemonclient.state.GameState
@@ -43,11 +44,38 @@ sealed interface ChainStop {
         override val message get() = "the opponent's $name (${position.wire}) fainted: choose the next steps against what comes next"
     }
 
+    /**
+     * The battle the chain started in is over ([outcome]: its last opponent fainted, the player lost, a capture or a
+     * flight) while battle steps were left: they have nothing to act on. Steps meant for after a battle (reading its
+     * last messages, learning a move) go on.
+     */
+    data class BattleOver(val outcome: BattleEnd) : ChainStop {
+        override val code get() = outcome.code
+        override val message get() = outcome.message
+    }
+
     /** One of the player's Pokémon that was battling when the chain started fainted. */
     data class OwnFainted(val mon: MonId, val name: String) : ChainStop {
         override val code = "OWN_FAINTED"
         override val message get() = "your $name ($mon) fainted: choose what to do next"
     }
+}
+
+/** How a battle ended, as far as the state after it tells ([ChainStop.BattleOver]). */
+enum class BattleEnd(
+    /** Machine-readable reason (stable, used in agent APIs as the chain's stop code). */
+    val code: String,
+    /** One sentence for the agent. */
+    val message: String,
+) {
+    /** A trainer battle over with a Pokémon of the player still standing: won (a trainer battle has no other way out). */
+    WON("BATTLE_WON", "the battle is won (the opponent's last Pokémon fainted): the battle steps left had nothing to act on"),
+
+    /** Every Pokémon of the player fainted. */
+    LOST("BATTLE_LOST", "all your Pokémon fainted: the battle is lost, the battle steps left had nothing to act on"),
+
+    /** Another battle over (wild: the foe fainted, was caught, or someone fled): the messages tell which. */
+    OVER("BATTLE_OVER", "the battle is over (the foe fainted, was caught or fled: see the messages): the battle steps left had nothing to act on"),
 }
 
 /** How long a chain may go on: [idle] without any progress in the game, [total] in all whatever the progress. */
@@ -59,12 +87,16 @@ data class ChainLimits(val idle: Duration, val total: Duration)
  * faints count on the player's side).
  */
 class BattleWatch private constructor(
+    private val kind: BattleKind,
     private val foes: Map<BattlerRef, BattlerState>,
     private val own: Map<MonId, String>,
 ) {
-    /** Why the chain must stop in [now] (null: go on). Nothing once the battle is over (the next step decides). */
-    fun check(now: GameState): ChainStop? {
-        val battle = now.battle ?: return null
+    /**
+     * Why the chain must stop in [now] before [next] (null: go on). Once the battle is over, only a battle step stops
+     * it ([ChainStop.BattleOver]): steps meant for after the battle go on.
+     */
+    fun check(now: GameState, next: GameAction? = null): ChainStop? {
+        val battle = now.battle ?: return if (next != null && isBattleStep(next)) ChainStop.BattleOver(end(now)) else null
         val current = battle.battlers.filter { !it.ref.isPlayerSide }.associateBy { it.ref }
         for (ref in (foes.keys + current.keys).distinct().sortedBy { it.ordinal }) {
             val was = foes[ref]
@@ -86,13 +118,29 @@ class BattleWatch private constructor(
         return null
     }
 
+    /** How the battle ended, from the state after it (see [BattleEnd]). */
+    private fun end(now: GameState): BattleEnd {
+        val team = now.party.filter { !it.isEgg }
+        return when {
+            team.isNotEmpty() && team.all { it.hp == 0 } -> BattleEnd.LOST
+            kind == BattleKind.TRAINER -> BattleEnd.WON
+            else -> BattleEnd.OVER
+        }
+    }
+
     companion object {
         /** The battle of [state] (null out of battle). Only Pokémon still standing are watched. */
         fun of(state: GameState): BattleWatch? {
             val battle = state.battle ?: return null
             val foes = battle.battlers.filter { !it.ref.isPlayerSide && it.hp > 0 }.associateBy { it.ref }
             val own = battle.battlers.filter { it.ref.isPlayerSide && it.hp > 0 }.mapNotNull { b -> b.mon?.let { it to name(b) } }.toMap()
-            return BattleWatch(foes, own)
+            return BattleWatch(battle.kind, foes, own)
+        }
+
+        /** Steps that only exist in a battle (a move, a switch, a ball, fleeing): pointless once it is over. */
+        fun isBattleStep(action: GameAction): Boolean = when (action) {
+            is GameAction.Attack, is GameAction.Switch, is GameAction.KeepBattling, is GameAction.Run, is GameAction.ThrowBall -> true
+            else -> false
         }
 
         private fun name(b: BattlerState) = b.nickname ?: b.species.name
@@ -119,7 +167,8 @@ data class ChainResult(
  * `advance_dialogue` skipped, and stops:
  * - at the first failed step;
  * - before a step, when the battle changed under the chain ([BattleWatch]: the foe replaced or fainted, one of the
- *   player's Pokémon fainted);
+ *   player's Pokémon fainted), or before a battle step once the battle is over (its last foe fainted:
+ *   [ChainStop.BattleOver]);
  * - before a step, when the game made no progress for [ChainLimits.idle] ([idle], from the recorder's
  *   `ProgressClock`) or the chain has run [ChainLimits.total] in all: long chains go on while things keep happening.
  *
@@ -144,7 +193,7 @@ class ChainRunner(
         val details = mutableListOf<String>()
         for ((index, action) in actions.withIndex()) {
             if (index > 0) {
-                stopBefore(watch, started)?.let { stop -> return ChainResult(performed, details, null, actions.drop(index), stop) }
+                stopBefore(watch, started, action)?.let { stop -> return ChainResult(performed, details, null, actions.drop(index), stop) }
             }
             onStep(index, actions.size, action)
             when (val outcome = execute(action, index)) {
@@ -166,8 +215,8 @@ class ChainRunner(
     }
 
     /** Why the next step mustn't start (see the class). */
-    private suspend fun stopBefore(watch: BattleWatch?, started: kotlin.time.TimeMark): ChainStop? {
-        watch?.check(observe())?.let { return it }
+    private suspend fun stopBefore(watch: BattleWatch?, started: kotlin.time.TimeMark, next: GameAction): ChainStop? {
+        watch?.check(observe(), next)?.let { return it }
         val limits = limits ?: return null
         val elapsed = started.elapsedNow()
         if (elapsed >= limits.total) return ChainStop.TimeCap(elapsed.inWholeSeconds)

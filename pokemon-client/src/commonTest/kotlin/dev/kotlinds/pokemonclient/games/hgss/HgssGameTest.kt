@@ -62,7 +62,7 @@ class HgssGameTest {
 
         assertEquals(mapOf("mode" to "overworld", "screen" to "map", "position" to "6,6", "facing" to "south"),
             o.facts.filterKeys { it in setOf("mode", "screen", "position", "facing") })
-        assertEquals("Go downstairs (stairs in the top-left corner) and talk to Mom", o.storyGoal)
+        assertEquals(listOf("Go downstairs (stairs in the top-left corner) and talk to Mom"), o.storyGoals)
         assertTrue(o.progress.isEmpty())
 
         val rows = o.state["map"]!!.jsonArray.map { it.jsonPrimitive.content }
@@ -87,7 +87,7 @@ class HgssGameTest {
         assertTrue(o.map!!.pointsOfInterest.any { it.kind == PointOfInterest.Kind.PERSON && it.label == "Mom" && it.x == 3 && it.y == 4 })
         val mat = o.map!!.pointsOfInterest.first { it.label == "exit mat to New Bark" }
         assertEquals(Direction.SOUTH, mat.exitDirection)
-        assertEquals("Talk to Mom on the first floor of your house", o.storyGoal)
+        assertEquals(listOf("Talk to Mom on the first floor of your house"), o.storyGoals)
     }
 
     @Test
@@ -110,7 +110,7 @@ class HgssGameTest {
         assertEquals("north: door to New Bark Player House 1F · south: floor · west: floor · east: floor", o.text("adjacent"))
         assertContains(o.state["nearby_areas"]!!.jsonArray.map { it.jsonPrimitive.content }, "Route 29 to the west (x ≤ 671)")
         assertEquals(listOf("Talked to Mom (got the Bag)"), o.progress)
-        assertContains(assertNotNull(o.storyGoal), "Elm's lab")
+        assertContains(o.storyGoals.single(), "Elm's lab")
     }
 
     @Test
@@ -121,7 +121,7 @@ class HgssGameTest {
         assertTrue(pois.any { it.label == "starter Pokémon machine (Poké Balls)" && it.x == 8 && it.y == 4 })
         assertTrue(pois.any { it.label == "bookshelf" })
         assertEquals(listOf("Talked to Mom (got the Bag)", "Met Prof. Elm"), o.progress)
-        assertContains(assertNotNull(o.storyGoal), "Choose a starter")
+        assertContains(o.storyGoals.single(), "Choose a starter")
     }
 
     @Test
@@ -153,7 +153,7 @@ class HgssGameTest {
             listOf("Talked to Mom (got the Bag)", "Met Prof. Elm", "Has starter Pokémon (CYNDAQUIL)", "Party: 1 Pokémon"),
             o.progress,
         )
-        assertEquals("Walk to the lab's exit (Elm's aide has something for you)", o.storyGoal)
+        assertEquals(listOf("Walk to the lab's exit (Elm's aide has something for you)"), o.storyGoals)
     }
 
     @Test

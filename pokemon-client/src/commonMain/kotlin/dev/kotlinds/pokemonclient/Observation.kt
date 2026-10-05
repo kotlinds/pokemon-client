@@ -40,8 +40,11 @@ data class Observation(
     val menu: MenuState? = null,
     /** Story progress read from the game (e.g. "Got the Pokégear", "Got a starter"), for milestones. */
     val progress: List<String> = emptyList(),
-    /** What the story expects next, derived from game flags (optional assist), e.g. "Go to Prof. Elm's lab". */
-    val storyGoal: String? = null,
+    /**
+     * What the story expects next, derived from game flags (optional assist), e.g. "Go to Prof. Elm's lab": every
+     * open goal, in any order when there are several (the Kanto gyms...); empty when the story is over or unknown.
+     */
+    val storyGoals: List<String> = emptyList(),
 ) {
     companion object {
         /**

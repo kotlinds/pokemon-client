@@ -144,7 +144,8 @@ private class FloorsGame(
         override fun loadState(state: ByteArray) = true
     }
 
-    fun context() = PlanContext(ActionScope(console, inputProbe), this)
+    fun context(onProgress: (dev.kotlinds.pokemonclient.runtime.ActionProgress) -> Unit = {}) =
+        PlanContext(ActionScope(console, inputProbe, onProgress = onProgress), this)
 
     companion object {
         const val STEP_FRAMES = 4
@@ -191,6 +192,26 @@ class WorldTravelTest {
         ),
         zone = 1, x = 0, y = 0, transitionFrames = transition,
     )
+
+    @Test
+    fun aLongGoToReportsTheTilesWalkedOfThePlannedRouteAndTheCurrentMap() {
+        val game = dungeon()
+        val reports = mutableListOf<dev.kotlinds.pokemonclient.runtime.ActionProgress>()
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context { reports += it }))
+        // Planned from the start (nothing walked yet), with a total.
+        val first = reports.first()
+        assertEquals(0, first.done)
+        assertTrue((first.total ?: 0) > 0, first.toString())
+        // Counted tile by tile (a warp or a fall counts as one), never backwards; on the map the player is on.
+        assertEquals(reports.map { it.done }.sorted(), reports.map { it.done })
+        assertTrue(reports.any { it.place == "Floor 2" })
+        val last = reports.last()
+        assertEquals("Floor 1", last.place)
+        // 2 tiles to the ladder, the ladder, 5 tiles to the hole, the fall, 1 tile to the goal.
+        assertEquals(10, last.done)
+        assertEquals(last.done, last.total)
+        assertEquals("go_to 4,0: 10/10 tiles, Floor 1", last.text)
+    }
 
     @Test
     fun goToGoesThroughALadderAndAHoleWhenTheMapAloneHasNoWay() {
@@ -289,6 +310,54 @@ class WorldTravelTest {
         val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertTrue("person:8" in error.message && "talk to them" in error.message, error.message)
+    }
+
+    /**
+     * NOTES (Kanto, flying to Pewter City then `go_to` Viridian City): the Route 2 gatehouse's exit mat is on the next
+     * zone of the shared outdoor area. Standing on it, the press towards the exit was skipped (the walk compared the
+     * map with the zone it set off from), and the trip ended with "didn't take the player anywhere".
+     */
+    @Test
+    fun anExitMatOnTheNextZoneOfTheAreaIsTakenByAPressTowardsTheExit() {
+        val outdoor = floor(1, listOf("......", "......"), warps = listOf(Warp(2, 0, 4, 1, 3, 0, Direction.SOUTH)), zones = listOf("111222", "111222"))
+        val gatehouse = floor(3, listOf("..."), warps = listOf(Warp(3, 0, 1, 0, 2, 0, Direction.NORTH)))
+        val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor, 3 to gatehouse), zone = 1, x = 0, y = 0)
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), game.context()))
+        assertEquals(listOf(1, 2, 3), game.zonesVisited, done.detail)
+    }
+
+    /**
+     * A floor walled in two (the player on the left, warp:1 on the right), whose right part is reached only through
+     * floors 2 to 9 one after another (9 warps): the Route 20 case of the NOTES, where `go_to warp:1` (the Seafoam
+     * Islands entrance on a beach walled off by rocks, "57 east") set off west for a loop through Kanto.
+     */
+    private fun walledFloor(): FloorsGame {
+        val first = floor(1, listOf("..#..."), warps = listOf(Warp(1, 0, 0, 0, 2, 0), Warp(1, 1, 5, 0, 2, 0), Warp(1, 2, 3, 0, 9, 1)))
+        val corridors = (2..9).associateWith { k ->
+            floor(k, listOf("..."), warps = listOf(Warp(k, 0, 0, 0, k - 1, if (k == 2) 0 else 1), Warp(k, 1, 2, 0, if (k == 9) 1 else k + 1, if (k == 9) 2 else 0)))
+        }
+        return FloorsGame(mapOf(1 to first) + corridors, zone = 1, x = 1, y = 0, transitionFrames = 10)
+    }
+
+    @Test
+    fun aTargetOfThisMapReachedOnlyByALongDetourIsRefusedBeforeMoving() {
+        val game = walledFloor()
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:1"), game.context()))
+        val error = assertIs<ActionError.Unavailable>(failed.error)
+        assertEquals(UnavailableReason.NO_PATH, error.reason)
+        assertTrue("warp:1 at 5,0" in error.detail && "9 warps" in error.detail && "Floor 2" in error.detail && "Floor 9" in error.detail, error.detail)
+        assertTrue("fly" in error.hint.orEmpty(), error.hint)
+        // Nothing done: the agent decides.
+        assertEquals(Triple(1, 1, 0), Triple(game.zone, game.x, game.y))
+        assertEquals(listOf(1), game.zonesVisited)
+    }
+
+    @Test
+    fun aFarMapNamedOnPurposeIsStillTaken() {
+        val game = walledFloor()
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 9"), game.context()))
+        assertEquals(9, game.zone, done.detail)
+        assertEquals((1..9).toList(), game.zonesVisited)
     }
 
     @Test

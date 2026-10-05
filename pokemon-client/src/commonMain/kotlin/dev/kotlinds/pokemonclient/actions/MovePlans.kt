@@ -373,7 +373,9 @@ internal object MovePlans {
                         }
                         is WalkSegments.Result.Refused -> {
                             val stuck = walked.from
-                            refused += (route.edges.map { it.to }.firstOrNull { it.x == stuck.x && it.y == stuck.y } ?: start) to segment.direction
+                            if (!objectAt(context, stuck.x + segment.direction.dx, stuck.y + segment.direction.dy)) {
+                                refused += (route.edges.map { it.to }.firstOrNull { it.x == stuck.x && it.y == stuck.y } ?: start) to segment.direction
+                            }
                             return@repeat
                         }
                         // [at]: the tile the player was stepping onto (a scene trigger there is what started).
@@ -450,7 +452,7 @@ internal object MovePlans {
                         from = edge.to
                     }
                     is StepResult.Refused -> {
-                        refused += from to edge.direction
+                        if (!objectAt(context, from.x + edge.direction.dx, from.y + edge.direction.dy)) refused += from to edge.direction
                         return@repeat
                     }
                     is StepResult.Stopped -> {
@@ -466,8 +468,10 @@ internal object MovePlans {
             }
             val end = context.navigator.settle()
             val endField = end.field ?: return Walk.Interrupted(end, steps)
-            // Exit mats and stairs: standing on them isn't enough, the game waits for a press towards the exit.
-            if (target.warp == true && endField.mapId == field.mapId && target.exit != null) return takeExit(context, target, target.exit, field, options, steps)
+            // Exit mats and stairs: standing on them isn't enough, the game waits for a press towards the exit. The
+            // walk may have crossed into the next zone of the area on the way (Pewter City → Route 2's gatehouse mat):
+            // still on this area means not through yet, and the exit is pressed from the zone the player is on now.
+            if (target.warp == true && !changedArea(context, endField, field) && target.exit != null) return takeExit(context, target, target.exit, endField, options, steps)
             val endNode = Node(endField.x, endField.y, pathfinder.levelAt(endField.x, endField.y, endField.height * HEIGHT_UNITS))
             if (!isGoal(endNode) && target.warp != true) return@repeat
             return Walk.Arrived(endField)
@@ -541,9 +545,10 @@ internal object MovePlans {
     }
 
     private fun liveOverlay(context: PlanContext, field: FieldState, refused: Set<Pair<Node, Direction>>): Overlay {
-        val templates = context.game.world?.areaOf(field.mapId)?.people.orEmpty().filter { it.zone == field.mapId }
+        val area = context.game.world?.areaOf(field.mapId)
+        val templates = area?.people.orEmpty().filter { it.zone == field.mapId }
         return Overlay(
-            objects = field.objects.map { o ->
+            objects = neighbourObstacles(area, field) + field.objects.map { o ->
                 LiveObject(
                     o.x, o.y, o.facing,
                     isFollower = o.kind == FieldObjectKind.FOLLOWER,
@@ -570,6 +575,32 @@ internal object MovePlans {
             surfaces = puzzleSurfaces(field.puzzle),
         )
     }
+
+    /**
+     * The obstacles (Cut trees, Rock Smash rocks, Strength boulders) of the other zones of [field]'s area where the
+     * map's events place them ([dev.kotlinds.pokemonclient.world.WorldRouter.staticOverlay]): the game only loads the objects of the player's zone, so
+     * a tree just past the border (Route 2's, walking down from Pewter City) is unknown live until the player crosses
+     * it. Without them a route planned from the neighbour walks straight into the tree (NOTES: "auto-Cut bug across
+     * maps", Pewter → Viridian). Zones whose objects are still loaded (the one just left: `person:N@zone`) are known
+     * live, so left out, like any tile a live object already stands on.
+     */
+    internal fun neighbourObstacles(area: Area?, field: FieldState): List<LiveObject> {
+        if (area == null) return emptyList()
+        val loaded = field.objects.mapNotNull { o -> o.id.substringAfter('@', "").toIntOrNull() }.toSet() + field.mapId
+        val occupied = field.objects.map { it.x to it.y }.toSet()
+        return area.people
+            .filter { it.obstacle != null && it.zone !in loaded && (it.x to it.y) !in occupied }
+            .map { LiveObject(it.x, it.y, it.facing, clearedBy = it.obstacle) }
+    }
+
+    /**
+     * True when a live object (not the follower) stands on ([x], [y]) now: a step refused there was refused because of
+     * it (an object of the zone just entered, loaded only now), not an invisible wall. Such a refusal isn't remembered
+     * ([Overlay.refused]): the object itself is in the next plan, and remembering the move would also forbid the field
+     * move that clears it from that tile (Cut facing the tree).
+     */
+    private fun objectAt(context: PlanContext, x: Int, y: Int): Boolean =
+        context.navigator.settle().field?.objects.orEmpty().any { it.kind != FieldObjectKind.FOLLOWER && it.x == x && it.y == y }
 
     /** The teleports of [puzzle] as route edges (heights converted to tile units). */
     internal fun puzzleTeleports(puzzle: PuzzleState?): List<TeleportLink> = puzzle?.teleports.orEmpty().flatMap { t ->
@@ -822,6 +853,7 @@ internal object MovePlans {
         }
         is RouteFailure.NeedsFieldMove -> FieldMoveWalk.hint(this, null)
         is NeedsMechanism -> PuzzleSolving.hint(this, field)
+        is RouteFailure.LongDetour -> "the way around crosses $links warps and other maps: go_to a map of the way first (by its name), or fly closer to it"
     }
 
     private fun cause(state: GameState): InterruptionCause = when {

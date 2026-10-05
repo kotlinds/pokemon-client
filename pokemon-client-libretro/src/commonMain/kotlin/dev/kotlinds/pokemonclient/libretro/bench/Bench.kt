@@ -58,7 +58,8 @@ import kotlinx.io.readByteArray
  * - `until:<kind>:<frames>`: steps until the screen kind starts with `kind` (e.g. `overworld`, `dialogue`);
  * - `shot:<name>`: PNG of both screens; `state`: prints the decoded GameState; `screen`: prints the screen only;
  *   `puzzle`: prints the position and the map puzzle (switches, shutters, teleports);
- * - `act:<json>`: executes a typed action through the action registry (e.g. `act:{"type":"choose","entry":"option:6"}`);
+ * - `act:<json>`: executes a typed action through the action registry (e.g. `act:{"type":"choose","entry":"option:6"}`;
+ *   a long one prints its progress about every 5 s of game time, like the app's progress notifications);
  *   `actions`: lists the actions available now; `solve:on|off`: whether walks solve movement puzzles by themselves
  *   (ActionSettings.solvePuzzles); `reveal:on|off`: whether actions may use hidden items (ActionSettings.revealHidden);
  * - `log`: prints the events recorded since the previous `log` (texts shown, screen changes, level ups...);
@@ -135,7 +136,18 @@ private class Bench(
             }
         }
         recorder.onFrame(console.frame) { scope.memory() }
+    }, onProgress = { progress ->
+        // Like the app: the recorder's clock takes it; printed about every 5 s of game time (the app's notification
+        // cadence), so a long `go_to` shows how it goes.
+        recorder.progress.report(progress)
+        if (console.frame - lastProgressPrint >= PROGRESS_PRINT_FRAMES) {
+            lastProgressPrint = console.frame
+            println("  progress (frame ${console.frame}): ${progress.text}")
+        }
     })
+
+    /** Frame of the last progress printed (see the scope's `onProgress`). */
+    private var lastProgressPrint = Long.MIN_VALUE / 2
     private val registry = ActionRegistry.of()
 
     /** What `act` lets the recipes do by themselves (`solve:on|off`, `reveal:on|off`), like the app's settings. */
@@ -581,6 +593,9 @@ private class Bench(
     private companion object {
         /** Bench commands that read HeartGold / SoulSilver structures directly ([HgssReader]...). */
         val HGSS_ONLY = setOf("raw", "rawmon", "box", "where", "watch", "fish", "world")
+
+        /** About 5 s of game time: how often a long action's progress is printed. */
+        const val PROGRESS_PRINT_FRAMES = 300L
     }
 
     private fun ram(): ByteArray =

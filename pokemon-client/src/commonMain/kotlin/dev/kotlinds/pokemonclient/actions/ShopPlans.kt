@@ -41,10 +41,7 @@ internal object ShopPlans {
 
     val buy = ActionPlan<GameAction.Buy> { action, context ->
         val start = context.state()
-        if (action.purchases.isEmpty()) {
-            val sold = catalog(start)?.map { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> " ₽$p" } ?: ""})" }.orEmpty()
-            return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("item", "missing", sold.ifEmpty { listOf("talk to the clerk to see the list") }))
-        }
+        if (action.purchases.isEmpty()) return@ActionPlan listCatalog(context, start)
         val opened = openShop(context)
         if (opened is Step.Failed) {
             PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
@@ -79,6 +76,26 @@ internal object ShopPlans {
             else -> ActionOutcome.Done("$summary; stopped: ${failure.code} ${failure.message}")
         }
     }
+
+    /**
+     * `buy` without an item: nothing is bought, the answer lists what is sold. The clerk's catalog when the game data
+     * knows it (nothing moves), else the shop list read on screen (talk to the clerk, BUY, read, leave).
+     */
+    private fun listCatalog(context: PlanContext, start: GameState): ActionOutcome {
+        catalog(start)?.takeIf { it.isNotEmpty() }?.let { return ActionOutcome.Done(describeCatalog(it)) }
+        val opened = openShop(context)
+        val sold = (opened as? Step.Done)?.value?.let(::catalog)
+        PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
+        return when {
+            opened is Step.Failed -> ActionOutcome.Failed(opened.error)
+            sold.isNullOrEmpty() -> ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_STOCK, "The shop list shows nothing to buy"))
+            else -> ActionOutcome.Done(describeCatalog(sold))
+        }
+    }
+
+    /** "nothing bought; sold here: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)". */
+    internal fun describeCatalog(sold: List<ShopItem>): String =
+        "nothing bought; sold here: " + sold.joinToString { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""})" }
 
     /**
      * What the bag got besides the [bought] item during a purchase: the clerk's gift (a Premier Ball for 10 Poké

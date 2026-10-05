@@ -150,7 +150,7 @@ sealed interface GameAction {
 
     /**
      * Buys [purchases] in one visit to the counter (in order), from the overworld, the clerk's menu or the shop list.
-     * Empty: nothing to buy, the answer lists what the shop sells.
+     * Empty: nothing is bought, the answer (a success) lists what the shop sells.
      */
     data class Buy(val purchases: List<Purchase>) : GameAction {
         constructor(item: ItemRef, quantity: Int) : this(listOf(Purchase(item, quantity)))

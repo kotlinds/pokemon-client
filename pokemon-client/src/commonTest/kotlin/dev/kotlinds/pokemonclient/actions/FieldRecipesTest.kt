@@ -246,45 +246,102 @@ class FieldRecipesTest {
     // region fly
 
     private val violet = Entry("fly:73", "Violet City", touch = TouchPoint(100, 80))
+    private val pallet = Entry("fly:49", "Pallet Town", selectable = false, touch = TouchPoint(180, 90))
+    private val indigo = Entry("fly:58", "Indigo Plateau", touch = TouchPoint(150, 60))
 
-    /** Party (MON1 can't fly, MON2 can) → FLY → the map with [map] → YES → the flight, landing on map 73. */
-    private fun flyUi(map: Screen.FlyMap): ScriptedUi {
-        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2)))
+    /**
+     * Party (MON1 doesn't know Fly, MON2 does) → FLY → the map [map] gives → YES → the flight, landing on the map the
+     * touched town leads to ([landings], by touch point; Violet = 73 by default). [opened] records each Pokémon whose
+     * menu was opened.
+     */
+    private fun flyUi(
+        map: () -> Screen.FlyMap,
+        landings: Map<TouchPoint, Int> = mapOf(violet.touch!! to 73),
+        opened: MutableList<String> = mutableListOf(),
+    ): ScriptedUi {
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2, moves = listOf(move(19, "Fly")))))
         ui.field = field(5, 5, Direction.SOUTH, mapId = 89)
         var landing: Long? = null
+        var landingMap = 0
+        var touched = 0
         ui.onA = { screen, id ->
             when {
                 isStart(screen) && id == "option:pokemon" -> grid(ui.party)
-                screen is Screen.PartyGrid && id == "mon:00000001.00000001" -> menu("option:summary", "option:switch", "option:item", "option:quit")
-                screen is Screen.PartyGrid && id == "mon:00000002.00000001" -> menu("option:summary", "fieldmove:fly", "option:switch", "option:quit")
-                screen is Screen.ContextMenu && id == "fieldmove:fly" -> map
+                screen is Screen.PartyGrid && id == "mon:00000001.00000001" -> menu("option:summary", "option:switch", "option:item", "option:quit").also { opened += id }
+                screen is Screen.PartyGrid && id == "mon:00000002.00000001" -> menu("option:summary", "fieldmove:fly", "option:switch", "option:quit").also { opened += id }
+                screen is Screen.ContextMenu && id == "fieldmove:fly" -> map()
                 screen is Screen.YesNo && id == "option:yes" -> {
                     landing = ui.frame + 60
+                    landingMap = touched
                     Screen.Animation(dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION)
                 }
                 else -> screen
             }
         }
         ui.onB = { screen -> if (screen is Screen.ContextMenu) grid(ui.party) else OVERWORLD }
-        ui.game.onTouch = { point, screen -> if (screen is Screen.FlyMap && point == violet.touch) yesNo("Fly to Violet City?") else screen }
+        ui.game.onTouch = { point, screen ->
+            val to = landings[point]
+            if (screen is Screen.FlyMap && to != null) {
+                touched = to
+                yesNo("Fly?")
+            } else screen
+        }
         ui.game.onFrame = { frame, screen ->
             if (screen is Screen.Animation && landing != null && frame >= landing!!) {
-                ui.field = field(10, 10, Direction.SOUTH, mapId = 73)
+                landing = null
+                ui.field = field(10, 10, Direction.SOUTH, mapId = landingMap)
                 OVERWORLD
             } else screen
         }
         return ui
     }
 
+    private fun flyUi(map: Screen.FlyMap) = flyUi({ map })
+
     private fun flyMap(vararg entries: Entry, cursorCell: Screen.MapCell? = null, cells: Map<String, Screen.MapCell> = emptyMap()) =
         Screen.FlyMap(entries.toList() + Entry("option:cancel", "CANCEL"), Cursor.At(0), Topology.vertical(entries.size + 1), cursorCell = cursorCell, cells = cells)
 
     @Test
-    fun flyFindsTheFlyerTouchesTheTownAndWaitsForTheLanding() {
-        val ui = flyUi(flyMap(violet))
+    fun flyOpensThePokemonThatKnowsFlyDirectlyTouchesTheTownAndWaitsForTheLanding() {
+        val opened = mutableListOf<String>()
+        val ui = flyUi({ flyMap(violet) }, opened = opened)
         val done = assertIs<ActionOutcome.Done>(FieldPlans.fly.run(GameAction.Fly("Violet City"), ui.context()))
         assertEquals("landed in map 73", done.detail)
         assertEquals(listOf(violet.touch), ui.game.touches)
+        // MON2 knows Fly (read from the party): MON1's menu is never opened.
+        assertEquals(listOf("mon:00000002.00000001"), opened)
+    }
+
+    @Test
+    fun withoutAPokemonKnowingFlyNoMenuIsOpened() {
+        val ui = flyUi(flyMap(violet))
+        ui.party = listOf(mon(1), mon(2))
+        val failed = assertIs<ActionOutcome.Failed>(FieldPlans.fly.run(GameAction.Fly("Violet City"), ui.context()))
+        assertEquals(UnavailableReason.NO_POKEMON_KNOWS_MOVE, assertIs<ActionError.Unavailable>(failed.error).reason)
+        assertTrue(ui.game.presses.isEmpty())
+    }
+
+    @Test
+    fun aTownOfTheOtherRegionIsReachedThroughIndigoPlateau() {
+        // From Blackthorn (map 89), Pallet is visited but in Kanto; Indigo Plateau (visited) links both regions.
+        lateinit var ui: ScriptedUi
+        ui = flyUi({
+            if (ui.field?.mapId == 58) flyMap(violet, pallet.copy(selectable = true), indigo)
+            else flyMap(violet, pallet, indigo).copy(otherRegion = setOf(pallet.id), regionHub = indigo.id)
+        }, landings = mapOf(violet.touch!! to 73, pallet.touch!! to 49, indigo.touch!! to 58))
+        val done = assertIs<ActionOutcome.Done>(FieldPlans.fly.run(GameAction.Fly("Pallet Town"), ui.context()))
+        assertEquals("landed in map 49 (flew via Indigo Plateau: Fly only reaches the other region from there)", done.detail)
+        assertEquals(listOf(indigo.touch, pallet.touch), ui.game.touches)
+        assertEquals(49, ui.field?.mapId)
+    }
+
+    @Test
+    fun withoutIndigoPlateauATownOfTheOtherRegionIsOtherRegion() {
+        val ui = flyUi(flyMap(violet, pallet, indigo.copy(selectable = false)).copy(otherRegion = setOf(pallet.id), regionHub = indigo.id))
+        val failed = assertIs<ActionOutcome.Failed>(FieldPlans.fly.run(GameAction.Fly("Pallet Town"), ui.context()))
+        assertEquals(UnavailableReason.OTHER_REGION, assertIs<ActionError.Unavailable>(failed.error).reason)
+        assertTrue(ui.game.touches.isEmpty())
+        assertIs<Screen.Overworld>(ui.game.screen)
     }
 
     @Test

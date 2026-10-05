@@ -49,10 +49,15 @@ enum class StartMenuFeature {
 
 /** The story's progress, read from the game's flags and variables (never from what is displayed). */
 data class StoryState(
-    /** The next step of the main story, or null when the table doesn't know (or the story is over). */
+    /** The next step of the main story (the first of [openGoals]), or null when the table doesn't know (or the story is over). */
     val goal: StoryStep?,
     /** People and triggers of the current map that block a way, with why. */
     val blockers: List<Blocker> = emptyList(),
+    /**
+     * Every step of the main story that can be done now, in the story's order: several where the game leaves the
+     * choice (the Kanto gyms...), each saying where. [goal] is the first.
+     */
+    val openGoals: List<StoryStep> = listOfNotNull(goal),
 )
 
 /** One step of a game's story table. */

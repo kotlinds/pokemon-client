@@ -11,7 +11,7 @@ import kotlin.time.TimeSource
  *
  * It lets a long action be judged on inactivity rather than on its total length ([idle]: a chain goes on while things
  * keep happening, see `ChainRunner`), and tells a remote agent that its call is still alive ([ticks], [note]: the MCP
- * server turns them into progress notifications).
+ * server turns them into progress notifications). A long action also reports how far it has got ([report]).
  *
  * Written on the console thread, read from others: plain volatile fields (a stale read only delays a tick).
  */
@@ -30,12 +30,26 @@ class ProgressClock(private val timeSource: TimeSource = TimeSource.Monotonic) {
     var note: String? = null
         private set
 
+    /** The [ticks] count when [note] was last set: a note older than a call's start says nothing about that call. */
+    @Volatile
+    var noteTick: Long = 0
+        private set
+
     /** The game made progress now; [what] describes it when it is worth showing. */
     fun progressed(what: String? = null) {
         last = timeSource.markNow()
         ticks++
-        if (what != null) note = what
+        if (what != null) {
+            note = what
+            noteTick = ticks
+        }
     }
+
+    /**
+     * A long action reported how far it has got ([ActionProgress]: tiles walked of a `go_to`...): that is progress,
+     * and it becomes the [note] ("go_to Seafoam Islands 1F: 120/480 tiles, Route 20") until something else is said.
+     */
+    fun report(progress: ActionProgress) = progressed(progress.text)
 
     /** How long nothing has progressed. */
     val idle: Duration get() = last.elapsedNow()
