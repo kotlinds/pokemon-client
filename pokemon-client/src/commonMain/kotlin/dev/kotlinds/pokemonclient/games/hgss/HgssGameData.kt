@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.BlzCodec
 import dev.kotlinds.NarcArchive
 import dev.kotlinds.NdsRom
@@ -53,7 +54,7 @@ class HgssGameData(private val rom: NdsRom, val version: HgssVersion) : GameData
     private val itemFiles: List<ByteArray> by lazy { narc(ITEM_NARC) }
     private val messageFiles: List<ByteArray> by lazy { narc(MESSAGE_NARC) }
 
-    private val arm9: ByteArray by lazy { BlzCodec.decompress(rom.arm9) }
+    private val arm9: ByteArray by lazy { Gen4RomBytes.arm9Code(rom.arm9) }
 
     /** Every line of text bank [bank] (empty when the bank doesn't exist). Decodes the whole bank: cache the result. */
     fun bank(bank: TextBankId): List<String> = messageFile(bank)?.lines() ?: emptyList()

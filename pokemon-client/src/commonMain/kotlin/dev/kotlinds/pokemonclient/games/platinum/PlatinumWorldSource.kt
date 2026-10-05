@@ -1,12 +1,12 @@
 package dev.kotlinds.pokemonclient.games.platinum
 
-import dev.kotlinds.BlzCodec
 import dev.kotlinds.NarcArchive
 import dev.kotlinds.NdsRom
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.games.gen4.Gen4LandData
 import dev.kotlinds.pokemonclient.games.gen4.Gen4MapMatrix
 import dev.kotlinds.pokemonclient.games.gen4.Gen4MessageFile
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs
@@ -165,8 +165,7 @@ object PlatinumTileBehaviors {
 class PlatinumWorldSource(private val rom: NdsRom, private val version: PlatinumVersion) : WorldSource {
 
     val headers: List<PlatinumMapHeader> by lazy {
-        val arm9 = runCatching { BlzCodec.decompress(rom.arm9) }.getOrNull()?.takeIf { it.size > rom.arm9.size } ?: rom.arm9
-        PlatinumMapHeaders.decode(arm9, version.mapHeaders)
+        PlatinumMapHeaders.decode(Gen4RomBytes.arm9Code(rom.arm9), version.mapHeaders)
     }
 
     val text = PlatinumText(rom)

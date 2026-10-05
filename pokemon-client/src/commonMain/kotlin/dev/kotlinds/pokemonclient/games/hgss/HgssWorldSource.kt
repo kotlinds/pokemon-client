@@ -1,6 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.BlzCodec
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.NarcArchive
 import dev.kotlinds.NdsRom
 import dev.kotlinds.pokemonclient.Direction
@@ -43,7 +43,7 @@ class HgssWorldSource(private val rom: NdsRom, private val version: HgssVersion)
     val headers: List<HgssMapHeader> by lazy {
         val table = HgssWorldAddresses.mapHeadersAddress(version.gameCode)
             ?: error("no map header table address for ${version.gameCode}")
-        HgssMapHeaders.decode(BlzCodec.decompress(rom.arm9), table)
+        HgssMapHeaders.decode(Gen4RomBytes.arm9Code(rom.arm9), table)
     }
 
     private val matrixFiles: List<ByteArray> by lazy { narc(HgssWorldAddresses.MAP_MATRIX_NARC) }
