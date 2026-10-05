@@ -88,7 +88,7 @@ For each screen or field, cross-check three sources:
    separate data directory: never the player's saves. A new game has no save state: make your own with `save:` at
    every interesting screen, and an in-game save (raw presses) to test what only exists with a save (CONTINUE).
 3. **Tests**: freeze the situation as a sparse RAM fixture (`fixture:<name>` keeps only the bytes the decoders read)
-   in `pokemon-client/src/jvmTest/resources/<game>/` and assert the decoded screen (ids, cursor, topology, touch
+   in `pokemon-client/src/commonTest/resources/<game>/` and assert the decoded screen (ids, cursor, topology, touch
    points). **Capture fixtures with the final decoder**: a fixture holds only what the decoder read when it was taken,
    so a decoder reading one more field needs a new capture. Tests that need the ROM read an environment variable
    (`POKEMON_ROM` for HGSS, `PLATINUM_ROM` for Platinum), are skipped without it, and the variable is declared as a

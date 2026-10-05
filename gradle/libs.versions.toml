@@ -6,7 +6,8 @@ maven = "0.37.0"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
 kotlinds = "1.2.2"
-libretro-kmp = "0.1.1"
+libretro-kmp = "0.1.2"
+kotlinx-io = "0.9.1"
 
 [plugins]
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
@@ -23,5 +24,6 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinds-rom = { module = "dev.kotlinds:nds-rom", version.ref = "kotlinds" }
 kotlinds-narc = { module = "dev.kotlinds:nds-narc", version.ref = "kotlinds" }
 kotlinds-compression = { module = "dev.kotlinds:nds-compression", version.ref = "kotlinds" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
 libretro-kmp = { module = "dev.kotlinds:libretro-kmp", version.ref = "libretro-kmp" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }

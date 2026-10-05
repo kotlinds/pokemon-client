@@ -9,7 +9,7 @@ import kotlin.test.assertEquals
 
 /**
  * The game records on its own thread while the agent's answer is built on another (and the UI thread notes human
- * inputs): every event must reach the agent exactly once, none dropped by a race.
+ * inputs): every event must reach the agent exactly once, none dropped by a race. In jvmTest: it runs real threads.
  */
 class EventFeedConcurrencyTest {
     @Test
