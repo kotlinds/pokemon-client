@@ -104,4 +104,24 @@ class HgssWorldRoutingTest {
         assertTrue(route.links.any { it.kind == dev.kotlinds.pokemonclient.world.ZoneLink.Kind.HOLE }, route.links.toString())
         assertEquals(178, route.links.last().zone)
     }
+
+    /**
+     * Route 20 (zone 92) is cut in two by a line of sea rocks running diagonally (1133..1141, rows 497..511, and the
+     * same north of Seafoam at 1102..1105), each rock touching the next only by a corner: the water on both sides
+     * looks open on a small map, but no tile of one side is next to a tile of the other. Checked in the game on the
+     * bench (surfing east from 1136,500 or north from 1134,498 is refused; the ROM collision equals the RAM on the
+     * 4096 loaded tiles). The trainers Lori (1151,500) and Luis (1105,483), and Seafoam's island with Pedro, are on
+     * the Fuchsia side.
+     */
+    @Test
+    fun `the rocks across Route 20 close the sea between the Cinnabar and Fuchsia sides`() {
+        val area = assertNotNull(world.areaOf(92))
+        val surfing = RouteOptions(mode = dev.kotlinds.pokemonclient.state.MovementMode.SURF, canSurf = true, acceptOneWay = true)
+        // From the pocket west of the rocks (where the agent was refused), Lori's water isn't reachable on this map...
+        assertIs<Pathfinder.Result.Failed>(Pathfinder(area).route(Node(1134, 500), surfing) { it.x == 1140 && it.y == 500 })
+        // ...because the rocks only meet by their corners: 1134,498 (west) and 1135,497 (east) are diagonal neighbours.
+        assertTrue(area.tile(1135, 498)!!.blocked && area.tile(1134, 497)!!.blocked)
+        // From the Fuchsia side it's open water.
+        assertIs<Pathfinder.Result.Found>(Pathfinder(area).route(Node(1135, 497), surfing) { it.x == 1150 && it.y == 500 })
+    }
 }

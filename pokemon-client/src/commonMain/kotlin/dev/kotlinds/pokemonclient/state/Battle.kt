@@ -23,6 +23,8 @@ data class BattleState(
      * that many shakes, [CAUGHT_SHAKES]: caught). Null otherwise.
      */
     val ballShakes: Int? = null,
+    /** The game's ids of the opposing trainers ([FieldTrainer.trainerId]), in the order of [trainers]; empty when unknown. */
+    val trainerIds: List<Int> = emptyList(),
 ) {
     companion object {
         /** [ballShakes] of a ball that catches the Pokémon. */
@@ -78,9 +80,17 @@ data class BattlerState(
     val catchRate: Int? = null,
     /**
      * Which Pokémon this is, when the game tells (its personality value): tells a Pokémon sent in apart from another of
-     * the same species and level (two Electrode). Not shown to agents.
+     * the same species and level (two Electrode). Not shown to agents. Not enough alone for a trainer's Pokémon: the
+     * game derives their personality from the trainer, species and level (`src/trainer_data.c`), so two Doduo of the
+     * same level in one party share it; [partySlot] tells them apart.
      */
     val personality: Long? = null,
+    /**
+     * The slot (0..5) of its owner's party this battler was sent from (`BattleContext.selectedMonIndex`, updated
+     * together with the battler's data when a Pokémon comes in), when the game tells. With [personality], what tells
+     * a Pokémon sent in apart from the one it replaces. Not shown to agents.
+     */
+    val partySlot: Int? = null,
 )
 
 /** Stats that can be raised or lowered during a battle. */

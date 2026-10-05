@@ -103,8 +103,10 @@ Never compare values that depend on the time of day (the RTC follows the host cl
    A `<Game>Game` extending the generation's base (`Gen4Game`). From here the app and the bench start the game; every
    screen is `Unknown` until decoded.
 2. **The intro**, the first thing every agent meets: opening movie (when can it be skipped?), title screen (when are
-   keys read?), the transitional applications between them (loading), the main menu (`MenuKind.MAIN_MENU`,
-   `option:continue` for `soft_reset`; Platinum skips it when there is no save), the professor's speech (`Dialogue`
+   keys read? which inputs: `Screen.Intro.goesOnWith`, `Awaiting.ANIMATION` while input is ignored — HGSS's title
+   drops every input during its loading and first 30 iterations), the transitional applications between them
+   (loading), the main menu (`MenuKind.MAIN_MENU`, `option:continue` for `continue_game` and `soft_reset`; Platinum
+   skips it when there is no save), the professor's speech (`Dialogue`
    with `TextSource.INTRO`, awaiting input at the text printer's page breaks), its menus and yes / no, the naming
    keyboard (the common `Keyboard`, so `enter_text` works), until the overworld.
 3. **Field basics**: position (zone, x, y, height, facing, moving), `Overworld` waiting for input (no field task,

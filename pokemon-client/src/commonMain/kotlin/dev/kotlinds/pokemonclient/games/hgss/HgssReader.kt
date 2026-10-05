@@ -1003,6 +1003,8 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             }
         } ?: emptyList()
 
+        // Triggers whose script ends silently in some story state (world Trigger.quietWhen, from the ROM's scripts).
+        val quietWhen = HgssData.world?.areaOf(mapId)?.triggers.orEmpty().filter { it.zone == mapId }.associate { it.id to it.quietWhen }
         val triggers = ptr(me + A.ME_COORD, 2)?.let { base ->
             (0 until count(A.ME_NUM_COORD)).map { i ->
                 val c = base + i * A.COORD_SIZE
@@ -1017,6 +1019,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
                     active = varValue?.let { it == value },
                     variable = variable,
                     value = value,
+                    quiet = quietWhen[i]?.let { flag(it.flag) == it.set } == true,
                 )
             }
         } ?: emptyList()

@@ -121,6 +121,31 @@ class ActionRegistryTest {
     }
 
     @Test
+    fun anActionRefusedWhileTheGameAnimatesWaitsForItThenRuns() {
+        // Right after a battle the game is still busy by itself (a fade, a script ending): the action waits for the
+        // screen it needs instead of being refused, without any button pressed meanwhile.
+        val game = FakeGame(Screen.Battle(Awaiting.ANIMATION), state = { battleState(it) })
+        var readyAt: Long? = null
+        game.onFrame = { frame, screen -> if (frame >= ANIMATION_FRAMES && screen is Screen.Battle) command.also { readyAt = frame } else screen }
+        var pressedAt: Long? = null
+        game.onPress = { _, screen -> pressedAt = pressedAt ?: game.console.frame; screen }
+        val outcome = registry.execute(GameAction.Run, game.scope(), game)
+        val error = (outcome as? ActionOutcome.Failed)?.error
+        assertTrue(error !is ActionError.Unavailable || error.reason != UnavailableReason.WRONG_SCREEN, outcome.toString())
+        assertTrue(game.presses.isNotEmpty(), "the action ran once the menu was there")
+        assertTrue(pressedAt!! > readyAt!!, "nothing pressed before the screen was ready: $pressedAt vs $readyAt")
+    }
+
+    @Test
+    fun anActionStillMeaninglessOnceTheGameSettledIsRefusedWithoutPressing() {
+        val game = FakeGame(Screen.Battle(Awaiting.ANIMATION), state = { battleState(it) })
+        game.onFrame = { frame, screen -> if (frame >= ANIMATION_FRAMES) Screen.Battle(Awaiting.INPUT) else screen }
+        val outcome = registry.execute(GameAction.Run, game.scope(), game)
+        assertEquals(UnavailableReason.WRONG_SCREEN, (assertIs<ActionOutcome.Failed>(outcome).error as ActionError.Unavailable).reason)
+        assertTrue(game.presses.isEmpty())
+    }
+
+    @Test
     fun enumerationGivesCanonicalKeysForPickFromAListModels() {
         val keys = registry.enumerate(battleState(command), ActionMode.ASSISTED).keys
         assertTrue("attack(move:33)" in keys)
@@ -135,6 +160,9 @@ class ActionRegistryTest {
         assertTrue("\"const\":\"press\"" in schema)
     }
 }
+
+/** Frames the fake game animates before it waits for input. */
+private const val ANIMATION_FRAMES = 40L
 
 class MatchesRefTest {
     @kotlin.test.Test

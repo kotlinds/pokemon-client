@@ -421,7 +421,7 @@ val Screen.kind: String
         is Screen.Animation -> "animation:${kind.name.lowercase()}"
         is Screen.Overworld -> "overworld"
         is Screen.Battle -> "battle"
-        is Screen.Intro -> "intro"
+        is Screen.Intro -> "intro:${stage.wire}"
         is Screen.Viewer -> "viewer:${app.name.lowercase()}"
         is Screen.Unknown -> "unknown"
     }

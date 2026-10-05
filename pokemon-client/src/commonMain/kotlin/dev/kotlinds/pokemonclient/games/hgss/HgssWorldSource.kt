@@ -166,7 +166,8 @@ class HgssWorldSource(private val rom: NdsRom, private val version: HgssVersion)
             val scripts = scriptFile(zone)
             ev.coords.forEachIndexed { i, c ->
                 val inert = scripts != null && HgssScripts.isEmpty(scripts, c.script)
-                triggers += Trigger(zone, i, c.x, c.z, c.width, c.height, c.script, c.variable, c.value, inert)
+                val quiet = scripts?.let { HgssScripts.quietWhen(it, c.script) }
+                triggers += Trigger(zone, i, c.x, c.z, c.width, c.height, c.script, c.variable, c.value, inert, quiet)
             }
             scriptWarps += scriptWarps(zone, ev)
             triggerWarps += triggerWarps(zone, ev)

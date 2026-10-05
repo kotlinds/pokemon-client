@@ -29,7 +29,12 @@ class PlanContext(
 
 /** The result of an action: done (with an optional detail), or a typed error; plus the state after it. */
 sealed interface ActionOutcome {
-    data class Done(val detail: String? = null) : ActionOutcome
+    /**
+     * Done, with an optional [detail]. [stopsChain]: the step was carried out but what it led to makes the steps
+     * after it pointless (a `run` that couldn't escape: the battle goes on, while the next steps were meant for after
+     * it); a chain stops there with this reason ([ChainRunner]).
+     */
+    data class Done(val detail: String? = null, val stopsChain: ChainStop? = null) : ActionOutcome
     data class Failed(val error: ActionError) : ActionOutcome
 }
 

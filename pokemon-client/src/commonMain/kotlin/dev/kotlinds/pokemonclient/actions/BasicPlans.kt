@@ -135,11 +135,52 @@ internal object BasicPlans {
     /** About 30 s of a scene per `advance_dialogue` (the MCP repeats answers sent later than 50 s). */
     private const val MAX_ADVANCE_FRAMES = 1800
 
-    /** Flees: RUN on the battle command menu. */
+    /**
+     * Flees: RUN on the battle command menu, then follows the attempt to its end: the battle is over (got away), or
+     * the game asks for a choice again ("Can't escape!": the foe had its turn, then the command menu, or the party
+     * when the foe's attack made one of the player's Pokémon faint; or a trapping foe prevented it at once, checked
+     * live against an Arena Trap Diglett). The outcome is read from the state (the battle still there or not), never
+     * from the message. A failed escape is done (the command was carried out) but stops a chain
+     * ([ChainStop.EscapeFailed]): the steps after a `run` were meant for after the battle.
+     */
     val run = ActionPlan<GameAction.Run> { _, context ->
-        context.navigator.choose(Screen.BattleCommand::class, "RUN") { it.id == "option:run" }
-            .then { ActionOutcome.Done() }
+        val foe = context.state().battle?.battlers?.firstOrNull { !it.ref.isPlayerSide }?.let { it.nickname ?: it.species.name }
+        context.navigator.choose(Screen.BattleCommand::class, "RUN") { it.id == "option:run" }.then {
+            when (val escaped = escapeResult(context)) {
+                null -> ActionOutcome.Failed(ActionError.Timeout("the escape attempt didn't end"))
+                true -> ActionOutcome.Done("got away safely")
+                false -> ActionOutcome.Done("couldn't escape: the battle goes on", stopsChain = ChainStop.EscapeFailed(foe))
+            }
+        }
     }
+
+    /**
+     * Follows an escape attempt: true once the battle is over, false when the battle asks for a choice again, null
+     * when neither happened in [RUN_FRAMES]. Messages waiting for A are read; the fade out (whatever screen it
+     * shows while the battle is freed) is only waited for.
+     */
+    private fun escapeResult(context: PlanContext): Boolean? {
+        val start = context.scope.frame
+        // Bounded in rounds too: each one runs frames, but a scripted game may not count them.
+        repeat(RUN_FRAMES / 10) {
+            if (context.scope.frame - start >= RUN_FRAMES) return null
+            val state = context.navigator.settle()
+            val screen = state.screen
+            when {
+                state.battle == null -> return true
+                screen is Screen.Selectable && screen.awaiting == Awaiting.INPUT -> return false
+                (screen is Screen.Dialogue || screen is Screen.PressToContinue) && screen.awaiting == Awaiting.INPUT -> {
+                    context.scope.tap(Button.A)
+                    context.navigator.awaitChange(screen, maxFrames = 60)
+                }
+                else -> context.scope.step(10)
+            }
+        }
+        return null
+    }
+
+    /** The escape plays out in a few seconds; a failed one adds the foe's turn (~20 s at most). */
+    private const val RUN_FRAMES = 1800
 
     /**
      * "Switch Pokémon?" → KEEP BATTLING. Called while the messages before the question still scroll (EXP, level

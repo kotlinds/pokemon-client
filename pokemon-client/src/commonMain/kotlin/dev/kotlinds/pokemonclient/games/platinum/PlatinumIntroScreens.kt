@@ -11,6 +11,8 @@ import dev.kotlinds.pokemonclient.state.CancelBehavior
 import dev.kotlinds.pokemonclient.state.ContinueReason
 import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.Entry
+import dev.kotlinds.pokemonclient.state.IntroInputs
+import dev.kotlinds.pokemonclient.state.IntroStage
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.TextSource
@@ -61,6 +63,9 @@ internal object PlatinumIntroScreens {
         }
     }
 
+    /** The opening movie and the title screen take A or START (`JOY_NEW_ONLY`), never a touch. */
+    private val A_OR_START = IntroInputs(setOf(Button.A, Button.START))
+
     // region Opening movie
 
     /** UnkStruct_ov77_021D2E9C (src/game_opening/ov77_021D25B0.c): `unk_08` set once skipped, `unk_2A8` (at 0x2AC). */
@@ -75,7 +80,8 @@ internal object PlatinumIntroScreens {
         val data = mem.ptr(manager + S.OM_DATA)
         val skippable = data != null && mem.s32(manager + S.OM_EXEC_STATE) == S.OM_EXEC_MAIN &&
             mem.u8(data + OPENING_SKIPPABLE) != 0 && mem.s32(data + OPENING_SKIPPING) == 0
-        return Screen.Intro("intro_movie", if (skippable) Awaiting.INPUT else Awaiting.ANIMATION)
+        return if (skippable) Screen.Intro(IntroStage.INTRO_MOVIE, Awaiting.INPUT, A_OR_START)
+        else Screen.Intro(IntroStage.INTRO_MOVIE, Awaiting.ANIMATION)
     }
 
     // endregion
@@ -90,7 +96,8 @@ internal object PlatinumIntroScreens {
         val data = mem.ptr(manager + S.OM_DATA)
         val ready = mem.s32(manager + S.OM_EXEC_STATE) == S.OM_EXEC_MAIN && mem.s32(manager + S.OM_PROC_STATE) == TITLE_STATE_MAIN &&
             data != null && mem.s32(data + TITLE_INPUT_ENABLE_DELAY) == 0
-        return Screen.Intro("title_screen", if (ready) Awaiting.INPUT else Awaiting.ANIMATION)
+        return if (ready) Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.INPUT, A_OR_START)
+        else Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.ANIMATION)
     }
 
     // endregion
@@ -128,18 +135,18 @@ internal object PlatinumIntroScreens {
      * skipped (`isNewGame`): the intro starts at once.
      */
     private fun mainMenu(mem: PlatinumMemory, manager: Long, text: PlatinumText?): Screen {
-        val data = mem.ptr(manager + S.OM_DATA) ?: return Screen.Intro("main_menu", Awaiting.ANIMATION)
-        if (mem.s32(manager + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN || mem.fading) return Screen.Intro("main_menu", Awaiting.ANIMATION)
+        val data = mem.ptr(manager + S.OM_DATA) ?: return Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
+        if (mem.s32(manager + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN || mem.fading) return Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
         val state = mem.s32(manager + S.OM_PROC_STATE)
         if (mem.s32(data + M.ALERTS_STATE) == M.ALERTS_WAIT_DISMISS) {
-            if (mem.s32(data + M.ALERTS_DELAY) != 0) return Screen.Intro("main_menu", Awaiting.ANIMATION)
+            if (mem.s32(data + M.ALERTS_DELAY) != 0) return Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
             val warning = state == M.STATE_CONFIRM_NEW_GAME
             val message = if (warning) text?.line(PlatinumText.MAIN_MENU_ALERTS, PlatinumText.MAIN_MENU_ALERT_NEW_GAME) else null
             return Screen.PressToContinue(ContinueReason.MESSAGE, message?.replace('\n', ' ')?.trim())
         }
-        if (state != M.STATE_SELECT_OPTION || mem.s32(data + M.ALERTS_PENDING) != 0) return Screen.Intro("main_menu", Awaiting.ANIMATION)
+        if (state != M.STATE_SELECT_OPTION || mem.s32(data + M.ALERTS_PENDING) != 0) return Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
         val shown = (0 until M.OPTION_COUNT).filter { mem.s32(data + M.OPTION_APPS + 4L * it) != 0 }
-        if (shown.isEmpty()) return Screen.Intro("main_menu", Awaiting.ANIMATION)
+        if (shown.isEmpty()) return Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
         val entries = shown.map { option ->
             val (id, line) = M.OPTIONS[option]
             val label = line?.let { text?.line(PlatinumText.MAIN_MENU_OPTIONS, it) }?.takeIf { it.isNotBlank() }?.replace('\n', ' ')

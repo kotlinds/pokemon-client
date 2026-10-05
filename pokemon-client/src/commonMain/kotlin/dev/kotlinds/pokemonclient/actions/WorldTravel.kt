@@ -279,7 +279,9 @@ internal object WorldTravel {
         val trip = travel(context, world, goal, options, notes, meter)
         // Got off at a building that doesn't allow cycling after riding there: nothing worth saying.
         val said = if (RODE in notes) notes.filterNot { it.startsWith(NO_CYCLING) } else notes
-        return trip.copy(notes = said + trip.notes)
+        // An interruption tells the tiles of the whole trip (every hop, through warps), not only of its last walk.
+        val walk = trip.walk.let { if (it is MovePlans.Walk.Interrupted && meter != null) it.copy(steps = meter.done) else it }
+        return trip.copy(walk = walk, notes = said + trip.notes)
     }
 
     /**

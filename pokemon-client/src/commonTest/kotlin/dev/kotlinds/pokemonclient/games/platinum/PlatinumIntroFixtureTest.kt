@@ -9,6 +9,8 @@ import dev.kotlinds.pokemonclient.state.CancelBehavior
 import dev.kotlinds.pokemonclient.state.ContinueReason
 import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.IntroInputs
+import dev.kotlinds.pokemonclient.state.IntroStage
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.TextSource
@@ -33,12 +35,12 @@ class PlatinumIntroFixtureTest {
 
     @Test
     fun `opening movie can be skipped once its first scene is shown`() {
-        assertEquals(Screen.Intro("intro_movie", Awaiting.INPUT), state("pt_opening").screen)
+        assertEquals(Screen.Intro(IntroStage.INTRO_MOVIE, Awaiting.INPUT, IntroInputs(setOf(Button.A, Button.START))), state("pt_opening").screen)
     }
 
     @Test
-    fun `title screen waits for A`() {
-        assertEquals(Screen.Intro("title_screen", Awaiting.INPUT), state("pt_title").screen)
+    fun `title screen waits for A or START, not a touch`() {
+        assertEquals(Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.INPUT, IntroInputs(setOf(Button.A, Button.START))), state("pt_title").screen)
     }
 
     @Test

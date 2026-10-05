@@ -5,6 +5,7 @@ import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Game
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.IntroStage
 import dev.kotlinds.pokemonclient.state.Screen
 
 /**
@@ -38,7 +39,7 @@ class PlatinumGame(private val version: PlatinumVersion, rom: NdsRom? = null) : 
         val screen = PlatinumIntroScreens.decode(mem, top, text)
             ?: fs?.let { PlatinumField.screen(mem, it, field) }
             ?: when (top.app) {
-                PlatinumApp.NONE, PlatinumApp.LOADING -> Screen.Intro("loading", Awaiting.ANIMATION)
+                PlatinumApp.NONE, PlatinumApp.LOADING -> Screen.Intro(IntroStage.LOADING, Awaiting.ANIMATION)
                 else -> Screen.Unknown("application not decoded yet for Platinum (main 0x${top.manager?.let { mem.fn(it + 4) }?.toString(16)})", Awaiting.INPUT)
             }
         return GameState(

@@ -115,7 +115,9 @@ internal object WalkSegments {
             context.scope.step(1, input)
             val state = context.state()
             val field = state.field
-            if (field == null || (state.screen !is Screen.Overworld && state.screen.awaiting != Awaiting.ANIMATION)) {
+            // A trainer's "!" keeps the overworld on screen (an animation) and ignores the held direction: without this,
+            // the walk would read it as a refused step (an invisible wall) and plan again.
+            if (field == null || field.trainerEncounter || (state.screen !is Screen.Overworld && state.screen.awaiting != Awaiting.ANIMATION)) {
                 val walked = next + if (tiles.getOrNull(next)?.let { it.x == field?.x && it.y == field.y } == true) 1 else 0
                 return Held.Stopped(state, walked, tiles.getOrNull(next))
             }
@@ -150,7 +152,7 @@ internal object WalkSegments {
             waited++
             val state = context.state()
             val field = state.field ?: return null
-            if (state.screen !is Screen.Overworld && state.screen.awaiting != Awaiting.ANIMATION) return null
+            if (field.trainerEncounter || (state.screen !is Screen.Overworld && state.screen.awaiting != Awaiting.ANIMATION)) return null
             still = if (field.moving) 0 else still + 1
             if (still >= STILL_FRAMES) return field
         }

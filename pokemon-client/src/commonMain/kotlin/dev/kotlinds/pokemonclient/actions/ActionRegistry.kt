@@ -4,6 +4,7 @@ import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.runtime.ActionInterruptedException
 import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.runtime.Interruption
+import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.GameState
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -85,7 +86,7 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
         val def = definitions.firstOrNull { it.type.isInstance(action) }
             ?: return ActionOutcome.Failed(ActionError.Unsupported(action.key))
         val context = PlanContext(scope, game, settings = settings)
-        when (val availability = def.spec.availability(context.state())) {
+        when (val availability = availabilityOnceSettled(def.spec, context)) {
             is Availability.Unavailable -> {
                 // Fly refused here: name the nearest place where it works (computed only when asked, it routes).
                 val hint = if (availability.reason == UnavailableReason.NOT_FLYABLE_HERE) FlyHints.nearestFlyable(context) ?: availability.hint else availability.hint
@@ -103,6 +104,21 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
         } catch (error: ActionException) {
             ActionOutcome.Failed(error.error)
         }
+    }
+
+    /**
+     * Whether [spec] can run now. Refused on a screen where the game is still busy by itself ([Awaiting] other than
+     * INPUT: the fade back to the field after a battle, a script finishing, text printing), it is checked again once
+     * the game waits for input ([Navigator.settle], which only lets frames run and never presses a button): the
+     * screen the action needs is often only a few frames away (NOTES: `reorder_party` refused on "overworld,
+     * awaiting animation" right after BATTLE_WON, accepted when retried a second later). An action available at once
+     * runs at once (advance_dialogue while text prints...); one still refused after settling is refused for real.
+     */
+    private fun <A : GameAction> availabilityOnceSettled(spec: ActionSpec<A>, context: PlanContext): Availability {
+        val now = context.state()
+        val availability = spec.availability(now)
+        if (availability is Availability.Available || now.screen.awaiting == Awaiting.INPUT) return availability
+        return spec.availability(context.navigator.settle())
     }
 
     /** JSON Schema of the wire actions of [mode] (one object per type, discriminated by `type`). */

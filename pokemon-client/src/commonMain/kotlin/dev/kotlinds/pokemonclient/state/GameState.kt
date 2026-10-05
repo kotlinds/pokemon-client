@@ -132,6 +132,11 @@ data class FieldState(
     val pickedUp: Set<String> = emptySet(),
     /** A trainer saw the player: it walks up to them and a battle follows (until the battle starts). */
     val trainerEncounter: Boolean = false,
+    /**
+     * The game's id of the trainer who saw the player ([FieldTrainer.trainerId] of one of [objects]) while
+     * [trainerEncounter], when the game tells it; null otherwise.
+     */
+    val engagedTrainerId: Int? = null,
     /** Whether the map lets the player fly away (outdoors), null when unknown. */
     val flyAllowed: Boolean? = null,
     /** Whether the map has a PC (Pokémon storage), null when unknown. */
@@ -168,6 +173,12 @@ data class FieldObject(
     val obstacle: ObstacleKind? = null,
     /** For a trainer: who it is, whether it's beaten, how far it sees. */
     val trainer: FieldTrainer? = null,
+    /**
+     * Its height, in the units of [FieldState.height], when the game tells it. The game only talks to (or picks up)
+     * an object faced at the player's own height (sub_0203DBD4: both position vectors' Y must be equal): from the
+     * water, a person standing on the shore above it answers nothing.
+     */
+    val height: Int? = null,
     /** For a shop clerk: what the shop sells, when known before talking. */
     val catalog: List<ShopItem>? = null,
 )

@@ -210,7 +210,25 @@ data class Trigger(
     val value: Int,
     /** Its script does nothing (a placeholder ending at once): stepping on it starts no scene, it is walked like floor. */
     val inert: Boolean = false,
-)
+    /**
+     * When this holds, its script ends at once without showing anything (no message, no movement): armed or not, the
+     * trigger is walked like floor. The Viridian Gym's guide trigger (scr_seq_T02GYM0101_003) re-arms on every entry
+     * (`VAR_UNK_4127` reset to 0 by the map's init script), but once his speech was heard (`FLAG_UNK_13A`) it only
+     * sets the variable back and releases the player. Null when its script always shows something (or is unknown).
+     */
+    val quietWhen: FlagCondition? = null,
+) {
+    /**
+     * True when stepping on it now runs a scene the player sees: its variable ([variable] read through [variableOf])
+     * has the awaited [value], and its script isn't in its [quietWhen] silent case ([flagOf] reads the flags). A flag
+     * the game can't read (null) never makes it quiet: better stop on a silent trigger than walk into a scene.
+     */
+    fun startsScene(variableOf: (Int) -> Int?, flagOf: (Int) -> Boolean?): Boolean =
+        variableOf(variable) == value && quietWhen?.let { flagOf(it.flag) == it.set } != true
+}
+
+/** An event flag of the game's save having a given state: [flag] is set when [set], clear otherwise. */
+data class FlagCondition(val flag: Int, val set: Boolean)
 
 /**
  * A coordinate trigger ([Trigger] number [trigger] of [zone]) whose script warps the player to ([x], [y]) on the same

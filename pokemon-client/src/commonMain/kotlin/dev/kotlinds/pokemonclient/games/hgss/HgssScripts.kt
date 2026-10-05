@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.games.hgss
 import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.s32
 import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u16
 import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u32
+import dev.kotlinds.pokemonclient.world.FlagCondition
 
 /**
  * Just enough of the map script files (NARC [HgssWorldAddresses.SCRIPT_NARC], member `MapHeader.scriptsBank`) to
@@ -102,6 +103,94 @@ internal object HgssScripts {
         val start = scriptStarts(file).getOrNull(scriptId - 1) ?: return false
         return start + 2 <= file.size && u16(file, start) == END_OPCODE
     }
+
+    /**
+     * The flag state under which event script [scriptId] (1-based) of [file] ends without showing anything, or null:
+     * the script opens with commands nobody sees ([QUIET_COMMANDS]: locks, follower housekeeping, variables), then
+     * branches on a flag (`GoToIfSet` / `GoToIfUnset` = `CheckFlag flag` then `GoToIf TRUE|FALSE, dest`), and one
+     * of the two branches only runs such commands until `End`. That branch is the silent case.
+     *
+     * The Viridian Gym's guide (scr_seq_T02GYM0101_003): `ScrCmd_609; LockAll; GoToIfSet FLAG_UNK_13A, _037D`, and
+     * `_037D` is `ScrCmd_600; SetFollowMonInhibitState 1; ScrCmd_607; ScrCmd_109 253, 56; SetVar VAR_UNK_4127, 1;
+     * ReleaseAll; End`: once his speech was heard, stepping on the row in front of the door does nothing visible,
+     * although the map's init script arms the trigger again on every entry.
+     *
+     * Only the first flag test is looked at, and any command outside [QUIET_COMMANDS] (a message, a movement, a
+     * sound, a battle...) makes a branch "not silent": a script this can't read is never called quiet.
+     */
+    fun quietWhen(file: ByteArray, scriptId: Int): FlagCondition? {
+        val start = scriptStarts(file).getOrNull(scriptId - 1) ?: return null
+        var pos = quietRun(file, start) ?: return null
+        if (pos + CHECKFLAG_SIZE + GOTOIF_SIZE > file.size) return null
+        if (u16(file, pos) != CHECKFLAG_OPCODE || u16(file, pos + CHECKFLAG_SIZE) != GOTOIF_OPCODE) return null
+        val flag = u16(file, pos + 2)
+        pos += CHECKFLAG_SIZE
+        val condition = file[pos + 2].toInt() and 0xFF
+        val jump = pos + GOTOIF_SIZE + s32(file, pos + 3)
+        val next = pos + GOTOIF_SIZE
+        // GoToIf TRUE jumps when the flag is set; GoToIf FALSE when it is clear (asm/macros/script.inc).
+        val (whenSet, whenClear) = when (condition) {
+            CONDITION_TRUE -> jump to next
+            CONDITION_FALSE -> next to jump
+            else -> return null
+        }
+        return when {
+            silentToEnd(file, whenSet) -> FlagCondition(flag, set = true)
+            silentToEnd(file, whenClear) -> FlagCondition(flag, set = false)
+            else -> null
+        }
+    }
+
+    /**
+     * Follows [QUIET_COMMANDS] and `GoTo`s from [pos]; the position of the first other command, or null when the
+     * bytecode runs out (or loops).
+     */
+    private fun quietRun(file: ByteArray, from: Int): Int? {
+        var pos = from
+        repeat(MAX_QUIET_COMMANDS) {
+            if (pos !in 0..file.size - 2) return null
+            val opcode = u16(file, pos)
+            when {
+                opcode == GOTO_OPCODE -> {
+                    if (pos + 6 > file.size) return null
+                    pos = pos + 6 + s32(file, pos + 2)
+                }
+                opcode == END_OPCODE -> return pos
+                opcode in QUIET_COMMANDS -> pos += 2 + QUIET_COMMANDS.getValue(opcode)
+                else -> return pos
+            }
+        }
+        return null
+    }
+
+    /** True when the bytecode from [pos] only runs [QUIET_COMMANDS] (and `GoTo`s) until `End`. */
+    private fun silentToEnd(file: ByteArray, pos: Int): Boolean {
+        val stop = quietRun(file, pos) ?: return false
+        return stop + 2 <= file.size && u16(file, stop) == END_OPCODE
+    }
+
+    /**
+     * Script commands that show nothing and take no time, with the size of their arguments (asm/macros/script.inc,
+     * src/scrcmd_c.c): SetFlag 30, ClearFlag 31, SetVar 41, CopyVar 42, LockAll 96, ReleaseAll 97, ScrCmd_109 (an
+     * object's movement type), the follower's bookkeeping ScrCmd_600 / 607 / 608 / 609 and SetFollowMonInhibitState 783.
+     */
+    private val QUIET_COMMANDS = mapOf(
+        30 to 2, 31 to 2, 41 to 4, 42 to 4, 96 to 0, 97 to 0, 109 to 4,
+        600 to 0, 607 to 0, 608 to 0, 609 to 0, 783 to 1,
+    )
+
+    /** `CheckFlag flag` (command 32: u16 flag). */
+    private const val CHECKFLAG_OPCODE = 32
+    private const val CHECKFLAG_SIZE = 4
+
+    /** `GoToIf condition, dest` (command 28: u8 condition, s32 offset from the end of the command). */
+    private const val GOTOIF_OPCODE = 28
+    private const val GOTOIF_SIZE = 7
+    private const val CONDITION_FALSE = 0
+    private const val CONDITION_TRUE = 1
+
+    /** A silent branch is a handful of commands: past this, it isn't one. */
+    private const val MAX_QUIET_COMMANDS = 32
 
     /**
      * The item event script [scriptId] (1-based) of [file] gives, or null: the `ItemVars item, quantity` of an item

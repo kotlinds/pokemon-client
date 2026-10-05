@@ -397,6 +397,11 @@ data class TriggerInfo(
     /** The trigger fires while script variable [variable] equals [value]. */
     val variable: Int = 0,
     val value: Int = 0,
+    /**
+     * Its script ends at once without showing anything in the current story (world `Trigger.quietWhen`: a speech
+     * already heard): even [active], stepping on it starts no scene.
+     */
+    val quiet: Boolean = false,
 )
 
 /**

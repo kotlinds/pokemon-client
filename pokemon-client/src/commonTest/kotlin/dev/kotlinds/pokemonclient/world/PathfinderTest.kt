@@ -451,4 +451,96 @@ class PathfinderTest {
     }
 
     // endregion
+
+    // region Turns (RouteOptions.turnCost)
+
+    /** Changes of direction between consecutive edges of [edges] (what [RouteOptions.turnCost] is paid for). */
+    private fun turns(edges: List<Edge>): Int =
+        edges.zipWithNext().count { (a, b) -> a.endDirection != null && a.endDirection != b.direction }
+
+    @Test
+    fun aDiagonalIsWalkedAsAnLNotAZigzag() {
+        val open = area(*Array(6) { "......" })
+        val route = assertIs<Pathfinder.Result.Found>(Pathfinder(open).to(5, 5, Node(0, 0))).route
+        assertEquals(10, route.edges.size)
+        assertEquals(1, turns(route.edges), route.edges.joinToString { it.direction.name })
+    }
+
+    @Test
+    fun aSlightlyLongerWayWithFewerTurnsWins() {
+        // The shortest way (7 steps) is a staircase of 5 turns or more; around by the east, 9 steps and 2 turns.
+        val map = area(
+            "###..",
+            "##...",
+            "#..#.",
+            "..##.",
+            ".....",
+        )
+        val straight = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(3, 0, Node(0, 4))).route
+        assertEquals(9, straight.edges.size)
+        assertEquals(2, turns(straight.edges))
+        // Compared by length only (turn cost 0), the staircase.
+        val shortest = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(3, 0, Node(0, 4), RouteOptions(turnCost = 0))).route
+        assertEquals(7, shortest.edges.size)
+    }
+
+    @Test
+    fun theBicycleTurnCostsMoreThanAWalkingOne() {
+        assertEquals(RouteOptions.TURN_COST, RouteOptions().turnPenalty)
+        assertEquals(RouteOptions.TURN_COST, RouteOptions(mode = MovementMode.SURF).turnPenalty)
+        assertEquals(RouteOptions.BIKE_TURN_COST, RouteOptions(mode = MovementMode.BIKE).turnPenalty)
+        assertEquals(0, RouteOptions(mode = MovementMode.BIKE, turnCost = 0).turnPenalty)
+    }
+
+    /**
+     * The cut of the search (a heading reached for a turn more than the node's cheapest isn't explored) loses nothing:
+     * on random maps with walls, grass, water and ledges, the route found costs exactly as much as an exhaustive search
+     * over every (node, direction) state.
+     */
+    @Test
+    fun theTurnAwareSearchFindsTheCheapestRoute() {
+        val random = kotlin.random.Random(4)
+        val kinds = "......#\"~v>"
+        repeat(300) {
+            val rows = Array(7) { (0 until 8).map { kinds[random.nextInt(kinds.length)] }.joinToString("") }
+            rows[0] = "." + rows[0].drop(1)
+            val map = area(*rows)
+            val options = RouteOptions(canSurf = random.nextBoolean(), acceptOneWay = true, avoidTallGrass = random.nextBoolean(), turnCost = random.nextInt(4))
+            val goal = Node(random.nextInt(8), random.nextInt(7))
+            val pathfinder = Pathfinder(map)
+            val expected = exhaustive(pathfinder, Node(0, 0), goal, options)
+            val found = pathfinder.route(Node(0, 0), options) { it.x == goal.x && it.y == goal.y }
+            if (expected == null || goal == Node(0, 0)) return@repeat
+            val route = assertIs<Pathfinder.Result.Found>(found, rows.joinToString("\n")).route
+            val cost = route.edges.sumOf { it.cost } + turns(route.edges) * options.turnPenalty
+            assertEquals(expected, cost, rows.joinToString("\n") + " → $goal $options")
+        }
+    }
+
+    /** The cheapest cost from [start] to [goal] over every (node, direction) state, without any cut. */
+    private fun exhaustive(pathfinder: Pathfinder, start: Node, goal: Node, options: RouteOptions): Int? {
+        val dist = HashMap<Pair<Node, Direction?>, Int>()
+        val queue = ArrayList<Pair<Pair<Node, Direction?>, Int>>()
+        dist[start to null] = 0
+        queue += (start to null) to 0
+        while (queue.isNotEmpty()) {
+            val next = queue.minBy { it.second }
+            queue.remove(next)
+            val (state, d) = next
+            if (d > dist.getValue(state)) continue
+            if (state.first.x == goal.x && state.first.y == goal.y && state.first != start) return d
+            for (edge in pathfinder.neighbours(state.first, options)) {
+                val turn = if (state.second != null && edge.direction != state.second) options.turnPenalty else 0
+                val cost = d + edge.cost + turn
+                val to = edge.to to edge.endDirection
+                if (cost < (dist[to] ?: Int.MAX_VALUE)) {
+                    dist[to] = cost
+                    queue += to to cost
+                }
+            }
+        }
+        return null
+    }
+
+    // endregion
 }

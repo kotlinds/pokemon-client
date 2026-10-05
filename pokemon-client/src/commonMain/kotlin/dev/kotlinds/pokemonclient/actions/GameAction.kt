@@ -223,6 +223,14 @@ sealed interface GameAction {
         override val key = "soft_reset"
     }
 
+    /**
+     * From the intro movie, the title screen or the main menu: goes on to the main menu, picks CONTINUE and waits until
+     * the saved game is running (what [SoftReset] does after its reset).
+     */
+    data object ContinueGame : GameAction {
+        override val key = "continue_game"
+    }
+
     /** Opens the start menu (from the overworld) on [entry] (`option:bag`, `option:pokemon`...), checked by its id. */
     data class OpenMenu(val entry: String) : GameAction {
         override val key get() = "open_menu($entry)"

@@ -126,6 +126,22 @@ class WorldRoutingTest {
     }
 
     @Test
+    fun theRouterPrefersStraightLinesToo() {
+        // An open floor: the way across the diagonal turns once, like the walk on one map.
+        val open = area(1, *Array(6) { "......" })
+        val world = object : WorldSource {
+            override fun areaOf(zoneId: Int) = open.takeIf { zoneId == 1 }
+        }
+        val route = assertNotNull(WorldRouter(world).route(1, Node(0, 0), RouteOptions()) { it.node.x == 5 && it.node.y == 5 })
+        val nodes = listOf(Node(0, 0)) + route.places.map { it.node }
+        val moves = nodes.zipWithNext().map { (a, b) -> (b.x - a.x) to (b.y - a.y) }
+        assertEquals(10, moves.size)
+        assertEquals(1, moves.zipWithNext().count { (a, b) -> a != b }, moves.toString())
+        // Its cost counts the turn (one, at TURN_COST).
+        assertEquals(10 + RouteOptions.TURN_COST, route.cost)
+    }
+
+    @Test
     fun theMapListsArrivalsHolesEdgesItemsAndHiddenItems() {
         val outdoor = area(
             1, ".....~", ".....~", zones = listOf("111122", "111122"),

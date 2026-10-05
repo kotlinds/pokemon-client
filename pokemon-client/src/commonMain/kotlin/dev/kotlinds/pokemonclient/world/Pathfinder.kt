@@ -15,6 +15,12 @@ sealed interface Edge {
     /** Every tile the player enters during this move, [to] last. */
     val tiles: List<Node>
 
+    /**
+     * The direction the player is moving in when this move ends, which the next move is compared with to count a
+     * turn ([RouteOptions.turnCost]); null when unknown (after a teleport). The pressed [direction] by default.
+     */
+    val endDirection: Direction? get() = direction
+
     /** Walk one tile. */
     data class Step(override val to: Node, override val direction: Direction, override val cost: Int) : Edge {
         override val tiles get() = listOf(to)
@@ -36,7 +42,15 @@ sealed interface Edge {
         override val direction: Direction,
         override val tiles: List<Node>,
         override val cost: Int = tiles.size,
-    ) : Edge
+    ) : Edge {
+        /** Spinners turn the push on the way: the direction of the last tile entered. */
+        override val endDirection: Direction?
+            get() {
+                val last = tiles.last()
+                val before = tiles.getOrNull(tiles.size - 2) ?: return direction
+                return Direction.entries.firstOrNull { before.x + it.dx == last.x && before.y + it.dy == last.y } ?: direction
+            }
+    }
 
     /**
      * Step onto [via] (one tile in [direction]), which takes the player to [to] on the same map: a warp pad, a cart
@@ -44,6 +58,9 @@ sealed interface Edge {
      */
     data class Teleport(override val to: Node, override val direction: Direction, val via: Node, override val cost: Int) : Edge {
         override val tiles get() = listOf(via, to)
+
+        /** The player arrives facing wherever the ride leaves them: no turn is counted after it. */
+        override val endDirection: Direction? get() = null
     }
 }
 
@@ -70,10 +87,41 @@ data class RouteOptions(
      * [PushPlanner]). [FieldMoveKind.SURF] here implies [canSurf].
      */
     val fieldMoves: Set<FieldMoveKind> = emptySet(),
+    /**
+     * What a change of direction between two moves costs, in steps; null for the measured default of [mode]
+     * ([defaultTurnCost]); 0 compares routes by their length only. Among routes of about the same length, the one
+     * with fewer turns wins: a diagonal zigzag is much slower to walk than an L (see [turnPenalty]).
+     */
+    val turnCost: Int? = null,
 ) {
+    /** The cost of a change of direction in this search: [turnCost], or the default for [mode]. */
+    val turnPenalty: Int get() = turnCost ?: defaultTurnCost(mode)
+
     companion object {
         /** Gen 4 walks across height differences of about one stair step (BDHC heights, NOTES 17s §4). */
         const val DEFAULT_MAX_CLIMB = 20
+
+        /**
+         * What a turn costs on foot or surfing, in steps. Measured on the bench (HeartGold, DeSmuME): a straight run of
+         * n tiles takes 8n + 12 frames (the walker lets go and waits for the player to stand still at the end of each
+         * straight run, see the walker's segments), and 6 more when it starts facing another way. Every change of
+         * direction therefore costs 12 + 6 = 18 frames over going on straight, about 2.25 steps of 8 frames: 2. Running
+         * and surfing measured the same (8 frames per tile).
+         */
+        const val TURN_COST = 2
+
+        /**
+         * What a turn costs on the Bicycle, in steps. The bike starts slowly and speeds up (about 8 frames for the first
+         * tiles of a run, 5 once at speed), so every new run loses its momentum: a 3 + 3 L measured 96 frames, the
+         * 6-run staircase between the same tiles 192, 24 frames per extra run, 3 to 5 bike steps: 4.
+         */
+        const val BIKE_TURN_COST = 4
+
+        /** The measured cost of a turn in movement [mode] ([TURN_COST], [BIKE_TURN_COST]). */
+        fun defaultTurnCost(mode: MovementMode): Int = when (mode) {
+            MovementMode.BIKE -> BIKE_TURN_COST
+            MovementMode.WALK, MovementMode.RUN, MovementMode.SURF -> TURN_COST
+        }
     }
 }
 
@@ -227,7 +275,9 @@ sealed interface RouteFailure {
  * - height: between two tiles, a surface is reachable when the height difference is at most [RouteOptions.maxClimb];
  * - people block their tile, except the Pokémon following the player;
  * - live state ([Overlay]): closed shutters block their tiles; stepping on a teleport source is an [Edge.Teleport] to
- *   its destination (it is never walked through as a plain tile).
+ *   its destination (it is never walked through as a plain tile);
+ * - turns: each change of direction between two moves costs [RouteOptions.turnPenalty] (the measured time of
+ *   stopping and turning), so of two ways of about the same length the straighter one wins.
  */
 class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay()) {
 
@@ -341,6 +391,17 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         return Route(edges, warnings)
     }
 
+    /**
+     * The cheapest route from [start] to a node where [isGoal] holds (Dijkstra), counting [RouteOptions.turnPenalty]
+     * for every change of direction between two moves.
+     *
+     * The turn makes the cost of a move depend on the previous one, so the search runs over [Heading]s (a node and the
+     * direction the player arrived in), up to four per tile. Most of them are cut: a heading reached for at least one
+     * turn more than the cheapest heading of the same node can't lead anywhere cheaper (from the cheapest one, any
+     * move costs at most one turn more), so it isn't explored ([turnDominated]). With no turn cost this is the plain
+     * Dijkstra over nodes. No A* heuristic: ledges (2 tiles for 1) and teleports make the distance to the goal
+     * overestimate the cost, and the searches are small enough without one.
+     */
     private fun search(
         start: Node,
         options: RouteOptions,
@@ -352,27 +413,29 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         ignorePeople: Boolean = false,
         ignoreBarriers: Boolean = false,
     ): List<Edge>? {
-        val dist = HashMap<Node, Int>()
-        val previous = HashMap<Node, Pair<Node, Edge>>()
-        val queue = PriorityQueue<Pair<Node, Int>> { a, b -> a.second - b.second }
-        dist[start] = 0
-        queue.add(start to 0)
+        // Also while looking for what blocks a route: between ways crossing the same obstacles, the straighter one
+        // tells where to stand (the tile in front of a boulder, a person).
+        val turnCost = options.turnPenalty
+        val first = Heading(start, null)
+        val dist = HashMap<Heading, Int>()
+        val previous = HashMap<Heading, Pair<Heading, Edge>>()
+        val settled = HashMap<Node, Int>()
+        val queue = PriorityQueue<Pair<Heading, Int>> { a, b -> a.second - b.second }
+        dist[first] = 0
+        queue.add(first to 0)
         while (queue.isNotEmpty()) {
-            val (node, d) = queue.poll()
-            if (d > (dist[node] ?: Int.MAX_VALUE)) continue
-            if (node != start && isGoal(node)) return path(previous, start, node)
-            val heading = previous[node]?.second?.direction
+            val (heading, d) = queue.poll()
+            if (d > (dist[heading] ?: Int.MAX_VALUE)) continue
+            val node = heading.node
+            if (turnDominated(settled, node, d, turnCost)) continue
+            if (node != start && isGoal(node)) return path(previous, first, heading)
             for (edge in neighbours(node, options, goalTiles, allowJumps, relaxed, allowTriggers, ignorePeople, ignoreBarriers)) {
-                val next = d + edge.cost
-                val known = dist[edge.to] ?: Int.MAX_VALUE
-                // Between routes of the same cost, prefer going on straight: fewer turns walk faster (each turn ends
-                // a held segment, see the walker).
-                val replaced = previous[edge.to]?.second
-                val straighter = next == known && edge is Edge.Step && replaced is Edge.Step && edge.direction == heading && replaced.direction != heading
-                if (next < known || straighter) {
-                    dist[edge.to] = next
-                    previous[edge.to] = node to edge
-                    if (next < known) queue.add(edge.to to next)
+                val next = d + edge.cost + turn(heading.direction, edge, turnCost)
+                val to = Heading(edge.to, edge.endDirection)
+                if (next < (dist[to] ?: Int.MAX_VALUE)) {
+                    dist[to] = next
+                    previous[to] = heading to edge
+                    queue.add(to to next)
                 }
             }
         }
@@ -402,7 +465,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         return dist
     }
 
-    private fun path(previous: Map<Node, Pair<Node, Edge>>, start: Node, end: Node): List<Edge> {
+    private fun path(previous: Map<Heading, Pair<Heading, Edge>>, start: Heading, end: Heading): List<Edge> {
         val edges = ArrayDeque<Edge>()
         var at = end
         while (at != start) {
@@ -724,6 +787,30 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         /** In the search for the field move a failed route needs: one field move outweighs any walk. */
         const val FIELD_MOVE_COST = 100_000
     }
+}
+
+/**
+ * A state of a turn-aware search: the player on [node], having arrived moving in [direction] (null at the start of
+ * the route, or when unknown: after a teleport, a warp). See [RouteOptions.turnCost].
+ */
+internal data class Heading(val node: Node, val direction: Direction?)
+
+/** What [edge] costs on top of its own cost when the player arrived moving in [direction]: [turnCost] for a turn. */
+internal fun turn(direction: Direction?, edge: Edge, turnCost: Int): Int =
+    if (turnCost > 0 && direction != null && edge.direction != direction) turnCost else 0
+
+/**
+ * True when [node], reached for [cost], needn't be explored: another heading of it was already explored for at least
+ * [turnCost] less (the cheapest one is explored first, and from it every move costs at most one turn more, so nothing
+ * is cheaper from this one). Records [cost] as the node's cheapest otherwise. With no turn cost, every node is
+ * explored once, like a plain Dijkstra.
+ */
+internal fun turnDominated(settled: MutableMap<Node, Int>, node: Node, cost: Int, turnCost: Int): Boolean {
+    val best = settled[node] ?: run {
+        settled[node] = cost
+        return false
+    }
+    return cost >= best + turnCost
 }
 
 /** A minimal binary-heap priority queue (commonMain has no java.util.PriorityQueue). */

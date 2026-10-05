@@ -1,9 +1,13 @@
 package dev.kotlinds.pokemonclient.world
 
+import dev.kotlinds.pokemonclient.Direction
+
 /**
  * Routes across zones: floors of a dungeon, buildings and the outdoor area, linked by warps and holes
  * ([WorldLinks]). One Dijkstra over (area, [Node]) pairs: inside an area the moves are the [Pathfinder]'s; stepping
  * onto a warp (or pressing its direction on an exit mat) or onto a hole jumps to the arrival tile of the other zone.
+ * Changes of direction cost [RouteOptions.turnPenalty] like in the [Pathfinder] (the search state also holds the
+ * direction the player arrived in, with the same cut of the headings that can't be cheaper).
  *
  * The live state is only known for the player's zone ([overlayFor] gives the people, refused steps and active
  * triggers there); other zones use the static maps with their obstacle objects where the map places them
@@ -58,25 +62,35 @@ class WorldRouter(
             AreaInfo(Pathfinder(area, overlayFor(zone, area)), links, goalTiles(area))
         }
         val startPlace = Place(startArea, start)
-        val dist = HashMap<Place, Int>()
-        val previous = HashMap<Place, Pair<Place, ZoneLink?>>()
-        val queue = PriorityQueue<Pair<Place, Int>> { a, b -> a.second - b.second }
-        dist[startPlace] = 0
-        queue.add(startPlace to 0)
+        val first = State(startPlace, null)
+        val turnCost = options.turnPenalty
+        val dist = HashMap<State, Int>()
+        val previous = HashMap<State, Pair<State, ZoneLink?>>()
+        // The cheapest cost each place was explored for (in its area: the same node in two areas is two places).
+        val settled = HashMap<Area, HashMap<Node, Int>>()
+        val queue = PriorityQueue<Pair<State, Int>> { a, b -> a.second - b.second }
+        dist[first] = 0
+        queue.add(first to 0)
         var explored = 0
         while (queue.isNotEmpty()) {
-            val (place, d) = queue.poll()
-            if (d > (dist[place] ?: Int.MAX_VALUE)) continue
-            if (place != startPlace && isGoal(place)) return WorldRoute(links(previous, startPlace, place), place, d, places(previous, startPlace, place))
-            if (++explored > maxNodes) return null
+            val (state, d) = queue.poll()
+            if (d > (dist[state] ?: Int.MAX_VALUE)) continue
+            val place = state.place
+            val known = settled.getOrPut(place.area) { HashMap() }
+            val firstVisit = place.node !in known
+            if (turnDominated(known, place.node, d, turnCost)) continue
+            if (place != startPlace && isGoal(place)) return WorldRoute(links(previous, first, state), place, d, places(previous, first, state))
+            // The bound counts places, not headings: the same reach as a search without turns.
+            if (firstVisit && ++explored > maxNodes) return null
             val zone = place.zone ?: startZone
             val here = info(place.area, zone)
-            fun relax(next: Place, cost: Int, via: ZoneLink?) {
+            fun relax(next: Place, cost: Int, via: ZoneLink?, direction: Direction?) {
                 val nd = d + cost
-                if (nd < (dist[next] ?: Int.MAX_VALUE)) {
-                    dist[next] = nd
-                    previous[next] = place to via
-                    queue.add(next to nd)
+                val to = State(next, direction)
+                if (nd < (dist[to] ?: Int.MAX_VALUE)) {
+                    dist[to] = nd
+                    previous[to] = state to via
+                    queue.add(to to nd)
                 }
             }
             fun take(link: ZoneLink, cost: Int) {
@@ -84,7 +98,8 @@ class WorldRouter(
                 val toY = link.toY ?: return
                 val area = world.areaOf(link.targetZone) ?: return
                 if (area.tile(toX, toY) == null) return
-                relax(Place(area, Node(toX, toY)), cost + LINK_COST, link)
+                // Arrived through a warp or a fall: facing whichever way the game leaves the player, no turn counted.
+                relax(Place(area, Node(toX, toY)), cost + LINK_COST, link, null)
             }
             // Pressing the direction of the exit mat the player stands on.
             here.links[place.node.x to place.node.y]?.takeIf { it.exitDirection != null }?.let { take(it, 0) }
@@ -93,28 +108,32 @@ class WorldRouter(
                 val to = edge.to
                 val next = Place(place.area, to)
                 val link = here.links[to.x to to.y]
+                val cost = edge.cost + turn(state.direction, edge, turnCost)
                 when {
-                    link == null -> if ((to.x to to.y) !in here.goalTiles || isGoal(next)) relax(next, edge.cost, null)
+                    link == null -> if ((to.x to to.y) !in here.goalTiles || isGoal(next)) relax(next, cost, null, edge.endDirection)
                     // Stepping on a door, a ladder down or a hole takes it at once (unless it's the destination).
-                    link.exitDirection == null -> if (isGoal(next)) relax(next, edge.cost, null) else take(link, edge.cost)
-                    else -> relax(next, edge.cost, null)
+                    link.exitDirection == null -> if (isGoal(next)) relax(next, cost, null, edge.endDirection) else take(link, cost)
+                    else -> relax(next, cost, null, edge.endDirection)
                 }
             }
         }
         return null
     }
 
-    private fun places(previous: Map<Place, Pair<Place, ZoneLink?>>, start: Place, end: Place): List<Place> {
+    /** A search state: a place, and the direction the player arrived in (null when unknown), see [Heading]. */
+    private data class State(val place: Place, val direction: Direction?)
+
+    private fun places(previous: Map<State, Pair<State, ZoneLink?>>, start: State, end: State): List<Place> {
         val places = ArrayDeque<Place>()
         var at = end
         while (at != start) {
-            places.addFirst(at)
+            places.addFirst(at.place)
             at = previous.getValue(at).first
         }
         return places.toList()
     }
 
-    private fun links(previous: Map<Place, Pair<Place, ZoneLink?>>, start: Place, end: Place): List<ZoneLink> {
+    private fun links(previous: Map<State, Pair<State, ZoneLink?>>, start: State, end: State): List<ZoneLink> {
         val links = ArrayDeque<ZoneLink>()
         var at = end
         while (at != start) {

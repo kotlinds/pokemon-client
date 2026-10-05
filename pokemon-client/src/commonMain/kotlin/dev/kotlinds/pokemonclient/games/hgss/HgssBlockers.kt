@@ -99,7 +99,8 @@ object HgssBlockers {
         val moves = area?.scriptWarps.orEmpty().filter { it.zone == mapId }.map { it.trigger }.toSet() +
             area?.triggerWarps.orEmpty().filter { it.zone == mapId }.map { it.trigger } +
             area?.triggers.orEmpty().filter { it.zone == mapId && it.width <= 1 && it.height <= 1 && (it.x to it.y) in warpTiles }.map { it.id }
-        val active = around.triggers.filter { it.active == true && it.index !in inert && it.index !in moves && Target.Trigger(mapId, it.index) !in mechanisms }
+        // Quiet triggers (armed, but their script ends silently now: TriggerInfo.quiet) block nothing either.
+        val active = around.triggers.filter { it.active == true && !it.quiet && it.index !in inert && it.index !in moves && Target.Trigger(mapId, it.index) !in mechanisms }
         val (known, unknown) = active.partition { Target.Trigger(mapId, it.index) in byTrigger }
         for (t in known) {
             val curated = byTrigger.getValue(Target.Trigger(mapId, t.index))

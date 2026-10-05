@@ -231,8 +231,20 @@ sealed interface Screen {
     /** A battle with no decision to make right now (animations, messages printing). */
     data class Battle(override val awaiting: Awaiting) : Screen
 
-    /** Title screen, intro movie, loading. */
-    data class Intro(val detail: String, override val awaiting: Awaiting) : Screen
+    /**
+     * Before the game itself: the intro movie, the title screen, loading, the main menu while it isn't ready yet, the
+     * new-game intro. [goesOnWith]: what passes this screen right now (null while it ignores every input: an animation,
+     * a fade, the title screen's first frames). The main menu, once it reads input, is a [ListMenu] of kind
+     * [MenuKind.MAIN_MENU].
+     */
+    data class Intro(
+        val stage: IntroStage,
+        override val awaiting: Awaiting,
+        val goesOnWith: IntroInputs? = null,
+    ) : Screen {
+        /** The stage's language-independent id (`title_screen`...), as agents see it. */
+        val detail: String get() = stage.wire
+    }
 
     /**
      * A full-screen application to look at, with nothing to choose: the Pokédex, the trainer card, a Pokémon's
@@ -426,10 +438,43 @@ enum class ContinueReason {
 
     /** The clerk gives a bonus with the purchase (a Premier Ball for 10 Poké Balls): the item is already in the bag. */
     SHOP_BONUS,
+
+    /**
+     * The game stopped on a wireless communication error: A restarts it at the title screen (what was not saved is
+     * lost). An emulator without wireless (melonDS) shows it on the main menu when there is a save.
+     */
+    COMMUNICATION_ERROR,
 }
 
 /** What a [Screen.PcBox] was opened for. */
 enum class PcMode { DEPOSIT, WITHDRAW, MOVE, MOVE_ITEMS }
+
+/** Where a [Screen.Intro] is, before the game itself. */
+enum class IntroStage {
+    /** Nothing running yet, or between two applications (power-on, a soft reset, the save being checked or loaded). */
+    LOADING,
+
+    /** The opening movie played before the title screen (and again when the title screen is left alone). */
+    INTRO_MOVIE,
+
+    /** The title screen: it leads to the main menu (CONTINUE / NEW GAME...). */
+    TITLE_SCREEN,
+
+    /** The main menu while it isn't reading input yet (opening, fading); once it does, it is a [Screen.ListMenu]. */
+    MAIN_MENU,
+
+    /** The professor's speech of a new game, before the player's first steps. */
+    NEW_GAME_INTRO;
+
+    /** Stable id shown to agents. */
+    val wire: String get() = name.lowercase()
+}
+
+/**
+ * The inputs that pass an intro screen ([Screen.Intro]) right now: any one of [buttons], pressed once, or, when
+ * [touchAnywhere], a touch anywhere on the bottom screen. Every one of them does the same thing.
+ */
+data class IntroInputs(val buttons: Set<Button>, val touchAnywhere: Boolean = false)
 
 /** Kinds of [Screen.Animation]. */
 enum class AnimationKind { TRADE, EGG_HATCH, CUTSCENE, TRANSITION }

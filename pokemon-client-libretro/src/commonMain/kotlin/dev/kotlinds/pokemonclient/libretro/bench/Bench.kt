@@ -294,6 +294,7 @@ private class Bench(
                 println("  performed ${result.performed} details ${result.details}")
                 result.failed?.let { (a, e) -> println("  failed ${a.key}: ${e.code} ${e.message}") }
                 if (result.skipped.isNotEmpty()) println("  not_done ${result.skipped.map { it.key }} code=${result.stop?.code} reason=${result.stop?.message}")
+                if (result.dropped.isNotEmpty()) println("  dropped ${result.dropped.map { it.key }} code=${result.droppedBecause?.code}")
                 println("  " + game.state(scope.memory()).screen)
             }
             // `partyfx`: the battle's effectiveness lines (the active Pokémon, then the switch candidates), like get_state.

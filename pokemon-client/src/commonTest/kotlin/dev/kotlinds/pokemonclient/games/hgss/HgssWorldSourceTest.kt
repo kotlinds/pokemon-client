@@ -2,6 +2,7 @@ package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.readTestResource
+import dev.kotlinds.pokemonclient.world.FlagCondition
 import dev.kotlinds.pokemonclient.world.TileKind
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -155,6 +156,32 @@ class HgssWorldSourceTest {
         val exit = gym.warps.single()
         assertEquals(listOf(16, 53, 78, 7), listOf(exit.x, exit.y, exit.targetZone, exit.targetWarp))
         assertEquals(Direction.SOUTH, exit.exitDirection)
+    }
+
+    @Test
+    fun `the Viridian Gym guide's trigger is quiet once his speech was heard, the Ecruteak pits never`() {
+        // MAP_VIRIDIAN_GYM (496): one trigger along y 46 (x 1..9), VAR_UNK_4127 == 0, re-armed by the map's init script on
+        // every entry; scr_seq_T02GYM0101_003 jumps to a silent ending when FLAG_UNK_13A (0x13A) is set (NOTES: it
+        // interrupted every walk through the door although nothing showed any more).
+        val gym = assertNotNull(world.areaOf(496)).triggers.filter { it.zone == 496 }
+        val guide = gym.single()
+        assertEquals(listOf(1, 46, 9, 1, 0x4127, 0), listOf(guide.x, guide.y, guide.width, guide.height, guide.variable, guide.value))
+        assertEquals(FlagCondition(0x13A, set = true), guide.quietWhen)
+        assertTrue(guide.startsScene({ 0 }, { false }), "the first time, the guide walks up and talks")
+        assertTrue(!guide.startsScene({ 0 }, { true }), "once heard, armed but quiet")
+        assertTrue(guide.startsScene({ 0 }, { null }), "an unreadable flag never makes it quiet")
+        // The Ecruteak Gym's pits drop the player every time: never quiet.
+        assertTrue(world.areaOf(80)!!.triggers.all { it.quietWhen == null })
+    }
+
+    @Test
+    fun `on Route 20 the shore is one level above the water`() {
+        // Bird Keeper Bert stands on the shore at 1077,502 (height 2 live); the player surfs at height 1 (NOTES).
+        val route = assertNotNull(world.areaOf(92))
+        val water = route.tile(1073, 502)!!
+        val shore = route.tile(1074, 502)!!
+        assertTrue(water.kind is TileKind.Water, water.toString())
+        assertEquals(listOf(listOf(8), listOf(16)), listOf(water.heights, shore.heights))
     }
 
     @Test

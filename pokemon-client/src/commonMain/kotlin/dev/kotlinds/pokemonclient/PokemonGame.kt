@@ -42,6 +42,12 @@ interface PokemonGame {
      */
     fun scriptVariable(memory: Memory, id: Int): Int? = null
 
+    /**
+     * The game's event flag [id] (what scripts branch on: a speech already heard, an item taken...), or null when this
+     * game can't tell. Read only.
+     */
+    fun scriptFlag(memory: Memory, id: Int): Boolean? = null
+
     /** Reads which buttons the game has registered, so presses can check themselves (see [ActionScope.tap]). */
     val inputProbe: InputProbe
 

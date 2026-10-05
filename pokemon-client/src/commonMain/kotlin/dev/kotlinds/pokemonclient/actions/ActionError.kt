@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.state.ContinueReason
+
 /**
  * Why an action didn't happen or stopped: always explicit, never a silent no-op. Agents get the [code] and the
  * details, so they can decide what to do next.
@@ -73,6 +75,31 @@ sealed interface ActionError {
     data class Interrupted(val by: InterruptionCause, val performed: String) : ActionError {
         override val code = "INTERRUPTED"
         override val message get() = "Interrupted by ${by.name.lowercase().replace('_', ' ')} after: $performed"
+    }
+
+    /**
+     * The game ignored the inputs meant to pass [screen] ([tried], in order: nothing changed after any of them),
+     * [attempts] times in a row.
+     */
+    data class InputIgnored(val screen: String, val tried: List<String>, val attempts: Int) : ActionError {
+        override val code = "INPUT_IGNORED"
+        override val message get() = "The game ignored ${tried.joinToString(", then ")} on $screen ($attempts attempt(s)): nothing changed"
+    }
+
+    /**
+     * The game stopped on a wireless communication error before the saved game ([ContinueReason.COMMUNICATION_ERROR]
+     * on the main menu): A only restarts it at the title screen, where the same error comes back.
+     */
+    data object CommunicationError : ActionError {
+        override val code = "COMMUNICATION_ERROR"
+        override val message = "The game stopped on a wireless communication error on the main menu (an emulator core without " +
+            "wireless, like melonDS, does this with a save): A restarts it at the title screen, the saved game can't be continued on this core"
+    }
+
+    /** There is no saved game to continue: the game went straight to a new game's intro (no main menu, no CONTINUE). */
+    data object NoSavedGame : ActionError {
+        override val code = "NO_SAVED_GAME"
+        override val message = "There is no saved game: the game started a new game's intro instead of showing CONTINUE"
     }
 
     /** The game didn't reach the expected point in time. */

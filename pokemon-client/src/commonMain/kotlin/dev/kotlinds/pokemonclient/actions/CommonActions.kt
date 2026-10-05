@@ -300,6 +300,17 @@ object CommonActions {
         parse = { GameAction.SoftReset },
     ), SystemPlans.softReset)
 
+    val continueGame = ActionDefinition(GameAction.ContinueGame::class, spec(
+        name = "continue_game",
+        description = "From the intro movie, the title screen or the main menu: go on to the main menu, pick CONTINUE and " +
+            "wait until the saved game runs. Each screen is read before acting and each input checked (the title screen " +
+            "ignores input for a moment after it appears: pressing then does nothing).",
+        parameters = emptyList(),
+        modes = assisted,
+        availability = { state -> if (SystemPlans.beforeTheGame(state)) Availability.Available() else Availability.Hidden },
+        parse = { GameAction.ContinueGame },
+    ), SystemPlans.continueGame)
+
     private val moveParameters = listOf(
         Parameter("avoid_tall_grass", ParameterType.BOOLEAN, "Avoid tall grass when another way exists (fewer wild battles).", required = false),
         Parameter("avoid_trainers", ParameterType.BOOLEAN, "Avoid the line of sight of trainers when another way exists.", required = false),
@@ -656,7 +667,7 @@ object CommonActions {
 
     /** Every common action, in the order they are listed to agents. */
     val definitions: List<ActionDefinition<*>> get() =
-        listOf(advanceDialogue, choose, enterText, attack, switch, throwBall, learnMove, run, keepBattling, goTo, interact, step, findEncounter, heal, fly, fish, buy, setQuantity, deposit, withdraw, pc, reorderParty, useItem, giveItem, takeItem, teach, useKeyItem, registerItem, saveGame, softReset, setOptions, chooseStarter, press, touch, wait) +
+        listOf(advanceDialogue, choose, enterText, attack, switch, throwBall, learnMove, run, keepBattling, goTo, interact, step, findEncounter, heal, fly, fish, buy, setQuantity, deposit, withdraw, pc, reorderParty, useItem, giveItem, takeItem, teach, useKeyItem, registerItem, saveGame, softReset, continueGame, setOptions, chooseStarter, press, touch, wait) +
             MoreActions.definitions + PuzzleActions.definitions + PokegearActions.definitions
 
     // region Helpers

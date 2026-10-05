@@ -31,11 +31,12 @@ class Navigator(
 
     /**
      * Runs [block] with [watcher] told every state decoded meanwhile: every recipe reads the game through [state], so
-     * a walk is seen tile by tile without decoding anything more.
+     * a walk is seen tile by tile without decoding anything more. Watchers nest: one already watching (a trip's
+     * progress) keeps being told too while an inner one (a walk's step count) watches.
      */
     internal fun <T> watching(watcher: (GameState) -> Unit, block: () -> T): T {
         val previous = this.watcher
-        this.watcher = watcher
+        this.watcher = if (previous == null) watcher else { state -> previous(state); watcher(state) }
         try {
             return block()
         } finally {

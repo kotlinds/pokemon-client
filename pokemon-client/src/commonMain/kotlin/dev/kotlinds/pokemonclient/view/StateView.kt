@@ -3,8 +3,10 @@ package dev.kotlinds.pokemonclient.view
 import dev.kotlinds.pokemonclient.runtime.kind
 import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.BattlerState
+import dev.kotlinds.pokemonclient.state.ContinueReason
 import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.IntroStage
 import dev.kotlinds.pokemonclient.state.MajorStatus
 import dev.kotlinds.pokemonclient.state.PartyMon
 import dev.kotlinds.pokemonclient.state.PokegearRadio
@@ -15,6 +17,7 @@ import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.VolatileStatus
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -81,6 +84,10 @@ object StateView {
             is Screen.PressToContinue -> {
                 put("reason", screen.reason.name.lowercase())
                 screen.text?.let { put("text", it) }
+                if (screen.reason == ContinueReason.COMMUNICATION_ERROR) {
+                    put("hint", "a wireless communication error stopped the game: A restarts it at the title screen. On the main " +
+                        "menu with a save, it comes from an emulator core without wireless (melonDS): the saved game can't be continued there")
+                }
             }
             is Screen.Quantity -> {
                 put("value", screen.value)
@@ -122,9 +129,32 @@ object StateView {
             }
             is Screen.Animation -> screen.hint?.let { put("hint", it) }
             is Screen.Unknown -> screen.hint?.let { put("hint", it) }
-            is Screen.Intro -> put("detail", screen.detail)
+            is Screen.Intro -> intro(screen)
             else -> Unit
         }
+    }
+
+    /**
+     * An intro screen: its stage, the inputs that pass it now (any one of them; none while it ignores input) and the
+     * action that goes through to the saved game.
+     */
+    private fun JsonObjectBuilder.intro(screen: Screen.Intro) {
+        put("detail", screen.detail)
+        screen.goesOnWith?.let { inputs ->
+            put("goes_on_with", JsonArray(
+                inputs.buttons.sortedBy { it.ordinal }.map { JsonPrimitive("press ${it.name.lowercase()}") } +
+                    if (inputs.touchAnywhere) listOf(JsonPrimitive("touch anywhere on the bottom screen")) else emptyList(),
+            ))
+        }
+        val hint = when (screen.stage) {
+            IntroStage.INTRO_MOVIE, IntroStage.LOADING, IntroStage.MAIN_MENU ->
+                "continue_game goes on to CONTINUE and into the saved game, checking each screen"
+            IntroStage.TITLE_SCREEN ->
+                (if (screen.goesOnWith == null) "it ignores input for a moment; " else "") +
+                    "continue_game goes on to CONTINUE and into the saved game, checking each screen (left alone, the title screen plays the intro movie again)"
+            IntroStage.NEW_GAME_INTRO -> null
+        }
+        hint?.let { put("hint", it) }
     }
 
     /**

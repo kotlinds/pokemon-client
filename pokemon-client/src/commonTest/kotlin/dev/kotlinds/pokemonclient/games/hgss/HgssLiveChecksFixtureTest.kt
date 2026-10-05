@@ -118,6 +118,17 @@ class HgssLiveChecksFixtureTest {
         assertEquals(CancelBehavior.CONFIRMS_LAST, menu.cancel)
     }
 
+    @Test
+    fun atWillYouSwitchTheFoesNextPokemonIsAlreadyInItsSpotWithItsPartySlot() {
+        // The game loads the next Pokémon (Will's SLOWBRO, 4th of his party) before asking: a chain checking here
+        // must see another Pokémon, which the party slot tells even for one of the same species and level.
+        val foe = state("ts_bt_switch_or_keep").battle!!.battlers.single { it.ref == BattlerRef.FOE_LEFT }
+        assertEquals("SLOWBRO", foe.species.name)
+        assertEquals(foe.maxHp, foe.hp)
+        assertEquals(3, foe.partySlot)
+        assertEquals(0, state("ts_bt_replace_fainted").battle!!.battlers.single { it.ref == BattlerRef.FOE_LEFT }.partySlot)
+    }
+
     // endregion
 
     // region Nickname keyboard

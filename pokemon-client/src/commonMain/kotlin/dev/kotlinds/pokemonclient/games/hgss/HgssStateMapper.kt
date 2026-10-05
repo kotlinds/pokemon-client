@@ -32,6 +32,7 @@ import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.PlayerInfo
 import dev.kotlinds.pokemonclient.state.PlayTime
 import dev.kotlinds.pokemonclient.state.ReadWarning
+import dev.kotlinds.pokemonclient.state.IntroStage
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.SpeciesId
 import dev.kotlinds.pokemonclient.state.Stat
@@ -146,6 +147,7 @@ class HgssStateMapper {
                     },
                     moving = l.moving,
                     trainerEncounter = state.dialogue?.engagedTrainer != null,
+                    engagedTrainerId = state.dialogue?.engagedTrainer,
                     objects = state.surroundings?.objects.orEmpty().filterNot { it.hidden || HgssObjectIds.isProp(it, l.mapId) }.map { o ->
                         FieldObject(
                             id = HgssObjectIds.idOf(o, l.mapId),
@@ -158,6 +160,7 @@ class HgssStateMapper {
                             },
                             x = o.x,
                             y = o.z,
+                            height = o.height,
                             facing = Direction.parse(o.facing),
                             role = when (o.sprite) {
                                 "PCWOMAN1" -> PersonRole.NURSE
@@ -237,8 +240,13 @@ class HgssStateMapper {
             } ?: Screen.Battle(Awaiting.ANIMATION)
             GameMode.APP -> state.app?.takeIf { it.entries.isNotEmpty() }?.let(::appMenu)
                 ?: Screen.Unknown(state.modeDetail, awaiting)
-            GameMode.LOADING, GameMode.INTRO_MOVIE, GameMode.TITLE_SCREEN, GameMode.MAIN_MENU, GameMode.NEW_GAME_INTRO ->
-                Screen.Intro(state.mode.name.lowercase(), awaiting)
+            // The intro movie, the title screen and the main menu have their decoder (HgssIntroScreens): reached only
+            // when it couldn't read them.
+            GameMode.LOADING -> Screen.Intro(IntroStage.LOADING, Awaiting.ANIMATION)
+            GameMode.INTRO_MOVIE -> Screen.Intro(IntroStage.INTRO_MOVIE, Awaiting.ANIMATION)
+            GameMode.TITLE_SCREEN -> Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.ANIMATION)
+            GameMode.MAIN_MENU -> Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
+            GameMode.NEW_GAME_INTRO -> Screen.Intro(IntroStage.NEW_GAME_INTRO, awaiting)
             GameMode.UNKNOWN -> Screen.Unknown(state.modeDetail, awaiting)
         }
     }
@@ -362,8 +370,14 @@ class HgssStateMapper {
         isEgg = isEgg,
     )
 
-    /** The last valid reading of each battle position, with the personality it belongs to (see [HgssBattlerCheck]). */
-    private val lastGoodBattlers = mutableMapOf<BattlerRef, Pair<Long, BattlerState>>()
+    /**
+     * The last valid reading of each battle position, with the Pokémon it belongs to (see [HgssBattlerCheck]): by
+     * personality and party slot, since two trainer Pokémon of one species and level share their personality.
+     */
+    private val lastGoodBattlers = mutableMapOf<BattlerRef, Pair<BattlerIdentity, BattlerState>>()
+
+    /** Which Pokémon a battle position holds: its personality and the party slot it was sent from. */
+    private data class BattlerIdentity(val personality: Long, val partySlot: Int?)
 
     /** A battler's move with its battle data (power, accuracy, category, priority) from the move table. */
     private fun battleMove(move: MoveInfo): KnownMove {
@@ -383,7 +397,7 @@ class HgssStateMapper {
             val problems = HgssBattlerCheck.problems(battler)
             if (problems.isNotEmpty()) {
                 // A battler caught mid-rewrite: its last valid reading (the same Pokémon), else left out.
-                val kept = lastGoodBattlers[ref]?.takeIf { it.first == battler.personality }?.second
+                val kept = lastGoodBattlers[ref]?.takeIf { it.first == BattlerIdentity(battler.personality, battler.partySlot) }?.second
                 warnings += ReadWarning(
                     ReadWarning.Kind.POKEMON_CHECKSUM,
                     "battler ${ref.wire} is being rewritten by the game (${problems.joinToString()}): " +
@@ -411,7 +425,8 @@ class HgssStateMapper {
                 abilityRevealed = HgssStatuses.abilityAnnounced(battler.announceFlags, battler.counters),
                 catchRate = if (b.isWild && !ref.isPlayerSide) HgssData.gameData?.species(SpeciesId(battler.species))?.catchRate else null,
                 personality = battler.personality,
-            ).also { lastGoodBattlers[ref] = battler.personality to it }
+                partySlot = battler.partySlot,
+            ).also { lastGoodBattlers[ref] = BattlerIdentity(battler.personality, battler.partySlot) to it }
         }
         val bySlot = party.associateBy { it.slot }
         return BattleState(
@@ -424,6 +439,7 @@ class HgssStateMapper {
             actor = commandActor ?: if (b.awaitingInput) BattlerRef.PLAYER_LEFT else null,
             battlers = battlers,
             trainers = b.trainers.map { "${it.trainerClass} ${it.name}".trim() },
+            trainerIds = b.trainers.map { it.trainerId },
             partyOrder = b.partyOrder.mapNotNull { bySlot[it]?.id },
             message = b.message,
             turn = b.turn,

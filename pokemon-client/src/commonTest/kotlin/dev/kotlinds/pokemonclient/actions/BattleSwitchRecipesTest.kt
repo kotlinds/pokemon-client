@@ -113,4 +113,39 @@ class BattleSwitchRecipesTest {
         val done = assertIs<ActionOutcome.Done>(BasicPlans.keepBattling.run(GameAction.KeepBattling, ui.context()))
         assertTrue("foe sent its next" in done.detail.orEmpty(), done.detail)
     }
+
+    /** A wild battle where RUN shows [message], then either ends the battle ([escapes]) or plays the foe's turn. */
+    private fun runUi(escapes: Boolean): ScriptedUi {
+        val ui = ScriptedUi(command, party = listOf(mon(1)))
+        ui.battle = BattleState(BattleKind.WILD, false, BattlerRef.PLAYER_LEFT, emptyList(), emptyList(), ui.party.map { it.id }, null)
+        var back: Long? = null
+        ui.onA = { screen, id ->
+            when {
+                screen is Screen.BattleCommand && id == "option:run" ->
+                    Screen.Dialogue(TextSource.BATTLE, null, if (escapes) "Got away safely!" else "Can't escape!", Awaiting.INPUT)
+                screen is Screen.Dialogue && escapes -> { ui.battle = null; Screen.Overworld(null, Awaiting.INPUT) }
+                // The foe's turn, then the command menu again.
+                screen is Screen.Dialogue -> { back = ui.frame + 60; Screen.Battle(Awaiting.ANIMATION) }
+                else -> screen
+            }
+        }
+        ui.game.onFrame = { frame, screen -> if (screen is Screen.Battle && back != null && frame >= back!!) command else screen }
+        return ui
+    }
+
+    @Test
+    fun runFollowsTheEscapeToTheEndOfTheBattle() {
+        val done = assertIs<ActionOutcome.Done>(BasicPlans.run.run(GameAction.Run, runUi(escapes = true).context()))
+        assertEquals(null, done.stopsChain)
+        assertEquals("got away safely", done.detail)
+    }
+
+    @Test
+    fun aFailedEscapeIsDoneButStopsTheChain() {
+        // "Can't escape!": the turn was used (done), the battle goes on, so the steps after the run must not start.
+        val ui = runUi(escapes = false)
+        val done = assertIs<ActionOutcome.Done>(BasicPlans.run.run(GameAction.Run, ui.context()))
+        assertEquals("ESCAPE_FAILED", assertIs<ChainStop.EscapeFailed>(done.stopsChain).code)
+        assertIs<Screen.BattleCommand>(ui.game.screen)
+    }
 }

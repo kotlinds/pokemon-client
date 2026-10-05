@@ -19,6 +19,7 @@ import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.FieldObjectKind
 import dev.kotlinds.pokemonclient.state.FieldState
+import dev.kotlinds.pokemonclient.state.FieldTrainer
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.Screen
@@ -50,6 +51,13 @@ private class WalkingGame(
     val people: List<FieldObject> = emptyList(),
     /** Stepping here makes a trainer see the player: the player stops, the trainer's approach scene runs. */
     val sightTile: Pair<Int, Int>? = null,
+    /**
+     * Frames of the trainer's "!" and walk up after [sightTile], during which the overworld stays on screen (an
+     * animation) and the held direction does nothing, like the real game; then its intro text.
+     */
+    val approachFrames: Int = 0,
+    /** The trainer id of the one who sees the player at [sightTile] ([FieldState.engagedTrainerId]). */
+    val spotterId: Int? = null,
 ) : PokemonGame {
     val area: Area = run {
         val width = rows.maxOf { it.length }
@@ -58,6 +66,9 @@ private class WalkingGame(
                 '#' -> TileInfo(true, TileKind.Wall)
                 '"' -> TileInfo(false, TileKind.TallGrass)
                 '~' -> TileInfo(false, TileKind.Water(surfable = true, fishable = true))
+                // Floors with known heights (BDHC units): ',' low ground (height 1), '^' a raised shore (height 2).
+                ',' -> TileInfo(false, TileKind.Floor, listOf(8))
+                '^' -> TileInfo(false, TileKind.Floor, listOf(16))
                 else -> TileInfo(false, TileKind.Floor)
             }
         })
@@ -65,6 +76,7 @@ private class WalkingGame(
     var facing = Direction.SOUTH
     var inBattle = false
     var spotted = false
+    private var approachLeft = approachFrames
     private var heldFor = 0
     private var held: Set<Button> = emptySet()
     val visited = mutableListOf(x to y)
@@ -77,10 +89,14 @@ private class WalkingGame(
     override fun fieldMoveRule(move: FieldMoveKind) = FieldMoveRule(MoveId(57), "Fog")
     override fun observe(memory: Memory) = Observation(GameMode.UNKNOWN, null, "", JsonObject(emptyMap()))
     override fun state(memory: Memory): GameState {
-        val field = FieldState(1, "test", x, y, 0, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted)
+        val height = (area.tile(x, y)?.heights?.firstOrNull() ?: 0) / MovePlans.HEIGHT_UNITS
+        val field = FieldState(1, "test", x, y, height, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted,
+            engagedTrainerId = spotterId.takeIf { spotted })
         val battle = if (inBattle) BattleState(BattleKind.WILD, false, null, emptyList(), emptyList(), emptyList(), null) else null
         val screen = when {
             inBattle -> Screen.Battle(Awaiting.ANIMATION)
+            // The "!" and the walk up: still the overworld, busy.
+            spotted && approachLeft > 0 -> Screen.Overworld(null, Awaiting.ANIMATION)
             // The trainer walked up and talks (its intro text before the battle).
             spotted -> Screen.Dialogue(TextSource.FIELD, "Youngster Joey", "I just lost, so I'm trying to find more Pokémon.", Awaiting.INPUT)
             else -> Screen.Overworld(null, Awaiting.INPUT)
@@ -95,6 +111,7 @@ private class WalkingGame(
         override fun step(frames: Int, input: InputFrame) = repeat(frames) {
             frame++
             held = input.buttons
+            if (spotted && approachLeft > 0) approachLeft--
             val direction = DIRECTIONS.entries.firstOrNull { it.key in input.buttons }?.value
             if (direction == null || inBattle || spotted) {
                 heldFor = 0
@@ -160,6 +177,46 @@ class MovePlansTest {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, sightTile = 2 to 0)
         val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
         assertEquals(InterruptionCause.TRAINER_SIGHT, assertIs<ActionError.Interrupted>(failed.error).by)
+    }
+
+    @Test
+    fun theStepsBeforeATrainerSeesThePlayerAreCountedFromTheRealPositions() {
+        // The "!" keeps the overworld on screen while the direction is still held: the walk stops there (no refused
+        // step, no new plan) and tells the tiles really walked (NOTES: "after: 0 step(s)" after surfing ten tiles).
+        val game = WalkingGame(listOf(".........."), x = 0, y = 0, sightTile = 6 to 0, approachFrames = 30)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(9, 0, null), game.context()))
+        val error = assertIs<ActionError.Interrupted>(failed.error)
+        assertEquals(InterruptionCause.TRAINER_SIGHT, error.by)
+        assertTrue(error.performed.startsWith("6 step(s)"), error.performed)
+    }
+
+    @Test
+    fun interactingWithATrainerWhoSeesThePlayerOnTheWayIsTheBattleAskedFor() {
+        val bert = FieldObject("person:4", "Bird Keeper Bert", FieldObjectKind.PERSON, 9, 0, Direction.WEST,
+            trainer = FieldTrainer(583, "Bird Keeper", "Bert", defeated = false, sightRange = 3))
+        val game = WalkingGame(listOf(".........."), x = 0, y = 0, people = listOf(bert), sightTile = 6 to 0, approachFrames = 30, spotterId = 583)
+        val outcome = MovePlans.interact.run(GameAction.Interact("person:4"), game.context())
+        val detail = assertIs<ActionOutcome.Done>(outcome).detail.orEmpty()
+        assertTrue("the battle you asked for" in detail && "6 step(s)" in detail, detail)
+    }
+
+    @Test
+    fun anotherTrainerSeeingThePlayerStillInterruptsTheInteraction() {
+        val bert = FieldObject("person:4", "Bird Keeper Bert", FieldObjectKind.PERSON, 9, 0, Direction.WEST,
+            trainer = FieldTrainer(583, "Bird Keeper", "Bert", defeated = false, sightRange = 3))
+        val game = WalkingGame(listOf(".........."), x = 0, y = 0, people = listOf(bert), sightTile = 6 to 0, approachFrames = 30, spotterId = 584)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.interact.run(GameAction.Interact("person:4"), game.context()))
+        assertEquals(InterruptionCause.TRAINER_SIGHT, assertIs<ActionError.Interrupted>(failed.error).by)
+    }
+
+    @Test
+    fun interactPicksATileAtThePersonsOwnHeight() {
+        // The game answers A only at the person's height (sub_0203DBD4): from the low tile next to them (2,0) A says
+        // nothing, from the raised one (4,0) it works, although it is farther.
+        val fisherman = FieldObject("person:1", "fisherman", FieldObjectKind.PERSON, 3, 0, Direction.WEST, height = 2)
+        val game = WalkingGame(listOf(",,,^^", ",,,,^"), x = 0, y = 0, people = listOf(fisherman))
+        assertIs<ActionOutcome.Done>(MovePlans.interact.run(GameAction.Interact("person:1"), game.context()))
+        assertEquals(4 to 0, game.x to game.y)
     }
 
     @Test

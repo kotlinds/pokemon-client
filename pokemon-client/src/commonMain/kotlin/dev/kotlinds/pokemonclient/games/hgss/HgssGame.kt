@@ -46,6 +46,8 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
 
     override fun scriptVariable(memory: Memory, id: Int): Int? = HgssReader(memory, version).variable(id)
 
+    override fun scriptFlag(memory: Memory, id: Int): Boolean? = HgssReader(memory, version).flag(id)
+
     override fun zoneName(id: Int): String? = HgssData.mapName(id)
 
     override val inputProbe = HgssInputProbe(version)
@@ -83,7 +85,8 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
         val pickedUp = area?.signs.orEmpty()
             .filter { it.zone == field.mapId && it.kind == SignKind.HIDDEN_ITEM && it.flag?.let(reader::flag) == true }
             .map { "hidden_item:${it.id}" }.toSet()
-        val triggers = area?.triggers.orEmpty().filter { it.zone == field.mapId && reader.variable(it.variable) == it.value }
+        // Armed triggers whose script would end silently now (Trigger.quietWhen) start nothing: not shown as active.
+        val triggers = area?.triggers.orEmpty().filter { it.zone == field.mapId && it.startsScene(reader::variable, reader::flag) }
             .flatMap { t -> (t.x until t.x + maxOf(1, t.width)).flatMap { x -> (t.y until t.y + maxOf(1, t.height)).map { y -> x to y } } }
             .toSet()
         val examinables = HgssExaminables.of(state.surroundings?.objects.orEmpty(), field.mapId, world ?: HgssData.world, reader::flag)
