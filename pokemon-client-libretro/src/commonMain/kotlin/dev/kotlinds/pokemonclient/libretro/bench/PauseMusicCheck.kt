@@ -1,9 +1,12 @@
 package dev.kotlinds.pokemonclient.libretro.bench
 
+import dev.kotlinds.pokemonclient.console.Button
+import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.console.MemoryRegion
 import dev.kotlinds.pokemonclient.libretro.ConsoleRole
 import dev.kotlinds.pokemonclient.libretro.LibretroConsole
 import dev.kotlinds.pokemonclient.libretro.LibretroCoreSpec
+import dev.kotlinds.pokemonclient.libretro.sound.ResyncDecision
 import dev.kotlinds.pokemonclient.libretro.sound.ResyncResult
 import dev.kotlinds.pokemonclient.libretro.sound.ShadowEnd
 import dev.kotlinds.pokemonclient.libretro.sound.ShadowRun
@@ -66,10 +69,12 @@ class ShortList {
  *   then the music jumps back) and `<name>_ideal.wav` (as if the game never paused) to the out dir; prints the guards'
  *   decision, the continuity at resume (correlation with the ideal continuation) and the main RAM differences
  *   with "today" after the resume;
- * - `pausemusicstats:<pauses>[:<pause frames>[:<max delay>]]`: that many short pauses one after the other (the game
- *   runs 7 frames between two), and the share of each outcome and the mean continuity; with a max delay, a pause
- *   starts up to that many frames later when its first frame can't be resynced ([SoundResync.pauseRefusal]), as the
- *   app does.
+ * - `pausemusicstats:<pauses>[:<pause frames>[:<max delay>[:<button>,<button>...]]]`: that many short pauses one after
+ *   the other (the game runs 7 frames between two), and the share of each outcome and the mean continuity; with a max
+ *   delay, a pause starts up to that many frames later when its first frame can't be resynced
+ *   ([SoundResync.pauseRefusal]), as the app does; with buttons, the game presses them in turn, 16 frames each, while
+ *   it runs (e.g. `UP,DOWN` walks back and forth). Every refusal is printed with the players at the pause and at the
+ *   shadow's end.
  */
 class PauseMusicCheck(
     private val main: LibretroConsole,
@@ -170,7 +175,8 @@ class PauseMusicCheck(
 
     /**
      * `pausemusicfixtures:<prefix>[:<frames>]`: test fixtures (see [SoundFixtures]) of the current state (`<prefix>_p`)
-     * and of the shadow's safe end after that many frames (`<prefix>_s`); then steps the game until a frame where the
+     * and of the shadow's safe end after that many frames (`<prefix>_s`), printing their players and what the guards
+     * decide for them; then steps the game until a frame where the
      * sound thread runs (`<prefix>_busy`) and one where a DMA is mid-burst if the core is melonDS (`<prefix>_dma`).
      */
     fun fixtures(arg: String) {
@@ -183,6 +189,8 @@ class PauseMusicCheck(
         repeat(frames) { run.step() }
         val end = run.end() as? ShadowEnd.Safe ?: error("no safe frame")
         SoundFixtures.write(Path(out, "${prefix}_s.state.gz"), spec.soundSplicer, layout, end.state)
+        println("  ${prefix}_p: ${players(paused)} | ${prefix}_s (frame ${end.frames}): ${players(end.state)}")
+        println("  guards: ${(resync.splice(paused, end.state) as? ResyncDecision.Refused)?.reason ?: "pass"}")
         for (i in 0 until 600) {
             val state = main.saveState()
             if (SoundDriverState.read(spec.soundSplicer.locate(state), layout).soundThreadRunning) {
@@ -220,19 +228,28 @@ class PauseMusicCheck(
         val pauses = parts[0].toInt()
         val pauseFrames = parts.getOrNull(1)?.toInt() ?: 60
         val maxDelay = parts.getOrNull(2)?.toInt() ?: 0
+        // Buttons pressed in turn, 16 frames each, while the game runs between two pauses (e.g. UP,DOWN walks).
+        val buttons = parts.getOrNull(3)?.split(',')?.map { name ->
+            if (name.trim().uppercase() == "NONE") emptySet() else setOf(Button.valueOf(name.trim().uppercase()))
+        }.orEmpty()
+        var ran = 0
+        fun runMain(frames: Int) = repeat(frames) {
+            main.step(1, if (buttons.isEmpty()) InputFrame.NONE else InputFrame(buttons[(ran / 16) % buttons.size]))
+            ran++
+        }
         val delays = IntArray(maxDelay + 1)
         val outcomes = HashMap<String, Int>()
         val continuity = mutableListOf<Double>()
         val continuityLag = mutableListOf<Double>()
         val spectralSimilarity = mutableListOf<Double>()
         val run = ShadowRun(shadow, resync, silence = { shadowTap.muted = it })
-        repeat(pauses) {
-            main.step(7)
+        repeat(pauses) { n ->
+            runMain(7)
             var paused = main.saveState()
             // As the app does: the pause starts up to maxDelay frames later when this frame can't be resynced.
             var delay = 0
             while (delay < maxDelay && resync.pauseRefusal(paused) != null) {
-                main.step(1)
+                runMain(1)
                 paused = main.saveState()
                 delay++
             }
@@ -250,9 +267,13 @@ class PauseMusicCheck(
                 is ResyncResult.Aborted -> "ABORTED ${result.why}"
             }
             outcomes[key] = (outcomes[key] ?: 0) + 1
+            if (result is ResyncResult.Refused) {
+                println("  #$n refused: ${result.reason.message} | P: ${describe(paused)} ${players(paused)}" +
+                    ((end as? ShadowEnd.Safe)?.let { " | end (+${it.frames - pauseFrames}): ${describe(it.state)} ${players(it.state)}" } ?: " | end: $end"))
+            }
             if (result is ResyncResult.Resynced && end is ShadowEnd.Safe) {
                 val after = ShortList().also { mainTap.target = it }
-                main.step(30)
+                runMain(30)
                 mainTap.target = null
                 continuity += correlation(after, ideal, 0, rate / 4)
                 continuityLag += correlation(after, ideal, 0, rate / 4, rate / 100)

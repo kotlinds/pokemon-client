@@ -31,6 +31,11 @@ import kotlin.test.assertTrue
  * intro earlier: the music alone at the pause, a sound effect started by the shadow playing at its end);
  * `ds_menu_wild` / `ds_menu_will` (DeSmuME, the wild battle and Will's battle paused the frame the command menu
  * appears, its sound effect playing; the shadow's end 10 s later, the battle music alone, past its loop point);
+ * `ds_r13_shore` (DeSmuME, standing on Route 13's sea shore: the route music and the shore's looping ambient sound,
+ * a map soundplate, both playing at the pause and 10 s later at the shadow's end), `ds_r13_enter` (just entered Route
+ * 13 from Route 12's pier, the map name banner coming: the same, the shadow's end 5 s later) and `ds_r13_shore_new`
+ * (paused mid-step on the shore: the shadow's game finishes the step onto the next soundplate and starts the ambient
+ * sound again on another player);
  * `mel`: melonDS 0.9.3.
  */
 class SoundResyncTest {
@@ -264,6 +269,71 @@ class SoundResyncTest {
     @Test
     fun refusesABattleIntroWhoseShadowStartedASound() {
         assertEquals(ResyncRefusal.NotOnlyMusic(1, 2), refusal(SavestateSoundSplicer.DESMUME, fixture("ds_intro_new_p"), fixture("ds_intro_new_s")))
+    }
+
+    /**
+     * The user's Route 13 case: standing on the sea shore, a map soundplate plays its looping ambient sound (a one-track
+     * sound effect) next to the route music for as long as the player stays there, so it plays at the pause and still
+     * at the shadow's end, the same. Refused before ("not only the music playing at the end (players: 2 at the pause,
+     * 2 at the end)": every pause there jumped back); resynced now, both sounds taken from the shadow, the main RAM
+     * unchanged, and no settle frames waited for a sound that never ends.
+     */
+    @Test
+    fun resyncsRoute13WithTheShoreSoundPlayingAllThroughThePause() {
+        val splicer = SavestateSoundSplicer.DESMUME
+        for ((name, shore) in listOf("ds_r13_shore" to 10, "ds_r13_enter" to 4)) {
+            val paused = fixture("${name}_p")
+            val shadow = fixture("${name}_s")
+            val atPause = SoundDriverState.read(splicer.locate(paused), layout)
+            assertEquals(setOf(7, shore), atPause.playing.map { it.index }.toSet(), name)
+            assertEquals(1, atPause.playing.single { it.index == shore }.tracks.size, name)
+            assertNull(resync(splicer).pauseRefusal(paused), name)
+            assertTrue(!resync(splicer).soundsStartedPlayAtEnd(paused, shadow), name)
+            val decision = assertIs<ResyncDecision.Spliced>(resync(splicer).splice(paused, shadow), name)
+            assertEquals(atPause.playing.toSet(), decision.atEnd.playing.toSet(), name)
+            val main = FakeConsole(splicer, paused.copyOf())
+            val result = assertIs<ResyncResult.Resynced>(resync(splicer).apply(main, paused, decision), name)
+            assertEquals(7, result.music.index, name)
+            assertEquals(13, result.music.tracks.size, name)
+            assertEquals(listOf(shore), result.playingAlong.map { it.index }, name)
+            assertEquals(0, result.endedDuringPause, name)
+            val ram = splicer.locate(paused).mainRam
+            assertContentEquals(paused.copyOfRange(ram.offset, ram.end), main.state.copyOfRange(ram.offset, ram.end), name)
+            // The resumed game finds the shore sound still playing, as the shadow left it.
+            assertEquals(decision.atEnd.players, SoundDriverState.read(splicer.locate(main.state), layout).players, name)
+        }
+    }
+
+    /**
+     * Paused mid-step on Route 13's shore: the shadow's game finishes the step onto the next soundplate, stops the
+     * ambient sound and starts it again on another player. The resumed game would do that step itself, its own
+     * bookkeeping not knowing the shadow's player: refused, and the shadow may play on to see it end (it never does).
+     */
+    @Test
+    fun refusesTheShoreSoundStartedAgainDuringThePause() {
+        val splicer = SavestateSoundSplicer.DESMUME
+        val paused = fixture("ds_r13_shore_new_p")
+        val shadow = fixture("ds_r13_shore_new_s")
+        assertEquals(listOf(7, 10), SoundDriverState.read(splicer.locate(paused), layout).playing.map { it.index })
+        assertEquals(listOf(7, 13), SoundDriverState.read(splicer.locate(shadow), layout).playing.map { it.index })
+        assertEquals(ResyncRefusal.NotOnlyMusic(2, 2), refusal(splicer, paused, shadow))
+        assertTrue(resync(splicer).soundsStartedPlayAtEnd(paused, shadow))
+    }
+
+    /** A sound playing at the pause and at the end, but changed (another bank): not the same sound, refused. */
+    @Test
+    fun refusesASecondSoundThatChangedDuringThePause() {
+        val splicer = SavestateSoundSplicer.DESMUME
+        val shore = layout.work + 0x540 + 10 * 0x24
+        val shadow = fixture("ds_r13_shore_s").also { setArm7(it, splicer, shore + 0x20, 0x02123456) }
+        assertEquals(ResyncRefusal.NotOnlyMusic(2, 2), refusal(splicer, fixture("ds_r13_shore_p"), shadow))
+        // The music alone at the end while the shore sound played at the pause: it ended during the pause, fine.
+        val ended = fixture("ds_r13_shore_s").also {
+            val offset = splicer.locate(it).arm7Wram.offset + shore - ARM7_WRAM
+            it[offset] = (it[offset].toInt() and 1.inv()).toByte()
+        }
+        val decision = assertIs<ResyncDecision.Spliced>(resync(splicer).splice(fixture("ds_r13_shore_p"), ended))
+        assertEquals(listOf(7), decision.atEnd.playing.map { it.index })
     }
 
     /** Battles: the paused field music doesn't count as a second sound, and its state stays the paused game's. */
