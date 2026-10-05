@@ -1,0 +1,27 @@
+[versions]
+kotlin = "2.4.20"
+kover = "0.9.11"
+dokka = "2.2.0"
+maven = "0.37.0"
+kotlinx-coroutines = "1.10.2"
+kotlinx-serialization = "1.9.0"
+kotlinds = "1.2.2"
+libretro-kmp = "0.1.1"
+
+[plugins]
+multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
+maven = { id = "com.vanniktech.maven.publish", version.ref = "maven" }
+
+[libraries]
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinds-rom = { module = "dev.kotlinds:nds-rom", version.ref = "kotlinds" }
+kotlinds-narc = { module = "dev.kotlinds:nds-narc", version.ref = "kotlinds" }
+kotlinds-compression = { module = "dev.kotlinds:nds-compression", version.ref = "kotlinds" }
+libretro-kmp = { module = "dev.kotlinds:libretro-kmp", version.ref = "libretro-kmp" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }

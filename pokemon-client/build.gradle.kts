@@ -1,11 +1,43 @@
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinMultiplatform
+import com.vanniktech.maven.publish.SourcesJar
+
 plugins {
-    alias(libs.plugins.kotlinMultiplatform)
-    alias(libs.plugins.kotlinSerialization)
+    alias(libs.plugins.multiplatform)
+    alias(libs.plugins.serialization)
     alias(libs.plugins.kover)
+    alias(libs.plugins.dokka)
+    alias(libs.plugins.maven)
 }
 
-group = "dev.kotlinds"
-version = "0.1.0"
+mavenPublishing {
+    configure(KotlinMultiplatform(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
+    publishToMavenCentral()
+    signAllPublications()
+    pom {
+        name.set("pokemon-client")
+        description.set("Kotlin Multiplatform client for Pokémon games: reads a game from its RAM and ROM into a typed model and plays it through typed, self-checking actions")
+        url.set(project.ext.get("url")?.toString())
+        licenses {
+            license {
+                name.set(project.ext.get("license.name")?.toString())
+                url.set(project.ext.get("license.url")?.toString())
+            }
+        }
+        developers {
+            developer {
+                id.set(project.ext.get("developer.id")?.toString())
+                name.set(project.ext.get("developer.name")?.toString())
+                email.set(project.ext.get("developer.email")?.toString())
+                url.set(project.ext.get("developer.url")?.toString())
+            }
+        }
+        scm {
+            url.set(project.ext.get("scm.url")?.toString())
+        }
+    }
+}
+
 
 /**
  * Pokémon game client: reads a Pokémon game from its RAM (and ROM) and drives it through typed actions.
@@ -15,7 +47,7 @@ version = "0.1.0"
  * generated from the decompilation, replaced by ROM reads later) lives in jvmMain.
  *
  * Hard rule: no emulator dependency here (no libretro, no JNA). The emulator is reached through the
- * ports defined in this module (see `ConsolePort`), implemented by the app.
+ * ports defined in this module (see `ConsolePort`), implemented by pokemon-client-libretro or by the app.
  */
 kotlin {
     jvmToolchain(21)
