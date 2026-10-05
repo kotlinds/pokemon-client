@@ -5,6 +5,7 @@ import dev.kotlinds.pokemonclient.runtime.ActionInterruptedException
 import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.runtime.Interruption
 import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.GameState
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -45,20 +46,20 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
     fun available(state: GameState, mode: ActionMode): List<AvailableAction> = definitions
         .filter { mode in it.spec.modes }
         .mapNotNull { def ->
-            (def.spec.availability(state) as? Availability.Available)?.takeIf { it.listed }?.let { AvailableAction(def.spec.name, def.spec.description, it.choices) }
+            (listedAvailability(def.spec, state) as? Availability.Available)?.takeIf { it.listed }?.let { AvailableAction(def.spec.name, def.spec.description, it.choices) }
         }
 
     /** Actions of [mode] shown but not usable now, with the reason (e.g. "nobody knows Fly"). */
     fun unavailable(state: GameState, mode: ActionMode): List<UnavailableAction> = definitions
         .filter { mode in it.spec.modes }
         .mapNotNull { def ->
-            (def.spec.availability(state) as? Availability.Unavailable)?.let { UnavailableAction(def.spec.name, it.reason, it.detail, it.hint) }
+            (listedAvailability(def.spec, state) as? Availability.Unavailable)?.let { UnavailableAction(def.spec.name, it.reason, it.detail, it.hint) }
         }
 
     /** Every concrete action worth offering now, by canonical key (for models that pick from a list). */
     fun enumerate(state: GameState, mode: ActionMode): Map<String, GameAction> = definitions
-        .filter { mode in it.spec.modes && (it.spec.availability(state) as? Availability.Available)?.listed == true }
-        .flatMap { it.spec.enumerate(state) }
+        .filter { mode in it.spec.modes && (listedAvailability(it.spec, state) as? Availability.Available)?.listed == true }
+        .flatMap { def -> def.spec.enumerate(state).ifEmpty { fieldReady(state)?.let { def.spec.enumerate(it) }.orEmpty() } }
         .associateBy { it.key }
 
     /** Parses a wire action `{"type": "...", ...}` into a typed action, or a typed error. */
@@ -104,6 +105,31 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
         } catch (error: ActionException) {
             ActionOutcome.Failed(error.error)
         }
+    }
+
+    /**
+     * Whether [spec] is listed as usable in [state]: usable now, or usable once the field is ready ([fieldReady]).
+     * The listing matches what [execute] accepts, since [execute] waits for the game to settle before refusing
+     * ([availabilityOnceSettled]): right after a battle the field actions are listed during the fade back already
+     * (NOTES: `reorder_party` missing from the actions, then accepted a second later).
+     */
+    private fun listedAvailability(spec: ActionSpec<*>, state: GameState): Availability {
+        val now = spec.availability(state)
+        if (now is Availability.Available) return now
+        val ready = fieldReady(state) ?: return now
+        return spec.availability(ready).takeIf { it is Availability.Available } ?: now
+    }
+
+    /**
+     * [state] as it will be once the game waits for input again, when that is known without emulating: the overworld
+     * still busy by itself (the fade back after a battle, a field animation), out of battle, is the same overworld
+     * waiting for input a few frames later. Null for any other screen: what comes next isn't known (a message may
+     * open, a menu may change), so only the current state counts there.
+     */
+    private fun fieldReady(state: GameState): GameState? {
+        val screen = state.screen as? Screen.Overworld ?: return null
+        if (screen.awaiting == Awaiting.INPUT || state.battle != null) return null
+        return state.copy(screen = screen.copy(awaiting = Awaiting.INPUT))
     }
 
     /**

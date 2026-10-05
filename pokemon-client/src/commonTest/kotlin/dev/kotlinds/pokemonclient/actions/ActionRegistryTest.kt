@@ -66,6 +66,19 @@ class ActionRegistryTest {
     }
 
     @Test
+    fun theFieldActionsAreListedDuringTheFadeBackToTheField() {
+        // Right after a battle the overworld is back but still animating: what `act` accepts (it waits for the game)
+        // is listed already (NOTES: `reorder_party` missing, then accepted a second later).
+        fun field(awaiting: Awaiting) = GameState(0, Screen.Overworld(awaiting = awaiting), null, emptyList(), null, null, null)
+        val ready = registry.available(field(Awaiting.INPUT), ActionMode.ASSISTED).map { it.name }.toSet()
+        val fading = registry.available(field(Awaiting.ANIMATION), ActionMode.ASSISTED).map { it.name }.toSet()
+        assertTrue(ready.isNotEmpty() && fading.containsAll(ready), "missing while fading: ${ready - fading}")
+        assertTrue(registry.unavailable(field(Awaiting.ANIMATION), ActionMode.ASSISTED).none { it.name in ready })
+        // A battle still animating isn't projected: what comes next there isn't known.
+        assertTrue(registry.available(battleState(Screen.Battle(Awaiting.ANIMATION)), ActionMode.ASSISTED).none { it.name == "attack" })
+    }
+
+    @Test
     fun runIsUnavailableInTrainerBattlesWithATypedReason() {
         val unavailable = registry.unavailable(battleState(command, BattleKind.TRAINER), ActionMode.ASSISTED).single { it.name == "run" }
         assertEquals(UnavailableReason.TRAINER_BATTLE, unavailable.reason)
