@@ -8,7 +8,8 @@ import kotlinx.io.files.Path
 /**
  * Small test fixtures of real save states for music during pauses: the state with every byte zeroed except what the
  * splicer and the guards read (format headers and section / field headers, the whole ARM7 WRAM, the sound chip, the
- * melonDS DMA sections, and the main RAM around the ARM9's sound command statics), gzipped (a 12 MB DeSmuME state
+ * melonDS DMA sections, the main RAM around the ARM9's sound command statics, and the game's music state words of
+ * [SoundDriverLayout.gameMusic]), gzipped (a 12 MB DeSmuME state
  * becomes a few tens of KB). Not loadable by a core: for unit tests only.
  */
 object SoundFixtures {
@@ -64,6 +65,7 @@ object SoundFixtures {
         located.soundChip.forEach { keep(it.offset, it.size) }
         val shared = located.arm7(layout.sharedWorkPointer)
         if (located.inMainRam(shared)) keep(located.mainRam.offset + (shared - SoundDriverLayout.MAIN_RAM) - 0x100, 0x1C00)
+        layout.gameMusic?.addresses?.filter(located::inMainRam)?.forEach { keep(located.mainRam.offset + (it - SoundDriverLayout.MAIN_RAM), 4) }
         return ByteArray(state.size) { if (keep[it]) state[it] else 0 }
     }
 }

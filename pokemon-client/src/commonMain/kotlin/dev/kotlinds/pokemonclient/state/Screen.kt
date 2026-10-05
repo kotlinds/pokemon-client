@@ -251,7 +251,7 @@ sealed interface Screen {
      * summary, the Pokégear's map or radio, the Hall of Fame. [exit] says how to leave it; [details] what it shows
      * that matters (the Hall of Fame: the team being registered and the Pokémon presented now); [radio]: the Pokégear
      * radio's dial and programme; [apps]: the other applications reachable from here by touch (the Pokégear's app
-     * bar).
+     * bar); [hallOfFame]: how far the registration in the Hall of Fame went.
      */
     data class Viewer(
         val app: ViewerApp,
@@ -260,6 +260,7 @@ sealed interface Screen {
         val details: List<String> = emptyList(),
         val radio: PokegearRadio? = null,
         val apps: List<Entry> = emptyList(),
+        val hallOfFame: HallOfFameStage? = null,
     ) : Screen
 
     /**
@@ -444,6 +445,9 @@ enum class ContinueReason {
      * lost). An emulator without wireless (melonDS) shows it on the main menu when there is a save.
      */
     COMMUNICATION_ERROR,
+
+    /** "The End" after the credits: A (or START, a touch) restarts the game at the title screen (it was saved before). */
+    THE_END,
 }
 
 /** What a [Screen.PcBox] was opened for. */
@@ -477,7 +481,31 @@ enum class IntroStage {
 data class IntroInputs(val buttons: Set<Button>, val touchAnywhere: Boolean = false)
 
 /** Kinds of [Screen.Animation]. */
-enum class AnimationKind { TRADE, EGG_HATCH, CUTSCENE, TRANSITION }
+enum class AnimationKind {
+    TRADE, EGG_HATCH, CUTSCENE, TRANSITION,
+
+    /** The game saves by itself (after the Hall of Fame): nothing to do, and a reset is refused until it is done. */
+    SAVING,
+
+    /** The credits after the Hall of Fame ([Screen.Animation.hint]: whether and how they can be skipped). */
+    CREDITS,
+}
+
+/**
+ * How far the registration in the Hall of Fame went ([Screen.Viewer.hallOfFame]), after beating the Champion: each
+ * team member is presented in turn, then the whole team with the player (the "League Champion" photo), which waits
+ * for A; the game then saves and the credits start.
+ */
+sealed interface HallOfFameStage {
+    /** The [index]th team member (from 1) of [count] is presented: [name] as shown (nickname, else species). */
+    data class Presenting(val index: Int, val count: Int, val name: String) : HallOfFameStage
+
+    /** The whole team with the player: an animation, then it waits for A (the screen's [Awaiting.INPUT]). */
+    data object WholeTeam : HallOfFameStage
+
+    /** A was pressed: the last photo flash and the fade out, before the game saves. */
+    data object Leaving : HallOfFameStage
+}
 
 /** How far the choice of a starter went on [Screen.StarterChoice]. */
 enum class StarterStage {
@@ -495,7 +523,7 @@ enum class StarterStage {
 enum class ViewerApp {
     POKEDEX, TRAINER_CARD, SUMMARY, POKEGEAR_MAP, POKEGEAR_RADIO,
 
-    /** Registering the team in the Hall of Fame after becoming Champion (an animation, then A). */
+    /** Registering the team in the Hall of Fame after becoming Champion (an animation, then A): see [HallOfFameStage]. */
     HALL_OF_FAME_REGISTER,
 
     /** Looking at the Hall of Fame (from a PC). */

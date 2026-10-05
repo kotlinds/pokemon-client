@@ -66,6 +66,8 @@ data class StoryStep(
     val id: String,
     /** What to do, written for the agent (our walkthrough text, not the game's). */
     val description: String,
+    /** The map (zone id) where it happens, when it is one place: what a fly suggestion is measured to. */
+    val place: Int? = null,
 )
 
 /** Something on the current map that blocks a way, and the condition that lifts it when it's known. */
@@ -95,6 +97,26 @@ data class PlayerInfo(
     val pokegearCards: Set<PokegearCard>? = null,
     /** Items Mom bought that wait at a Poké Mart's delivery man. */
     val momParcels: List<MomParcel> = emptyList(),
+    /**
+     * The fly destinations visited (from the save's flags, readable anywhere), in the game's order: where `fly` can
+     * go once the party can fly. Empty when unknown.
+     */
+    val flyDestinations: List<FlyDestination> = emptyList(),
+)
+
+/**
+ * A place Fly takes the player to: [id] as the `fly` action and the fly map take it (`fly:<map id>`), [zone] the map
+ * it lands on (Victory Road's lands on Route 26), [name] for display only (the fly map's label).
+ *
+ * Where Fly only reaches the player's region (HGSS: Johto or Kanto), [fromAnyRegion] destinations can be chosen from
+ * every region, and from a [regionHub] every visited destination can (HGSS: Indigo Plateau; `fly` goes through it).
+ */
+data class FlyDestination(
+    val id: String,
+    val zone: Int,
+    val name: String,
+    val fromAnyRegion: Boolean = false,
+    val regionHub: Boolean = false,
 )
 
 /** A play time counter. */
@@ -155,6 +177,16 @@ data class FieldState(
     val examinables: List<FieldExaminable> = emptyList(),
     /** The radio programme whose music plays over the field (the Pokégear radio left on), null when none. */
     val radioMusic: RadioStation? = null,
+    /**
+     * Steps left of the Repel at work (0 when none), null when unknown. While it works, wild Pokémon of a lower level
+     * than the first Pokémon of the party able to fight don't appear.
+     */
+    val repelSteps: Int? = null,
+    /**
+     * The player runs without holding B (the running shoes switched on: HeartGold / SoulSilver's touch screen shoe
+     * button), null when unknown. [movement] still says WALK: it tells the field state, not the pace.
+     */
+    val autoRun: Boolean? = null,
 )
 
 /** A person or object standing on the map. */

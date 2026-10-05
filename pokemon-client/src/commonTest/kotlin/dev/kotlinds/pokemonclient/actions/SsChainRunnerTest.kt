@@ -57,12 +57,15 @@ class SsChainRunnerTest {
         idle: () -> Duration = { Duration.ZERO },
         time: TestTimeSource = TestTimeSource(),
         stepTime: Duration = Duration.ZERO,
+        settled: ((GameState) -> GameState)? = null,
         outcome: (index: Int) -> ActionOutcome = { ActionOutcome.Done() },
     ): Pair<ChainResult, List<Int>> {
         var current = start
         val executed = mutableListOf<Int>()
         val result = ChainRunner(
             observe = { current },
+            // The game left to run by itself: what the state becomes once it waits for input.
+            settle = { settled?.invoke(current)?.also { current = it } ?: current },
             execute = { _, index ->
                 executed += index
                 time += stepTime
@@ -294,5 +297,168 @@ class SsChainRunnerTest {
         val (result, executed) = run(field, List(4) { field }, *Array(4) { GameAction.Wait() }, limits = limits, idle = { 1.seconds }, stepTime = 50.seconds)
         assertEquals(listOf(0, 1), executed)
         assertEquals("TIME_CAP", result.stop?.code)
+    }
+
+    // region Ho-Oh knocked out by Machamp in the middle of a chain (OWN_FAINTED, not a refused attack)
+
+    private val hoOhId = MonId(0x0000fa01, 0x76f3a6fb)
+    private val hoOh = battler(BattlerRef.PLAYER_LEFT, 250, "HO-OH", 150, mon = hoOhId)
+    private val machamp = battler(BattlerRef.FOE_LEFT, 68, "MACHAMP", 140, personality = 3, slot = 2)
+
+    @Test
+    fun aPokemonTheChainSentInIsWatchedLikeTheOthers() = runTest {
+        // switch → Ho-Oh, attack, attack: Machamp's Rock Slide knocks Ho-Oh out on the attack's turn. Ho-Oh wasn't on
+        // the field when the chain started: before, it wasn't watched and the next attack failed on the party screen.
+        val (result, executed) = run(
+            state(me, machamp), listOf(state(hoOh, machamp), state(hoOh.copy(hp = 0), machamp), state(hoOh, machamp)),
+            GameAction.Switch(hoOhId), attack(1), attack(2),
+        )
+        assertEquals(listOf(0, 1), executed)
+        assertNull(result.failed)
+        val stop = assertIs<ChainStop.OwnFainted>(result.stop)
+        assertEquals(hoOhId, stop.mon)
+        assertEquals("OWN_FAINTED", stop.code)
+        assertEquals(listOf("attack(move:2)"), result.skipped.map { it.key })
+    }
+
+    @Test
+    fun aReplacementSentOnTheChainsFirstStepIsWatchedButTheFaintedOneItReplacesIsNoNews() = runTest {
+        // The chain starts on "send out the next Pokémon": Gyarados down (0 HP) is why the agent chose Ho-Oh, not a
+        // reason to stop; Ho-Oh going down afterwards is.
+        val gyarados = battler(BattlerRef.PLAYER_LEFT, 130, "GYARADOS", 0, mon = MonId(0x49c199cc, 0x76f3a6fb))
+        val (ok, done) = run(state(gyarados, machamp), listOf(state(hoOh, machamp), state(hoOh.copy(hp = 40), machamp)), GameAction.Switch(hoOhId), attack(1))
+        assertEquals(listOf(0, 1), done)
+        assertNull(ok.stop)
+        val (result, executed) = run(
+            state(gyarados, machamp), listOf(state(hoOh, machamp), state(hoOh.copy(hp = 0), machamp), state(hoOh, machamp)),
+            GameAction.Switch(hoOhId), attack(1), attack(1),
+        )
+        assertEquals(listOf(0, 1), executed)
+        assertEquals("OWN_FAINTED", result.stop?.code)
+    }
+
+    @Test
+    fun anAttackRefusedOnThePartyScreenAfterOurPokemonFaintedIsGivenBackAsOwnFainted() = runTest {
+        // The race: checked while Machamp's attack still played (Ho-Oh standing), the attack then found the "choose
+        // the next Pokémon" party screen. Not a failure: OWN_FAINTED, the attack given back as not done.
+        val partyScreen = state(hoOh.copy(hp = 0), machamp).copy(screen = Screen.Unknown("battle party screen", Awaiting.INPUT))
+        val refused = ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "attack isn't possible on this screen"))
+        val (result, executed) = run(state(hoOh, machamp), listOf(state(hoOh, machamp), partyScreen, partyScreen), attack(1), attack(1), attack(2)) { index ->
+            if (index == 1) refused else ActionOutcome.Done()
+        }
+        assertEquals(listOf(0, 1), executed)
+        assertNull(result.failed)
+        assertEquals("OWN_FAINTED", result.stop?.code)
+        assertEquals(listOf("attack(move:1)", "attack(move:2)"), result.skipped.map { it.key })
+    }
+
+    @Test
+    fun theBattleIsCheckedOnceTheTurnPlayedOutNotWhileItStillPlays() = runTest {
+        // The step came back while the turn still played (its settling budget used up by a long recipe): Ho-Oh's HP
+        // not yet down. The runner lets the game settle (frames only) before checking, and sees the K.O.
+        val playing = state(hoOh, machamp).copy(screen = Screen.Battle(Awaiting.ANIMATION))
+        val knockedOut = state(hoOh.copy(hp = 0), machamp).copy(screen = Screen.Unknown("battle party screen", Awaiting.INPUT))
+        var settles = 0
+        val (result, executed) = run(state(hoOh, machamp), listOf(playing, knockedOut), attack(1), attack(2), settled = { settles++; knockedOut }) { ActionOutcome.Done() }
+        assertEquals(listOf(0), executed)
+        assertEquals(1, settles)
+        assertEquals("OWN_FAINTED", result.stop?.code)
+        assertNull(result.failed)
+    }
+
+    @Test
+    fun rawInputStepsActOnTheBusyScreenWithoutSettlingFirst() = runTest {
+        val playing = state(hoOh, machamp).copy(screen = Screen.Battle(Awaiting.ANIMATION))
+        var settles = 0
+        val (_, executed) = run(state(hoOh, machamp), listOf(playing, playing), attack(1), GameAction.Press(dev.kotlinds.pokemonclient.console.Button.A), settled = { settles++; it })
+        assertEquals(listOf(0, 1), executed)
+        assertEquals(0, settles)
+    }
+
+    @Test
+    fun aBattleWaitingForInputIsCheckedWithoutSettling() = runTest {
+        var settles = 0
+        val (_, executed) = run(state(hoOh, machamp), listOf(state(hoOh, machamp.copy(hp = 50)), state(hoOh, machamp)), attack(1), attack(1), settled = { settles++; it })
+        assertEquals(listOf(0, 1), executed)
+        assertEquals(0, settles)
+    }
+
+    // endregion
+
+    // region Destiny Bond on the last foe: both fainted, the battle won (not FOE_FAINTED)
+
+    private val gengar = battler(BattlerRef.FOE_LEFT, 94, "GENGAR", 120, personality = 4, slot = 5)
+
+    /** The battle still on screen (its faint messages) with the game's decision already known. */
+    private fun decided(outcome: dev.kotlinds.pokemonclient.state.BattleOutcome, vararg battlers: BattlerState) =
+        state(*battlers).let { it.copy(screen = Screen.Battle(Awaiting.ANIMATION), battle = it.battle!!.copy(outcome = outcome)) }
+
+    @Test
+    fun theLastFoeFaintingWithOurPokemonByDestinyBondIsAWin() = runTest {
+        // Ho-Oh's attack knocks Gengar (Karen's last) out, Destiny Bond takes Ho-Oh: both at 0 HP, "Ho-Oh fainted!"
+        // still printing, the game's end rule already decided (the player has other Pokémon): won.
+        val both = decided(dev.kotlinds.pokemonclient.state.BattleOutcome.WON, hoOh.copy(hp = 0), gengar.copy(hp = 0))
+        val (result, executed) = run(state(hoOh, gengar), listOf(both, both), attack(1), attack(1))
+        assertEquals(listOf(0), executed)
+        assertNull(result.stop)
+        assertNull(result.failed)
+        assertEquals("BATTLE_WON", result.droppedBecause?.code)
+        assertEquals(listOf("attack(move:1)"), result.dropped.map { it.key })
+    }
+
+    @Test
+    fun theFieldStepsGoOnAfterADecidedBattleInsteadOfStoppingOnTheFaints() = runTest {
+        val both = decided(dev.kotlinds.pokemonclient.state.BattleOutcome.WON, hoOh.copy(hp = 0), gengar.copy(hp = 0))
+        val field = state(hoOh, gengar).copy(screen = Screen.Overworld(null, Awaiting.INPUT), battle = null)
+        val talk = GameAction.Interact("npc:3")
+        val (result, executed) = run(state(hoOh, gengar), listOf(both, field, field), attack(1), attack(1), talk)
+        assertEquals(listOf(0, 2), executed)
+        assertNull(result.stop)
+        assertEquals("BATTLE_WON", result.droppedBecause?.code)
+    }
+
+    @Test
+    fun aDrawIsALossForTheGame() = runTest {
+        // Our last Pokémon and the foe's last fainting together: BATTLE_OUTCOME_DRAW, which the game treats as a loss
+        // (battle-lost script, IsBattleResultWin false).
+        val both = decided(dev.kotlinds.pokemonclient.state.BattleOutcome.DRAW, hoOh.copy(hp = 0), gengar.copy(hp = 0))
+        // After the whiteout the team is healed: the outcome seen while the battle was on screen still tells it.
+        val healed = state(hoOh, gengar).copy(screen = Screen.Overworld(null, Awaiting.INPUT), battle = null)
+        val (result, executed) = run(state(hoOh, gengar), listOf(both, healed, healed), attack(1), GameAction.Wait(), attack(1))
+        assertEquals(listOf(0, 1), executed)
+        assertEquals("BATTLE_LOST", result.droppedBecause?.code)
+    }
+
+    @Test
+    fun theOutcomeMapsToTheBattleEnd() {
+        val o = dev.kotlinds.pokemonclient.state.BattleOutcome.entries.associateWith { BattleEnd.of(it, BattleKind.TRAINER) }
+        assertEquals(BattleEnd.WON, o[dev.kotlinds.pokemonclient.state.BattleOutcome.WON])
+        assertEquals(BattleEnd.LOST, o[dev.kotlinds.pokemonclient.state.BattleOutcome.LOST])
+        assertEquals(BattleEnd.LOST, o[dev.kotlinds.pokemonclient.state.BattleOutcome.DRAW])
+        assertEquals(BattleEnd.OVER, BattleEnd.of(dev.kotlinds.pokemonclient.state.BattleOutcome.WON, BattleKind.WILD))
+        assertEquals(BattleEnd.OVER, BattleEnd.of(dev.kotlinds.pokemonclient.state.BattleOutcome.CAUGHT, BattleKind.WILD))
+    }
+
+    @Test
+    fun anUndecidedFaintOfTheLastSeenFoeIsStillFoeFainted() = runTest {
+        // Without a decision (the trainer has Pokémon left), a K.O. is still FOE_FAINTED.
+        val (result, _) = run(state(hoOh, gengar), listOf(state(hoOh, gengar.copy(hp = 0)), state(hoOh, gengar)), attack(1), attack(1))
+        assertEquals("FOE_FAINTED", result.stop?.code)
+    }
+
+    // endregion
+
+    @Test
+    fun aLossSeenFrameByFrameIsToldEvenOnceTheBlackoutHealedTheTeam() = runTest {
+        // The step's own settling ran until the blackout: the state after it shows a healed team out of battle (read
+        // alone: "won"). The recorder saw the loss decided while the battle was on screen.
+        val healed = state(hoOh, gengar).copy(screen = Screen.Overworld(null, Awaiting.INPUT), battle = null)
+        var current = state(hoOh, gengar)
+        val result = ChainRunner(
+            observe = { current },
+            execute = { _, _ -> current = healed; ActionOutcome.Done() },
+            decided = { dev.kotlinds.pokemonclient.state.BattleOutcome.LOST },
+        ).run(listOf(attack(1), attack(1)))
+        assertEquals("BATTLE_LOST", result.droppedBecause?.code)
     }
 }

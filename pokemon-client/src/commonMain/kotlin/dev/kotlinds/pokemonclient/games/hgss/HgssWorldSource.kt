@@ -51,6 +51,11 @@ class HgssWorldSource(private val rom: NdsRom, private val version: HgssVersion)
     private val eventFiles: List<ByteArray> by lazy { narc(HgssWorldAddresses.ZONE_EVENT_NARC) }
     private val scriptFiles: List<ByteArray> by lazy { narc(HgssWorldAddresses.SCRIPT_NARC) }
 
+    /** The wild encounter tables, by `wildEncounterBank` (null where a member can't be read). */
+    private val encounterTables: List<HgssEncounterTable?> by lazy {
+        narc(HgssWorldAddresses.encounterNarc(version.gameCode)).map { HgssEncounterTable.parse(it) }
+    }
+
     private val matrices = HashMap<Int, HgssMapMatrix>()
     private val lands = HashMap<Int, DecodedLand>()
     private val events = HashMap<Int, HgssZoneEvents>()
@@ -71,6 +76,13 @@ class HgssWorldSource(private val rom: NdsRom, private val version: HgssVersion)
     override fun flyAllowed(zoneId: Int): Boolean? = header(zoneId)?.flyAllowed
 
     override fun bikeAllowed(zoneId: Int): Boolean? = header(zoneId)?.bikeAllowed
+
+    /** The wild encounter table of zone [zoneId], or null when it has none (`ENCDATA_NA`). */
+    fun encounters(zoneId: Int): HgssEncounterTable? =
+        header(zoneId)?.wildEncounterBank?.takeIf { it != NO_ENCOUNTERS }?.let { encounterTables.getOrNull(it) }
+
+    override fun encounterChance(zoneId: Int, water: Boolean, conditions: dev.kotlinds.pokemonclient.world.EncounterConditions): Double =
+        encounters(zoneId)?.let { HgssEncounters.chance(it, water, conditions) } ?: 0.0
 
     override fun regionOf(zoneId: Int): Region? = header(zoneId)?.region?.let { Region(it, if (it == HgssMapHeaders.REGION_KANTO) "Kanto" else "Johto") }
 
@@ -213,6 +225,9 @@ class HgssWorldSource(private val rom: NdsRom, private val version: HgssVersion)
     companion object {
         /** Bit 15 of a terrain attribute: the tile cannot be entered (sub_020548C0, asm/unk_02054648.s). */
         const val COLLISION_BIT = 0x8000
+
+        /** `ENCDATA_NA` (include/map_header.h): a zone without wild encounters. */
+        const val NO_ENCOUNTERS = 0xFF
 
         /** `MAP_EVERYWHERE`: the zone of the overworld blocks that belong to no route or town. */
         const val EVERYWHERE = 0

@@ -157,8 +157,8 @@ class HgssWorldFormatsTest {
         assertEquals(TileKind.Door, kind(0x6F))
         assertEquals(TileKind.Counter, kind(0x80, true))
         assertEquals(TileKind.Pc, kind(0x83, true))
-        assertEquals(TileKind.RockClimb, kind(0x4B, true))
-        assertEquals(TileKind.RockClimb, kind(0x4C, true))
+        assertEquals(TileKind.RockClimb(dev.kotlinds.pokemonclient.world.ClimbAxis.NORTH_SOUTH), kind(0x4B, true))
+        assertEquals(TileKind.RockClimb(dev.kotlinds.pokemonclient.world.ClimbAxis.EAST_WEST), kind(0x4C, true))
         // Railings (sub_0205B8F4..B960), bridges (sub_0205BA24/BA30/BA54), the waterfall top (sub_0205B78C).
         assertEquals(TileKind.Railing(setOf(Direction.EAST)), kind(0x30))
         assertEquals(TileKind.Railing(setOf(Direction.WEST, Direction.EAST)), kind(0x4A))
@@ -166,7 +166,12 @@ class HgssWorldFormatsTest {
         assertEquals(TileKind.Bridge(), kind(0x71))
         assertEquals(TileKind.Bridge(), kind(0x72))
         assertEquals(TileKind.Bridge(overWater = true), kind(0x73))
-        assertEquals(TileKind.Water(surfable = true, fishable = false), kind(0x22))
+        assertEquals(TileKind.Water(surfable = true, fishable = false, wildEncounters = false), kind(0x22))
+        // Surfing rolls for wild Pokémon on the river and the sea, not on the calm water of 0x14 / 0x19 / 0x50-0x53
+        // (TILE_BEHAVIOR_FLAG_SURFABLE without _ENCOUNTER in sMetatileBehaviorFlags).
+        assertEquals(TileKind.Water(surfable = true, fishable = true, wildEncounters = true), kind(0x2A))
+        assertEquals(TileKind.Water(surfable = true, fishable = true, wildEncounters = false), kind(0x14))
+        assertEquals(TileKind.Water(surfable = true, fishable = true, wildEncounters = false), kind(0x50))
         assertEquals(TileKind.Floor, kind(0x24))
         assertEquals(TileKind.Unknown(0xF0), kind(0xF0))
         assertTrue(HgssTileBehaviors.isSurfable(0x15) && !HgssTileBehaviors.isSurfable(0x17))

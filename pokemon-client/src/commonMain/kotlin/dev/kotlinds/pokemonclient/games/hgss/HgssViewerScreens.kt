@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.games.hgss
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.HallOfFameStage
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.ViewerApp
 import dev.kotlinds.pokemonclient.state.ViewerExit
@@ -32,10 +33,7 @@ internal object HgssViewerScreens : HgssScreenDecoder {
             "trainer_card" -> Screen.Viewer(ViewerApp.TRAINER_CARD, back, awaiting)
             "pokemon_summary" -> Screen.Viewer(ViewerApp.SUMMARY, back, awaiting)
             "pokegear" -> gearViewer(mem, awaiting)
-            // The team being registered is the party (the game copies it into the Hall of Fame).
-            "hall_of_fame_register" -> Screen.Viewer(
-                ViewerApp.HALL_OF_FAME_REGISTER, ViewerExit(button = Button.A), awaiting, team(state) + hallOfFameProgress(mem, state),
-            )
+            "hall_of_fame_register" -> hallOfFame(mem, state, awaiting)
             "hall_of_fame" -> Screen.Viewer(ViewerApp.HALL_OF_FAME, back, awaiting)
             else -> null
         }
@@ -64,32 +62,32 @@ internal object HgssViewerScreens : HgssScreenDecoder {
         return Screen.Viewer(app, exit, if (ready) awaiting else Awaiting.ANIMATION, radio = radio, apps = apps)
     }
 
-    // RegisterHallOfFameData (src/register_hall_of_fame.c).
-    private const val HOF_NUM_MONS = 0x13048L
-    private const val HOF_SCENE = 0x1304CL
-    private const val HOF_CUR_MON = 0x13056L
-    private const val HOF_SCENE_INDIV_LAST = 4  // REGHOF_SCENE_INDIV_MONS_EXIT
-    private const val HOF_SCENE_WHOLE_FIRST = 5 // REGHOF_SCENE_WHOLE_PARTY_INIT
-
     /**
-     * What the Hall of Fame shows now (`RegisterHallOfFameData.currentScene` / `curMonIndex`): each Pokémon in
-     * turn, then the whole team (it waits for A). Changes as the animation goes on, so waiting "until something
-     * changes" sees it.
+     * The registration in the Hall of Fame ([HgssGameClear.registration]): the team being registered is the party
+     * (the game copies it, eggs left out), its [HallOfFameStage] says which member is presented, and it waits for
+     * input only once the whole team is shown (the reader's awaiting).
      */
-    private fun hallOfFameProgress(mem: HgssMemory, state: HgssState): List<String> {
-        val fs = mem.ptr(mem.version.fieldSystemPtr) ?: return emptyList()
-        val app = mem.ptr(fs + A.FS_SUB0)?.let { mem.ptr(it + A.FSS0_SUB_APP) } ?: return emptyList()
-        val data = mem.ptr(app + A.OM_DATA) ?: return emptyList()
-        val count = mem.u32(data + HOF_NUM_MONS).toInt().takeIf { it in 1..6 } ?: return emptyList()
-        val scene = mem.s32(data + HOF_SCENE)
-        val index = mem.u16(data + HOF_CUR_MON)
-        val team = team(state)
-        return when {
-            scene in 0..HOF_SCENE_INDIV_LAST && index < count ->
-                listOf("presenting ${index + 1}/$count: ${team.getOrElse(index) { "?" }}")
-            scene >= HOF_SCENE_WHOLE_FIRST -> listOf("the whole team is shown (press A once it waits for you)")
-            else -> emptyList()
+    private fun hallOfFame(mem: HgssMemory, state: HgssState, awaiting: Awaiting): Screen.Viewer {
+        val app = mem.ptr(mem.version.fieldSystemPtr)?.let { mem.ptr(it + A.FS_SUB0) }?.let { mem.ptr(it + A.FSS0_SUB_APP) }
+        val registration = app?.let { mem.ptr(it + A.OM_DATA) }?.let { HgssGameClear.registration(mem, it, state.fading) }
+        val names = state.party.filter { !it.isEgg }.map { it.nickname ?: it.speciesName }
+        val stage = when {
+            registration == null -> null
+            registration.presenting ->
+                HallOfFameStage.Presenting(registration.monIndex + 1, registration.count, names.getOrElse(registration.monIndex) { "?" })
+            registration.leaving -> HallOfFameStage.Leaving
+            registration.wholeTeam -> HallOfFameStage.WholeTeam
+            else -> null
         }
+        val progress = when (stage) {
+            is HallOfFameStage.Presenting -> "presenting ${stage.index}/${stage.count}: ${stage.name}"
+            HallOfFameStage.WholeTeam -> "the whole team is shown" + if (awaiting == Awaiting.INPUT) ": A goes on (the game then saves)" else ""
+            HallOfFameStage.Leaving -> "leaving: the game saves next"
+            null -> null
+        }
+        return Screen.Viewer(
+            ViewerApp.HALL_OF_FAME_REGISTER, ViewerExit(button = Button.A), awaiting, team(state) + listOfNotNull(progress), hallOfFame = stage,
+        )
     }
 
     private fun team(state: HgssState): List<String> =

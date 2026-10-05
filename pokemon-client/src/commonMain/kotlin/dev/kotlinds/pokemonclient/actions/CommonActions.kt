@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
+import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.StartMenuFeature
 import dev.kotlinds.pokemonclient.state.PersonRole
@@ -296,7 +297,14 @@ object CommonActions {
             "(retry a lost battle, a failed capture...). Not while the game saves.",
         parameters = emptyList(),
         modes = assisted,
-        availability = { state -> if (state.screen is Screen.Intro) Availability.Available(listed = false) else Availability.Available() },
+        availability = { state ->
+            when {
+                state.screen is Screen.Intro -> Availability.Available(listed = false)
+                // The game refuses the reset while it saves by itself (after the Hall of Fame).
+                (state.screen as? Screen.Animation)?.kind == AnimationKind.SAVING -> Availability.Hidden
+                else -> Availability.Available()
+            }
+        },
         parse = { GameAction.SoftReset },
     ), SystemPlans.softReset)
 
@@ -310,6 +318,18 @@ object CommonActions {
         availability = { state -> if (SystemPlans.beforeTheGame(state)) Availability.Available() else Availability.Hidden },
         parse = { GameAction.ContinueGame },
     ), SystemPlans.continueGame)
+
+    val watchHallOfFame = ActionDefinition(GameAction.WatchHallOfFame::class, spec(
+        name = "watch_hall_of_fame",
+        description = "After beating the Champion: waits while the Hall of Fame presents each team member (progress " +
+            "\"3/6 Pokémon presented, TYPHLOSION\"; presses during it are ignored by the game), presses A when the " +
+            "whole team's screen waits for it (checked in RAM), waits while the game saves, and returns at the start " +
+            "of the credits with what can be done there.",
+        parameters = emptyList(),
+        modes = assisted,
+        availability = { state -> if (HallOfFamePlans.offered(state)) Availability.Available() else Availability.Hidden },
+        parse = { GameAction.WatchHallOfFame },
+    ), HallOfFamePlans.watchHallOfFame)
 
     private val moveParameters = listOf(
         Parameter("avoid_tall_grass", ParameterType.BOOLEAN, "Avoid tall grass when another way exists (fewer wild battles).", required = false),
@@ -329,7 +349,7 @@ object CommonActions {
             "destination or the only way (and says so). Stops early when something happens (battle, trainer, phone call, script). " +
             "Uses field moves by itself when the party can (a Pokémon knows the move and the badge is owned; a fainted Pokémon " +
             "can still use its field moves outside battle): Surf from the shore, " +
-            "Waterfall, Whirlpool, Cut, Rock Smash, Strength (boulders pushed as needed) and ice blocks; otherwise the error says " +
+            "Waterfall, Whirlpool, Cut, Rock Smash, Rock Climb (up and down rocky walls), Strength (boulders pushed as needed) and ice blocks; otherwise the error says " +
             "which move or badge is missing and the tile and direction to use it from. Movement puzzles (boulders, ice blocks, " +
             "moving platforms, lifts) are solved by itself unless the state says movement_puzzles are left to you.",
         parameters = listOf(
@@ -555,7 +575,7 @@ object CommonActions {
     /** The Fly move id (Gen 4), and below the badge it needs (badges are named by the game data layer, not shown text). */
     internal const val MOVE_FLY = 19
     /** The Storm Badge: by id (BADGE_STORM, include/constants/badge.h), never by its name (the game may be in French). */
-    private const val FLY_BADGE_ID = 4
+    internal const val FLY_BADGE_ID = 4
 
     /** Old Rod, Good Rod, Super Rod (Gen 4 item ids). */
     private val RODS = setOf(445, 446, 447)
@@ -667,7 +687,7 @@ object CommonActions {
 
     /** Every common action, in the order they are listed to agents. */
     val definitions: List<ActionDefinition<*>> get() =
-        listOf(advanceDialogue, choose, enterText, attack, switch, throwBall, learnMove, run, keepBattling, goTo, interact, step, findEncounter, heal, fly, fish, buy, setQuantity, deposit, withdraw, pc, reorderParty, useItem, giveItem, takeItem, teach, useKeyItem, registerItem, saveGame, softReset, continueGame, setOptions, chooseStarter, press, touch, wait) +
+        listOf(advanceDialogue, choose, enterText, attack, switch, throwBall, learnMove, run, keepBattling, goTo, interact, step, findEncounter, heal, fly, fish, buy, setQuantity, deposit, withdraw, pc, reorderParty, useItem, giveItem, takeItem, teach, useKeyItem, registerItem, saveGame, softReset, continueGame, watchHallOfFame, setOptions, chooseStarter, press, touch, wait) +
             MoreActions.definitions + PuzzleActions.definitions + PokegearActions.definitions
 
     // region Helpers

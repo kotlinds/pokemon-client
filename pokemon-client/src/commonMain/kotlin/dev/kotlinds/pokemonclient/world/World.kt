@@ -25,6 +25,15 @@ interface WorldSource {
 
     /** The region zone [zoneId] belongs to (Fly only reaches the region the player is in), null when unknown. */
     fun regionOf(zoneId: Int): Region? = null
+
+    /**
+     * The chance (0..1) that one encounter check of zone [zoneId] starts a wild battle, as the game rolls it under
+     * [conditions]: on its land encounter tiles ([TileInfo.landEncounters]), or surfing on its water ([water],
+     * [TileKind.Water.wildEncounters]). The game counts a check on every step onto such a tile and on every turn in
+     * place there. 0 when the zone has no such encounters or the game is unknown (no weight in routes then, see
+     * [StepWeights]).
+     */
+    fun encounterChance(zoneId: Int, water: Boolean, conditions: EncounterConditions): Double = 0.0
 }
 
 /** A region of the world (HGSS: Johto, Kanto): [id] is the game's number, [name] is for display only. */
@@ -93,7 +102,13 @@ data class TileInfo(
     val kind: TileKind,
     /** Heights (game units) of the walkable surfaces on this tile; empty when unknown (flat maps). */
     val heights: List<Int> = emptyList(),
-)
+) {
+    /**
+     * Walking here rolls for a wild encounter: tall grass, and the cave floors that have wild Pokémon (the game's
+     * encounter tile behaviours that aren't water).
+     */
+    val landEncounters: Boolean get() = kind == TileKind.TallGrass || kind == TileKind.Cave
+}
 
 /** What a tile is, for movement and display. Decoded per game from its tile behaviours. */
 sealed interface TileKind {
@@ -102,7 +117,11 @@ sealed interface TileKind {
     data object Wall : TileKind
     /** A ledge: can only be jumped in [jump] direction (the player lands 2 tiles further). */
     data class Ledge(val jump: Direction) : TileKind
-    data class Water(val surfable: Boolean, val fishable: Boolean) : TileKind
+    /**
+     * Water. [wildEncounters]: surfing on it can start a wild battle (most surfable water; not the calm water of a
+     * few spots, like the pools of some caves).
+     */
+    data class Water(val surfable: Boolean, val fishable: Boolean, val wildEncounters: Boolean = surfable) : TileKind
     data object Waterfall : TileKind
     data object Whirlpool : TileKind
     /** Ice: stepping onto it slides the player in the same direction until a tile that isn't ice, or an obstacle. */
@@ -123,8 +142,13 @@ sealed interface TileKind {
     /** The tile that ends a [Spinner] push (plain floor otherwise). */
     data object SpinnerStop : TileKind
 
-    /** A rocky wall climbed with Rock Climb. */
-    data object RockClimb : TileKind
+    /**
+     * A rocky wall climbed with Rock Climb, along [axis] only (HGSS `MetatileBehavior_IsRockClimbInDirection`: the
+     * north-south walls are climbed facing north or south, the east-west ones facing east or west). Facing the wall,
+     * A asks to use Rock Climb; the player then crosses every wall tile in a row that way and lands on the first tile
+     * after them, up or down (the same move both ways).
+     */
+    data class RockClimb(val axis: ClimbAxis) : TileKind
     data object Sand : TileKind
     data object Cave : TileKind
 
@@ -138,6 +162,19 @@ sealed interface TileKind {
     data class Railing(val blockedSides: Set<Direction>) : TileKind
     /** A behaviour the decoder doesn't know (kept raw for diagnostics). */
     data class Unknown(val behavior: Int) : TileKind
+}
+
+/** The directions a [TileKind.RockClimb] wall is climbed in. */
+enum class ClimbAxis(val directions: Set<Direction>) {
+    /** Climbed going north (up the screen) or south. */
+    NORTH_SOUTH(setOf(Direction.NORTH, Direction.SOUTH)),
+
+    /** Climbed going east or west. */
+    EAST_WEST(setOf(Direction.EAST, Direction.WEST)),
+    ;
+
+    /** True when a player moving [direction] climbs a wall of this axis. */
+    fun allows(direction: Direction): Boolean = direction in directions
 }
 
 /**

@@ -14,6 +14,7 @@ import dev.kotlinds.pokemonclient.state.RadioStation
 import dev.kotlinds.pokemonclient.state.PuzzleState
 import dev.kotlinds.pokemonclient.state.PuzzleTile
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.ViewerApp
 import dev.kotlinds.pokemonclient.state.VolatileStatus
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -121,6 +122,9 @@ object StateView {
                 screen.exit.touch?.let { put("exit", "touch ${it.x},${it.y}") }
                 if (screen.details.isNotEmpty()) put("details", JsonArray(screen.details.map(::JsonPrimitive)))
                 screen.radio?.let { put("radio", radio(it)) }
+                if (screen.app == ViewerApp.HALL_OF_FAME_REGISTER) {
+                    put("hint", "watch_hall_of_fame waits through the presentation (presses are ignored meanwhile), presses A when the whole team waits for it and returns when the credits start")
+                }
                 if (screen.apps.isNotEmpty()) {
                     put("apps", JsonArray(screen.apps.map { a ->
                         JsonPrimitive("${a.id} = ${a.label}" + (a.touch?.let { " (touch ${it.x},${it.y})" } ?: "") + if (a.selectable) "" else " (locked)")

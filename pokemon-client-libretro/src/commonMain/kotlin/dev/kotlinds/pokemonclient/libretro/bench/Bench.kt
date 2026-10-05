@@ -57,7 +57,8 @@ import kotlinx.io.readByteArray
  * - `step:<n>`: emulates n frames; `tap:<BUTTON>[x<n>]`: self-checking taps; `hold:<B1+B2...>:<n>`: holds buttons n frames; `touch:<x>,<y>`: touches the bottom screen;
  * - `until:<kind>:<frames>`: steps until the screen kind starts with `kind` (e.g. `overworld`, `dialogue`);
  * - `shot:<name>`: PNG of both screens; `state`: prints the decoded GameState; `screen`: prints the screen only;
- *   `puzzle`: prints the position and the map puzzle (switches, shutters, teleports);
+ *   `flyhint:<map id>`: the fly suggestion for that map from here ([dev.kotlinds.pokemonclient.actions.FlyAdvisor]);
+ *   `party`: one line per party Pokémon (id, level, HP, status, moves with PP); `healparty[:<item id>]`: Revive + Full Restore (or that item, unless a status needs curing) where needed (field); `puzzle`: prints the position and the map puzzle (switches, shutters, teleports);
  * - `act:<json>`: executes a typed action through the action registry (e.g. `act:{"type":"choose","entry":"option:6"}`;
  *   a long one prints its progress about every 5 s of game time, like the app's progress notifications);
  *   `actions`: lists the actions available now; `solve:on|off`: whether walks solve movement puzzles by themselves
@@ -74,10 +75,18 @@ import kotlinx.io.readByteArray
  * - `msgtrace:<n>` / `mashtrace:<n>`: steps n frames (mashing A one frame in four) printing every change of the battle
  *   message and ball shakes; `truth:on` records the battle message of every frame, `truth:check` compares it with
  *   the recorder's battle messages (what was shown but not recorded), `truth:dump:<name>` writes it to `<name>.trace`
- *   (run-length encoded in tests); `autobattle:<n>[,move:<id>]` plays n decisions of a battle like an agent and checks.
+ *   (run-length encoded in tests); `autobattle:<n>[,move:<id>|move:best][,heal:<item id>[+<item id>...]]` plays n decisions of a battle like an agent and checks
+ *   (`move:best`: the move of highest power x type effectiveness x accuracy, the party member with the best such
+ *   move when one must be sent in, and a healing item (`heal:`, the first one left; a Full Restore by default) when the acting Pokémon is low on HP).
  * - `pausemusic:<name>[:<play>,<pause>,<resume>]` / `pausemusicstats:<pauses>[:<frames>[:<max delay>[:<buttons>]]]` / `pausemusicload:<file>` / `pausemusicdriver` /
+ *   `pausemusicscan:<buttons>:<frames>[,<every>,<pause frames>,<max delay>,<save refused>]` (a pause every few frames
+ *   while walking, e.g. across a map edge) /
  *   `pausemusicfixtures:<prefix>[:<frames>]`: music during pauses, end to
  *   end with a shadow core (WAVs, guards, continuity, main RAM checks; see [PauseMusicCheck]).
+ * - `trip:<flee|fight>:<go_to json>`: a whole trip played like an agent would: `go_to` again after every interruption,
+ *   wild battles fled (`flee`) or won with the first move (`fight`), trainer battles won with the first move, texts
+ *   read; prints the frames until the player stands at the destination with the control back, and the battles met
+ *   (to compare routes: see `Pathfinder`'s step weights).
  *
  * Common code: each platform only starts it from its entry point (`BenchMain.kt` on the JVM), and runs it headless when
  * it has no window ([openBenchViewer]).
@@ -202,6 +211,22 @@ private class Bench(
             "shot" -> console.framebuffer()?.let { Files.writeBytes(Path(out, "$arg.png"), encodePng(it)) }
             "state" -> println(game.state(scope.memory()).toString().replace(", ", ",\n  "))
             "screen" -> println("  " + game.state(scope.memory()).screen)
+            // `healparty[:<item>]`: between battles, a Revive on each fainted Pokémon, then a Full Restore (or <item>) on each one hurt.
+            "healparty" -> game.state(scope.memory()).party.filter { !it.isEgg }.forEach { mon ->
+                if (mon.hp == 0) run("""act:{"type":"use_item","item":"item:$REVIVE","target":"${mon.id}"}""")
+                val now = game.state(scope.memory()).party.firstOrNull { it.id == mon.id }
+                if (now != null && (now.hp < now.maxHp || now.status != null)) {
+                    val item = if (now.status != null) FULL_RESTORE else arg.toIntOrNull() ?: FULL_RESTORE
+                    run("""act:{"type":"use_item","item":"item:$item","target":"${mon.id}"}""")
+                }
+            }
+            // `flyhint:<map id>`: the fly suggestion for that map from here (FlyAdvisor), and how long it took.
+            "flyhint" -> {
+                val mark = kotlin.time.TimeSource.Monotonic.markNow()
+                val suggestion = dev.kotlinds.pokemonclient.actions.FlyAdvisor(game).suggest(game.state(scope.memory()), arg.toInt())
+                println("  ${suggestion?.text ?: "no suggestion"} (${mark.elapsedNow()})")
+            }
+            "party" -> game.state(scope.memory()).party.forEach { println("  ${it.id} ${it.displayName} Lv${it.level} ${it.hp}/${it.maxHp} ${it.status ?: ""} " + it.moves.joinToString { m -> "${m.move.name} (move:${m.move.id.value}) ${m.pp}/${m.maxPp}" }) }
             "puzzle" -> game.state(scope.memory()).field.let { f ->
                 println("  ${f?.mapName} (${f?.mapId}) at ${f?.x},${f?.y}")
                 f?.puzzle?.let { p ->
@@ -241,7 +266,13 @@ private class Bench(
                 )
                 else -> truthCheck()
             }
-            "autobattle" -> autoBattle(arg.substringBefore(',').toInt(), arg.substringAfter(',', "").takeIf { it.isNotEmpty() })
+            "autobattle" -> arg.split(',').let { parts ->
+                val options = parts.drop(1)
+                autoBattle(
+                    parts[0].toInt(), options.firstOrNull { it.startsWith("move:") },
+                    options.firstOrNull { it.startsWith("heal:") }?.removePrefix("heal:")?.split('+')?.map { it.toInt() } ?: listOf(FULL_RESTORE),
+                )
+            }
             "rawmon" -> HgssReader(scope.memory(), HgssVersion.HEARTGOLD_US).partyRaw().forEachIndexed { i, b ->
                 println("  slot $i: " + b.joinToString("") { "%02x".fmt(it) })
             }
@@ -282,11 +313,18 @@ private class Bench(
             "chain" -> {
                 val steps = Json.parseToJsonElement(arg) as kotlinx.serialization.json.JsonArray
                 val actions = steps.map { registry.parse(it.jsonObject, ActionMode.ASSISTED).getOrThrow() }
+                // Like the app: the battle's outcome as the recorder saw it frame by frame during the chain.
+                val since = recorder.log.lastSeq
                 val result = kotlinx.coroutines.runBlocking {
                     dev.kotlinds.pokemonclient.actions.ChainRunner(
                         observe = { game.state(scope.memory()) },
                         execute = { action, _ ->
                             registry.execute(action, scope, game, settings).also { Navigator(scope, game).settle(maxFrames = 1800) }
+                        },
+                        // Like the app: a battle still playing out between two steps settles before it is checked.
+                        settle = { Navigator(scope, game).settle(maxFrames = 1800) },
+                        decided = {
+                            recorder.log.since(since).filterIsInstance<dev.kotlinds.pokemonclient.state.GameEvent.BattleDecided>().firstOrNull()?.outcome
                         },
                         idle = { recorder.progress.idle },
                     ).run(actions)
@@ -303,11 +341,14 @@ private class Bench(
                 val battle = state.battle
                 val data = game.data
                 if (battle == null || data == null) println("  no battle / no game data") else {
+                    // The game's decision, known before the battle leaves the screen (BattleState.outcome).
+                    println("  outcome ${battle.outcome ?: "undecided"} message ${battle.message?.replace('\n', ' ')}")
                     battle.battlers.forEach { println("  ${it.ref.wire} ${it.species.name} L${it.level} ${it.hp}/${it.maxHp} volatile=${it.volatile}") }
                     dev.kotlinds.pokemonclient.data.Matchups.estimate(battle, data).forEach { println("  effectiveness ${it.move} → ${it.target.wire}: ${it.label}") }
                     dev.kotlinds.pokemonclient.data.Matchups.party(battle, state.party, data).forEach { println("  party_effectiveness ${it.line(battle.isDouble)}") }
                 }
             }
+            "trip" -> trip(arg.substringBefore(':'), arg.substringAfter(':'))
             "log" -> {
                 recorder.log.since(logCursor).forEach { println("  $it") }
                 logCursor = recorder.log.lastSeq
@@ -321,6 +362,10 @@ private class Bench(
             "pausemusicfixtures" -> pauseMusic.fixtures(arg)
             "pausemusicdriver" -> pauseMusic.driver()
             "pausemusicmenu" -> pauseMusic.menu(arg) { describe(game.state(scope.memory()).screen).lineSequence().first() }
+            "pausemusicscan" -> pauseMusic.scan(arg) {
+                val state = game.state(scope.memory())
+                "${state.field?.let { "${it.mapName} ${it.x},${it.y}" } ?: "-"} " + describe(state.screen).lineSequence().first()
+            }
             "pausemusicintro" -> pauseMusic.intro(arg) { describe(game.state(scope.memory()).screen).lineSequence().first() }
             else -> error("unknown command $command")
         }
@@ -468,21 +513,49 @@ private class Bench(
         missing.forEach { println("    MISSING: ${it.replace("\n", "/")}") }
     }
 
-    private fun autoBattle(turns: Int, move: String?) {
+    private fun autoBattle(turns: Int, move: String?, healItems: List<Int> = listOf(FULL_RESTORE)) {
         if (truth == null) truthOn()
+        var heals = 0
+        var switched = false
+        var healed = false
         repeat(turns) {
             val state = game.state(scope.memory())
             val screen = state.screen
             val json = when {
                 state.battle == null && screen is Screen.Overworld -> return@repeat
+                // Never two heals in a row: a foe that hits harder than the item heals would keep the battler healing forever.
+                screen is Screen.BattleCommand && move == "move:best" && heals < MAX_HEALS && !healed && healItem(state, healItems) != null &&
+                    state.battle?.battlers?.firstOrNull { it.ref == screen.actor }?.let { it.hp * 100 < it.maxHp * HEAL_BELOW_PERCENT } == true -> {
+                    heals++
+                    healed = true
+                    val actor = state.battle?.battlers?.firstOrNull { it.ref == screen.actor }
+                    """{"type":"use_item","item":"item:${healItem(state, healItems)}","target":"${actor?.mon}"}"""
+                }
                 screen is Screen.BattleCommand -> {
                     val actor = state.battle?.battlers?.firstOrNull { it.ref == screen.actor }
-                    val chosen = move?.takeIf { m -> actor?.moves?.any { "move:${it.move.id.value}" == m && it.pp > 0 } == true }
+                    // `move:best` with nothing that hurts the foe (no PP left, immune), or a party member far better: it goes in
+                    // (not twice in a row, so two Pokémon don't take turns forever).
+                    if (move == "move:best" && !switched) {
+                        val other = if (bestMove(state) == null) bestSwitch(state, null) else betterSwitch(state, TURN_SWITCH_FACTOR)
+                        if (other != null) {
+                            switched = true
+                            run("""act:{"type":"switch","pokemon":"$other"}""")
+                            return@repeat
+                        }
+                    }
+                    switched = false
+                    healed = false
+                    val chosen = (if (move == "move:best") bestMove(state) else null)
+                        ?: move?.takeIf { m -> actor?.moves?.any { "move:${it.move.id.value}" == m && it.pp > 0 } == true }
                         ?: actor?.moves?.firstOrNull { it.pp > 0 }?.let { "move:${it.move.id.value}" } ?: return@repeat
                     """{"type":"attack","move":"$chosen"}"""
                 }
+                // `move:best`: the foe sends another Pokémon; a party member that hits it much harder goes in.
+                screen is Screen.ListMenu && screen.kind == dev.kotlinds.pokemonclient.state.MenuKind.BATTLE_SWITCH_OR_KEEP && move == "move:best" &&
+                    betterSwitch(state) != null -> """{"type":"switch","pokemon":"${betterSwitch(state)}"}"""
                 screen is Screen.ListMenu && screen.kind == dev.kotlinds.pokemonclient.state.MenuKind.BATTLE_SWITCH_OR_KEEP -> """{"type":"keep_battling"}"""
-                screen is Screen.PartyGrid -> screen.entries.firstOrNull { it.selectable && it.id.startsWith("mon:") }?.let { """{"type":"switch","pokemon":"${it.id}"}""" } ?: return@repeat
+                screen is Screen.PartyGrid -> ((if (move == "move:best") bestSwitch(state, screen) else null)
+                    ?: screen.entries.firstOrNull { it.selectable && it.id.startsWith("mon:") }?.id)?.let { """{"type":"switch","pokemon":"$it"}""" } ?: return@repeat
                 screen is Screen.YesNo && screen.learning != null -> """{"type":"learn_move"}"""
                 screen is Screen.YesNo && screen.entries.any { it.id == "option:next" } -> """{"type":"choose","entry":"option:next"}"""
                 else -> """{"type":"advance_dialogue"}"""
@@ -490,6 +563,82 @@ private class Bench(
             run("act:$json")
         }
         truthCheck()
+    }
+
+    /** The first of [items] still in the bag. */
+    private fun healItem(state: dev.kotlinds.pokemonclient.state.GameState, items: List<Int>): Int? =
+        items.firstOrNull { id -> state.bag.orEmpty().any { pocket -> pocket.items.any { it.item.id.value == id && it.quantity > 0 } } }
+
+    /** `move:best` uses its healing item on the acting Pokémon below this share of its HP, at most [MAX_HEALS] times a battle. */
+    private val HEAL_BELOW_PERCENT = 45
+    private val MAX_HEALS = 8
+    private val FULL_RESTORE = 23
+    private val REVIVE = 28
+
+    /**
+     * `move:best`: how hard [known] of [mon] would hit the foes out now: power x type effectiveness x accuracy x the
+     * attacking stat (Attack or Sp. Atk) x 1.5 for the same type; 0 for a status move or one without PP.
+     */
+    private fun moveScore(mon: dev.kotlinds.pokemonclient.state.PartyMon?, known: dev.kotlinds.pokemonclient.state.KnownMove, matchups: List<dev.kotlinds.pokemonclient.data.MoveMatchup>): Double {
+        val info = game.data?.move(known.move.id) ?: return 0.0
+        if (known.pp <= 0 || info.power == 0) return 0.0
+        val multiplier = matchups.filter { it.move == known.move.name }.maxOfOrNull { it.multiplier } ?: return 0.0
+        val stat = mon?.stats?.get(
+            if (info.category == dev.kotlinds.pokemonclient.data.MoveCategory.PHYSICAL) dev.kotlinds.pokemonclient.state.Stat.ATTACK else dev.kotlinds.pokemonclient.state.Stat.SP_ATTACK,
+        ) ?: 100
+        val stab = if (mon?.types?.any { it.equals(info.type.name, ignoreCase = true) } == true) 1.5 else 1.0
+        return info.power * multiplier * (if (info.accuracy == 0) 100 else info.accuracy) / 100.0 * stat * stab
+    }
+
+    /** `move:best`: the acting battler, its party Pokémon and its best score against the foes out now. */
+    private fun actorScore(state: dev.kotlinds.pokemonclient.state.GameState): Triple<dev.kotlinds.pokemonclient.state.BattlerState, dev.kotlinds.pokemonclient.state.PartyMon?, Double>? {
+        val battle = state.battle ?: return null
+        val data = game.data ?: return null
+        val actor = battle.battlers.firstOrNull { it.ref == (battle.actor ?: dev.kotlinds.pokemonclient.state.BattlerRef.PLAYER_LEFT) } ?: return null
+        val mon = state.party.firstOrNull { it.id == actor.mon }
+        val matchups = dev.kotlinds.pokemonclient.data.Matchups.estimate(battle, data)
+        return Triple(actor, mon, actor.moves.maxOfOrNull { moveScore(mon, it, matchups) } ?: 0.0)
+    }
+
+    /** `move:best`: the best party member to send in and its score (not battling, not fainted). */
+    private fun bestOfParty(state: dev.kotlinds.pokemonclient.state.GameState, selectable: Set<String>?): Pair<String, Double>? {
+        val battle = state.battle ?: return null
+        val data = game.data ?: return null
+        return dev.kotlinds.pokemonclient.data.Matchups.party(battle, state.party, data)
+            .filter { selectable == null || it.mon.id.toString() in selectable }
+            .map { p -> p.mon.id.toString() to (p.mon.moves.maxOfOrNull { moveScore(p.mon, it, p.matchups) } ?: 0.0) }
+            .maxByOrNull { it.second }
+    }
+
+    /** `move:best`: a party member whose best move scores [SWITCH_FACTOR] times the battler's, if any. */
+    private fun betterSwitch(state: dev.kotlinds.pokemonclient.state.GameState, factor: Double = SWITCH_FACTOR): String? {
+        val current = actorScore(state)?.third ?: return null
+        val best = bestOfParty(state, null) ?: return null
+        return best.first.takeIf { best.second > current * factor }
+    }
+
+    private val SWITCH_FACTOR = 1.5
+
+    /** At its own turn, the battler is switched out only for a party member this many times better. */
+    private val TURN_SWITCH_FACTOR = 2.5
+
+    /** `move:best`: the acting Pokémon's move with the best [moveScore]. */
+    private fun bestMove(state: dev.kotlinds.pokemonclient.state.GameState): String? {
+        val battle = state.battle ?: return null
+        val data = game.data ?: return null
+        val (actor, mon, _) = actorScore(state) ?: return null
+        val matchups = dev.kotlinds.pokemonclient.data.Matchups.estimate(battle, data)
+        return actor.moves.filter { moveScore(mon, it, matchups) > 0 }.maxByOrNull { moveScore(mon, it, matchups) }?.let { "move:${it.move.id.value}" }
+    }
+
+    /**
+     * `move:best`: the party member to send in, the one whose best move hits the foe hardest: among those [grid] offers
+     * when one must replace a fainted Pokémon, else (a switch by choice) among the others that can hurt the foe at all.
+     */
+    private fun bestSwitch(state: dev.kotlinds.pokemonclient.state.GameState, grid: Screen.PartyGrid?): String? {
+        val selectable = grid?.entries?.filter { it.selectable && it.id.startsWith("mon:") }?.map { it.id }?.toSet()
+        val best = bestOfParty(state, selectable) ?: return null
+        return best.first.takeIf { grid != null || best.second > 0 }
     }
 
     private fun describe(): String {
@@ -591,7 +740,78 @@ private class Bench(
         error("never reached the overworld")
     }
 
+    /**
+     * `trip`: runs [goToJson] (a `go_to`) until it is done, handling what interrupts it like a simple agent: a wild
+     * battle is fled ([policy] `flee`) or won with the first move that has PP left (`fight`), a trainer battle is won
+     * the same way, texts and calls are read through. Every action settles like `act`. Prints the total frames (the
+     * control back at the destination) and the battles met, to compare the same trip under different route weights.
+     */
+    private fun trip(policy: String, goToJson: String) {
+        require(policy == "flee" || policy == "fight") { "trip:<flee|fight>:<go_to json>" }
+        val goTo = registry.parse(Json.parseToJsonElement(goToJson).jsonObject, ActionMode.ASSISTED).getOrThrow()
+        val start = console.frame
+        var wild = 0
+        var trainers = 0
+        var inBattle = false
+        var stuck = 0
+        fun execute(json: String): dev.kotlinds.pokemonclient.actions.ActionOutcome? {
+            val action = registry.parse(Json.parseToJsonElement(json).jsonObject, ActionMode.ASSISTED).getOrNull() ?: return null
+            return registry.execute(action, scope, game, settings).also { Navigator(scope, game).settle(maxFrames = 1800) }
+        }
+        repeat(MAX_TRIP_ACTIONS) {
+            val state = game.state(scope.memory())
+            val battle = state.battle
+            if (battle != null && !inBattle) if (battle.kind == dev.kotlinds.pokemonclient.state.BattleKind.WILD) wild++ else trainers++
+            inBattle = battle != null
+            val screen = state.screen
+            when {
+                screen is Screen.Overworld && battle == null && screen.incomingCall == null -> {
+                    val outcome = registry.execute(goTo, scope, game, settings).also { Navigator(scope, game).settle(maxFrames = 1800) }
+                    if (outcome is dev.kotlinds.pokemonclient.actions.ActionOutcome.Done) {
+                        println("  trip done: ${console.frame - start} frames, $wild wild battle(s), $trainers trainer battle(s) (${outcome.detail ?: ""})")
+                        return
+                    }
+                    // A refusal with nothing else going on (no battle, no text): the trip can't go on.
+                    val after = game.state(scope.memory())
+                    if (after.screen is Screen.Overworld && after.battle == null && (after.screen as Screen.Overworld).incomingCall == null) {
+                        println("  trip FAILED after ${console.frame - start} frames: $outcome")
+                        return
+                    }
+                }
+                screen is Screen.BattleCommand && battle != null -> {
+                    val flee = battle.kind == dev.kotlinds.pokemonclient.state.BattleKind.WILD && policy == "flee"
+                    val actor = battle.battlers.firstOrNull { it.ref == (battle.actor ?: dev.kotlinds.pokemonclient.state.BattlerRef.PLAYER_LEFT) }
+                    val move = actor?.moves?.firstOrNull { it.pp > 0 }?.move?.id?.value
+                    val json = if (flee || move == null) """{"type":"run"}""" else """{"type":"attack","move":"move:$move"}"""
+                    execute(json) ?: execute("""{"type":"run"}""")
+                }
+                else -> {
+                    // A "keep battling?" question, a move to learn (kept out), texts and calls: whatever moves things on
+                    // (the question first: reading texts does nothing once it is up).
+                    val done = listOf("""{"type":"keep_battling"}""", """{"type":"learn_move"}""", """{"type":"advance_dialogue"}""")
+                        .firstNotNullOfOrNull { json -> execute(json)?.takeIf { it is dev.kotlinds.pokemonclient.actions.ActionOutcome.Done } }
+                    if (done == null) {
+                        // A screen this simple agent can't handle (a fainted Pokémon to replace...): A, a few times.
+                        if (++stuck > MAX_TRIP_STUCK) {
+                            println("  trip NOT done (stuck on ${screen.kind}): ${console.frame - start} frames, $wild wild, $trainers trainer battle(s)")
+                            return
+                        }
+                        scope.tap(Button.A)
+                        scope.step(20)
+                    } else stuck = 0
+                }
+            }
+        }
+        println("  trip NOT done after $MAX_TRIP_ACTIONS actions: ${console.frame - start} frames, $wild wild, $trainers trainer battle(s); ${game.state(scope.memory()).screen}")
+    }
+
     private companion object {
+        /** Bound of a `trip`: actions before giving up. */
+        const val MAX_TRIP_ACTIONS = 200
+
+        /** Presses of A on a screen a `trip` can't handle before giving up. */
+        const val MAX_TRIP_STUCK = 10
+
         /** Bench commands that read HeartGold / SoulSilver structures directly ([HgssReader]...). */
         val HGSS_ONLY = setOf("raw", "rawmon", "box", "where", "watch", "fish", "world")
 

@@ -64,6 +64,13 @@ sealed interface GameEvent {
     /** The game put a new Pokémon in PC box [box] (0-based) by itself: a capture or a gift with a full party. */
     data class SentToBox(override val seq: Long, override val frame: Long, val mon: MonId, val name: String, val box: Int, val boxName: String) : GameEvent
 
+    /**
+     * The game decided how the battle ends ([BattleState.outcome]), while it is still on screen: seen frame by frame,
+     * since once the battle has left the screen nothing in the state tells it any more (a lost battle's blackout heals
+     * the team at once, src/blackout.c).
+     */
+    data class BattleDecided(override val seq: Long, override val frame: Long, val outcome: BattleOutcome, val kind: BattleKind) : GameEvent
+
     /** A Pokémon learned [move] (level up, TM / HM, tutor), forgetting [forgot] when it already knew four. */
     data class LearnedMove(override val seq: Long, override val frame: Long, val mon: MonId, val name: String, val move: String, val forgot: String? = null) : GameEvent
 

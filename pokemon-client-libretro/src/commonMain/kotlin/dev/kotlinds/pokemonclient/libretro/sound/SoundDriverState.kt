@@ -31,6 +31,11 @@ data class SoundDriverState(
     val pausedPlayerState: Map<Int, List<Byte>> = emptyMap(),
     /** Why [commandsInFlight] couldn't be read (the inconsistent values), null when it could. */
     val commandsUnreadable: String? = null,
+    /**
+     * Where the game's own music logic is (changing its song or not, see [GameMusicPhase]); null when the layout doesn't
+     * know the game's music logic.
+     */
+    val gameMusic: GameMusicPhase? = null,
 ) {
     /** The players playing (active and not paused): the music, plus sound effects or cries if any. */
     val playing: List<Player> get() = players.filter { !it.isPaused }
@@ -101,6 +106,7 @@ data class SoundDriverState(
                 commandsInFlight = commands.ids,
                 pausedPlayerState = paused,
                 commandsUnreadable = commands.unreadable,
+                gameMusic = layout.gameMusic?.let { GameMusicPhase.read(state, it) },
             )
         }
 

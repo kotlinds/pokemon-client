@@ -40,11 +40,12 @@ class HgssGearBlockersTest {
         override fun readBytes(addr: Long, size: Int) = ByteArray(size)
     }, HgssVersion.HEARTGOLD_US)
 
+    /** The credits as they roll and "The End" are read from their app ([HgssGameClearFixtureTest]); unreadable, a transition. */
     @Test
-    fun theCreditsAreACutSceneThatASoftResetSkips() {
+    fun unreadableCreditsAreATransition() {
         val credits = HgssCutsceneScreens.decode(noRam, HgssState(frame = 0, mode = GameMode.APP, modeDetail = "credits"))
-        assertEquals(AnimationKind.CUTSCENE, (credits as Screen.Animation).kind)
-        assertTrue("soft_reset" in credits.hint!!)
+        assertEquals(Screen.Animation(AnimationKind.TRANSITION), credits)
+        assertTrue("soft_reset" in HgssCutsceneScreens.CREDITS_HINT)
     }
 
     @Test

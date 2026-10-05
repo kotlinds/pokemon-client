@@ -11,7 +11,8 @@ import kotlin.test.assertTrue
  * Areas drawn in ASCII: '.' floor, '#' wall, '"' tall grass, 'v' '^' '<' '>' ledges (jump in that direction),
  * '~' surfable water, 'W' warp, 'H' a second surface 40 units higher (a walkway), '/' stairs (height 20),
  * '*' ice, 'R' 'L' 'U' 'D' spinner arrows (push right, left, up, down), 'S' the spinner stop tile, '@' whirlpool,
- * '|' waterfall, 'C' a Rock Climb wall.
+ * '|' waterfall, 'C' a Rock Climb wall climbed east-west, 'N' one climbed north-south (height 20), 'B' a floor with
+ * two surfaces (0 and 40: a tile under a walkway).
  */
 private fun area(vararg rows: String): Area {
     val height = rows.size
@@ -41,7 +42,9 @@ private fun area(vararg rows: String): Area {
             'S' -> TileInfo(false, TileKind.SpinnerStop, listOf(0))
             '@' -> TileInfo(false, TileKind.Whirlpool)
             '|' -> TileInfo(false, TileKind.Waterfall)
-            'C' -> TileInfo(true, TileKind.RockClimb)
+            'C' -> TileInfo(true, TileKind.RockClimb(ClimbAxis.EAST_WEST))
+            'N' -> TileInfo(true, TileKind.RockClimb(ClimbAxis.NORTH_SOUTH), listOf(20))
+            'B' -> TileInfo(false, TileKind.Floor, listOf(0, 40))
             else -> null
         }
     }
@@ -391,6 +394,50 @@ class PathfinderTest {
         val cut = assertIs<FieldMoveEdge>(found.route.edges[1])
         assertEquals(Node(2, 1), cut.to)
         assertTrue(cut.clearsObstacle)
+    }
+
+    @Test
+    fun rockClimbWallsAreClimbedUpAndDownAlongTheirAxis() {
+        // A two-tile wall between a ledge of floor at 40 (top) and the floor at 0 (bottom).
+        val map = area(
+            "HHH",
+            "#N#",
+            "#N#",
+            "...",
+        )
+        val climb = RouteOptions(fieldMoves = setOf(FieldMoveKind.ROCK_CLIMB))
+        // Up: one Rock Climb from the foot (1,3) facing north, over both wall tiles, onto the top.
+        val up = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(1, 0, Node(1, 3), climb))
+        val wall = assertIs<FieldMoveEdge>(up.route.edges.single())
+        assertEquals(FieldMoveKind.ROCK_CLIMB, wall.move)
+        assertEquals(Direction.NORTH, wall.direction)
+        assertEquals(listOf(Node(1, 2), Node(1, 1), Node(1, 0)), wall.tiles)
+        // Down: the same move facing south (walls already climbed are walked back down when that's the way).
+        val down = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(1, 3, Node(1, 0), climb))
+        assertEquals(Direction.SOUTH, assertIs<FieldMoveEdge>(down.route.edges.single()).direction)
+        // Without Rock Climb, the failure names the wall and where to use it from.
+        assertEquals(RouteFailure.NeedsFieldMove(FieldMoveKind.ROCK_CLIMB, 1, 2, Node(1, 3), Direction.NORTH), Pathfinder(map).to(1, 0, Node(1, 3)).needs())
+        // A north-south wall isn't climbed sideways.
+        assertIs<Pathfinder.Result.Failed>(Pathfinder(area(".N.")).to(2, 0, Node(0, 0), climb))
+        // An east-west one is.
+        assertEquals(Direction.EAST, assertIs<FieldMoveEdge>(assertIs<Pathfinder.Result.Found>(Pathfinder(area(".C.")).to(2, 0, Node(0, 0), climb)).route.edges.single()).direction)
+    }
+
+    @Test
+    fun aRockClimbLandsOnTheSurfaceNextToTheWallsEnd() {
+        // The tile after the wall has two surfaces (0 and 40): the climb lands on the one closest to the wall (20 → 0
+        // and 40 are equally far: the lower, first one); a wall ending on a person or on water isn't climbed.
+        val map = area(
+            "B",
+            "N",
+            ".",
+        )
+        val climb = RouteOptions(fieldMoves = setOf(FieldMoveKind.ROCK_CLIMB))
+        val up = assertIs<Pathfinder.Result.Found>(Pathfinder(map).route(Node(0, 2), climb) { it.x == 0 && it.y == 0 })
+        assertEquals(Node(0, 0, 0), up.route.end)
+        val person = Overlay(listOf(LiveObject(0, 0, Direction.SOUTH)))
+        assertIs<Pathfinder.Result.Failed>(Pathfinder(map, person).route(Node(0, 2), climb) { it.x == 0 && it.y == 0 })
+        assertIs<Pathfinder.Result.Failed>(Pathfinder(area("~", "N", ".")).route(Node(0, 2), climb) { it.x == 0 && it.y == 0 })
     }
 
     @Test

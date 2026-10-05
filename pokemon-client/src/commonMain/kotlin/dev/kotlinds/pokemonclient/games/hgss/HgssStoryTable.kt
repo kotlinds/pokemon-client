@@ -589,6 +589,72 @@ object HgssStoryTable {
     /** The step with id [id], or null. */
     fun step(id: String): HgssStoryStep? = steps.firstOrNull { it.id == id }
 
+    /** The map where step [id] happens ([dev.kotlinds.pokemonclient.state.StoryStep.place]), when it is one place. */
+    fun place(id: String): Int? = places[id]
+
+    /** Map ids (include/constants/maps.h) of the places below. */
+    private object Maps {
+        const val ROUTE_10 = 18
+        const val ROUTE_11 = 19
+        const val ROUTE_24 = 28
+        const val ROUTE_25 = 29
+        const val ROUTE_26 = 30
+        const val ROUTE_36 = 40
+        const val PALLET_TOWN = 49
+        const val VIRIDIAN_CITY = 50
+        const val PEWTER_CITY = 51
+        const val CERULEAN_CITY = 52
+        const val LAVENDER_TOWN = 53
+        const val VERMILION_CITY = 54
+        const val CELADON_CITY = 55
+        const val FUCHSIA_CITY = 56
+        const val CINNABAR_ISLAND = 57
+        const val INDIGO_PLATEAU = 58
+        const val SAFFRON_CITY = 59
+        const val NEW_BARK_TOWN = 60
+        const val VIOLET_CITY = 73
+        const val AZALEA_TOWN = 74
+        const val CIANWOOD_CITY = 75
+        const val GOLDENROD_CITY = 76
+        const val OLIVINE_CITY = 77
+        const val ECRUTEAK_CITY = 78
+        const val MAHOGANY_TOWN = 87
+        const val LAKE_OF_RAGE = 88
+        const val BLACKTHORN_CITY = 89
+        const val MOUNT_SILVER = 90
+        const val ROUTE_20 = 92
+        const val ILEX_FOREST = 117
+    }
+
+    /**
+     * Where the steps happen, for the fly suggestions: the town (or route) the step is done in or reached through,
+     * outdoors (where Fly lands). Steps with no single place, or done before the party can fly, have none.
+     */
+    internal val places: Map<String, Int> = with(Maps) {
+        mapOf(
+            "johto:sprout_tower" to VIOLET_CITY, "johto:badge_zephyr" to VIOLET_CITY, "johto:togepi_egg" to VIOLET_CITY,
+            "johto:route_32" to AZALEA_TOWN, "johto:slowpoke_well" to AZALEA_TOWN, "johto:badge_hive" to AZALEA_TOWN,
+            "johto:rival_azalea" to AZALEA_TOWN, "johto:ilex_forest" to ILEX_FOREST, "johto:badge_plain" to GOLDENROD_CITY,
+            "johto:sudowoodo" to ROUTE_36, "johto:burned_tower" to ECRUTEAK_CITY, "johto:badge_fog" to ECRUTEAK_CITY,
+            "johto:surf" to ECRUTEAK_CITY, "johto:lighthouse" to OLIVINE_CITY, "johto:badge_storm" to CIANWOOD_CITY,
+            "johto:fly" to CIANWOOD_CITY, "johto:secretpotion" to CIANWOOD_CITY, "johto:medicine" to OLIVINE_CITY,
+            "johto:badge_mineral" to OLIVINE_CITY, "johto:red_gyarados" to LAKE_OF_RAGE, "johto:lance_lake" to LAKE_OF_RAGE,
+            "johto:rocket_hideout" to MAHOGANY_TOWN, "johto:badge_glacier" to MAHOGANY_TOWN, "johto:radio_tower" to GOLDENROD_CITY,
+            "johto:ice_path" to BLACKTHORN_CITY, "johto:clair" to BLACKTHORN_CITY, "johto:badge_rising" to BLACKTHORN_CITY,
+            "johto:visit_elm" to NEW_BARK_TOWN, "johto:kimono_call" to ECRUTEAK_CITY, "johto:kimono_girls" to ECRUTEAK_CITY,
+            "johto:bell_tower" to ECRUTEAK_CITY, "johto:ho_oh" to ECRUTEAK_CITY, "johto:league_gate" to ROUTE_26,
+            "johto:victory_road" to INDIGO_PLATEAU, "johto:elite_four" to INDIGO_PLATEAU,
+            "kanto:ss_ticket" to NEW_BARK_TOWN, "kanto:ss_aqua" to OLIVINE_CITY,
+            "kanto:badge_thunder" to VERMILION_CITY, "kanto:badge_marsh" to SAFFRON_CITY, "kanto:badge_rainbow" to CELADON_CITY,
+            "kanto:badge_soul" to FUCHSIA_CITY, "kanto:badge_volcano" to ROUTE_20, "kanto:power_plant" to ROUTE_10,
+            "kanto:cerulean_gym_rocket" to CERULEAN_CITY, "kanto:route_24_rocket" to ROUTE_24, "kanto:machine_part" to CERULEAN_CITY,
+            "kanto:restore_power" to ROUTE_10, "kanto:misty" to ROUTE_25, "kanto:badge_cascade" to CERULEAN_CITY,
+            "kanto:expansion_card" to LAVENDER_TOWN, "kanto:snorlax" to ROUTE_11, "kanto:viridian" to VIRIDIAN_CITY,
+            "kanto:badge_boulder" to PEWTER_CITY, "kanto:blue_cinnabar" to CINNABAR_ISLAND, "kanto:badge_earth" to VIRIDIAN_CITY,
+            "kanto:mt_silver_permission" to PALLET_TOWN, "kanto:red" to MOUNT_SILVER,
+        )
+    }
+
     /** Every flag read by the steps and by the curated blockers (what [HgssReader] puts in [StoryInfo.flags]). */
     val flagIds: Set<Int> by lazy { steps.flatMapTo(mutableSetOf()) { it.done.flagIds() } + HgssBlockers.flagIds }
 

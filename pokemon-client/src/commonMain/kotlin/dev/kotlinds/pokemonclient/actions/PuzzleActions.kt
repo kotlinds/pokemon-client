@@ -69,7 +69,7 @@ internal object PushPlans {
                 ?: return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "no map data for ${field.mapName}"))
             val access = FieldMoveWalk.access(context, state)
             strengthMissing(access[FieldMoveKind.STRENGTH])?.let { return ActionOutcome.Failed(it) }
-            val options = MovePlans.routeOptions(field, MoveOptions(), FieldMoveWalk.usable(access))
+            val options = MovePlans.routeOptions(field, MoveOptions(), FieldMoveWalk.usable(access), MovePlans.stepWeights(context, state, MoveOptions()))
             // The puzzle's live state (shutters, people) as walks see it, every mechanism allowed: this is the agent's act.
             val overlay = MovePlans.overlay(context, field, emptySet(), solve = true)
             val start = Node(field.x, field.y, Pathfinder(area, overlay).levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))

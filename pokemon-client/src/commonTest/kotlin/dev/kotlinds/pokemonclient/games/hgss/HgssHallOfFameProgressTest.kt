@@ -10,8 +10,8 @@ import kotlin.test.assertTrue
 
 /**
  * The Hall of Fame shows which Pokémon it presents (`RegisterHallOfFameData.currentScene` / `curMonIndex`), so
- * waiting "until something changes" sees the animation go on. Synthetic RAM laid out like the decomp's struct (no
- * League win was captured in game: the offsets come from src/register_hall_of_fame.c).
+ * waiting "until something changes" sees the animation go on. Synthetic RAM laid out like the decomp's struct
+ * (src/register_hall_of_fame.c); the real screens of a League win are checked in [HgssGameClearFixtureTest].
  */
 class HgssHallOfFameProgressTest {
 

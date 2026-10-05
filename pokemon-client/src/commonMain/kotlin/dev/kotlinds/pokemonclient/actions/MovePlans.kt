@@ -10,6 +10,7 @@ import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.ObstacleKind
 import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.PuzzleState
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.TextSource
@@ -29,6 +30,8 @@ import dev.kotlinds.pokemonclient.world.Pathfinder
 import dev.kotlinds.pokemonclient.world.PlatformPlanner
 import dev.kotlinds.pokemonclient.world.RouteFailure
 import dev.kotlinds.pokemonclient.world.RouteOptions
+import dev.kotlinds.pokemonclient.world.StepWeights
+import dev.kotlinds.pokemonclient.world.EncounterConditions
 import dev.kotlinds.pokemonclient.world.TeleportLink
 import dev.kotlinds.pokemonclient.world.SignKind
 import dev.kotlinds.pokemonclient.world.TileKind
@@ -402,7 +405,7 @@ internal object MovePlans {
             // On the targeted exit mat already (just came in through it): only the press towards the exit is left.
             if (target.warp == true && target.exit != null && field.x == target.x && field.y == target.y) return takeExit(context, target, target.exit, field, options)
             val access = FieldMoveWalk.access(context, state)
-            val routeOptions = routeOptions(field, options, FieldMoveWalk.usable(access))
+            val routeOptions = routeOptions(field, options, FieldMoveWalk.usable(access), stepWeights(context, state, options))
             // A tile target may be entered whatever it is (a warp, a scene trigger); targets reached with A never are.
             val enterable = if (target.adjacent) emptySet() else goalTiles
             // Moving platforms (Blackthorn Gym): plan the rides; a plain route would never step on a trigger knowingly.
@@ -707,16 +710,45 @@ internal object MovePlans {
             .toSet()
     }
 
-    internal fun routeOptions(field: FieldState, options: MoveOptions, fieldMoves: Set<FieldMoveKind> = emptySet()) = RouteOptions(
+    /**
+     * The route options of a walk: the movement, the field moves usable, the agent's [options], and always the
+     * measured costs of turns ([RouteOptions.defaultTurnCost]) and the soft [weights] of what steps may start
+     * ([stepWeights]): bans ([MoveOptions.avoidTallGrass], [MoveOptions.avoidTrainers]) stay the agent's choice.
+     */
+    internal fun routeOptions(field: FieldState, options: MoveOptions, fieldMoves: Set<FieldMoveKind>, weights: StepWeights) = RouteOptions(
         mode = field.movement,
         // Always the measured cost of a turn for this movement ([RouteOptions.defaultTurnCost]): straight lines win.
         turnCost = null,
+        weights = weights,
         canSurf = FieldMoveKind.SURF in fieldMoves,
         avoidTallGrass = options.avoidTallGrass,
         avoidTrainers = options.avoidTrainers,
         acceptOneWay = options.acceptOneWay,
         fieldMoves = fieldMoves,
     )
+
+    /**
+     * The soft step weights of a walk from [state] ([StepWeights]): every zone's wild encounter chance as the game rolls
+     * it now ([dev.kotlinds.pokemonclient.world.WorldSource.encounterChance]) and an unbeaten trainer's battle, in steps
+     * of how the player will move on land:
+     * - the bike when riding (or [MoveOptions.bike] where cycling is allowed), running with [MoveOptions.run] or the
+     *   running shoes switched on ([FieldState.autoRun]), walking otherwise;
+     * - with a Repel at work ([FieldState.repelSteps]), the level of the first Pokémon able to fight: weaker wild
+     *   Pokémon don't appear (a strong enough lead makes the grass free). Its last steps are counted as if it lasted:
+     *   the game stops the walk with a message when it wears off, and the next walk plans without it;
+     * - the item the first Pokémon holds (a Cleanse Tag makes encounters rarer).
+     */
+    internal fun stepWeights(context: PlanContext, state: GameState, options: MoveOptions): StepWeights {
+        val field = state.field
+        val landMovement = when {
+            field?.movement == MovementMode.BIKE || (options.bike && field?.bikeAllowed != false) -> MovementMode.BIKE
+            options.run || field?.autoRun == true -> MovementMode.RUN
+            else -> MovementMode.WALK
+        }
+        val repelLevel = if ((field?.repelSteps ?: 0) > 0) state.party.firstOrNull { !it.isEgg && it.hp > 0 }?.level else null
+        val leadItem = state.party.firstOrNull()?.heldItem?.id?.value
+        return StepWeights.of(context.game.world, EncounterConditions(landMovement, repelLevel, leadItem))
+    }
 
     /**
      * A route moving objects out of the way ([PushPlanner]: Strength boulders, ice blocks), when the overlay has

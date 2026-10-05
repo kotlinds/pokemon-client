@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.Direction
+import dev.kotlinds.pokemonclient.world.ClimbAxis
 import dev.kotlinds.pokemonclient.world.TileKind
 
 /**
@@ -69,6 +70,7 @@ object HgssTileBehaviors {
     const val SLIDE_WEST = 0x41
     const val SLIDE_NORTH = 0x42
     const val SLIDE_SOUTH = 0x43
+    /** `TILE_BEHAVIOR_ROCK_CLIMB_NORTH_SOUTH` / `_EAST_WEST`: Rock Climb walls, climbed along their axis only. */
     const val ROCK_CLIMB_NORTH_SOUTH = 0x4B
     const val ROCK_CLIMB_EAST_WEST = 0x4C
     const val STOP_SLIDING = 0x4D
@@ -110,6 +112,13 @@ object HgssTileBehaviors {
     /** `TILE_BEHAVIOR_FLAG_SURFABLE` set in `sMetatileBehaviorFlags` (src/metatile_behavior.c). */
     private val SURFABLE = setOf(0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x19, 0x2A, 0x50, 0x51, 0x52, 0x53, 0x73, 0x78, 0x7C)
 
+    /**
+     * `TILE_BEHAVIOR_FLAG_SURFABLE_ENCOUNTER` in `sMetatileBehaviorFlags`: surfable water where surfing rolls for wild
+     * Pokémon (river, sea, 18, 42). The other [SURFABLE] behaviours (whirlpools, waterfalls, 20, 25, 80-83, the water
+     * under a bridge, 120, 124) have none.
+     */
+    private val SURF_ENCOUNTER = setOf(0x10, 0x12, 0x15, 0x2A)
+
     /** `TILE_BEHAVIOR_FLAG_ENCOUNTER` set without the surfable flag: walking encounters (grass-like floors). */
     private val LAND_ENCOUNTER = setOf(0x02, 0x03, 0x05, 0x08, 0x0B, 0x25, 0x72, 0x77, 0x7B, 0xA6, 0xA7)
 
@@ -133,7 +142,7 @@ object HgssTileBehaviors {
         BRIDGE_START -> if (blocked) TileKind.Wall else TileKind.Bridge(start = true)
         BRIDGE_TILE, BRIDGE_OVER_GRASS -> if (blocked) TileKind.Wall else TileKind.Bridge()
         BRIDGE_OVER_WATER -> TileKind.Bridge(overWater = true)
-        WATERFALL_TOP -> TileKind.Water(surfable = true, fishable = false)
+        WATERFALL_TOP -> TileKind.Water(surfable = true, fishable = false, wildEncounters = false)
         PLAIN_36 -> if (blocked) TileKind.Wall else TileKind.Floor
         in RAILINGS -> if (blocked) TileKind.Wall else TileKind.Railing(RAILINGS.getValue(behavior))
         TALL_GRASS, VERY_TALL_GRASS -> TileKind.TallGrass
@@ -154,11 +163,12 @@ object HgssTileBehaviors {
         SLIDE_SOUTH -> TileKind.Spinner(Direction.SOUTH)
         // The spinner push (overlay 1, ov01_021F31CC) ends on this tile.
         STOP_SLIDING -> if (blocked) TileKind.Wall else TileKind.SpinnerStop
-        ROCK_CLIMB_NORTH_SOUTH, ROCK_CLIMB_EAST_WEST -> TileKind.RockClimb
+        ROCK_CLIMB_NORTH_SOUTH -> TileKind.RockClimb(ClimbAxis.NORTH_SOUTH)
+        ROCK_CLIMB_EAST_WEST -> TileKind.RockClimb(ClimbAxis.EAST_WEST)
         COUNTER -> TileKind.Counter
         PC -> TileKind.Pc
         in WARPS -> TileKind.Door
-        in SURFABLE -> TileKind.Water(surfable = true, fishable = true)
+        in SURFABLE -> TileKind.Water(surfable = true, fishable = true, wildEncounters = behavior in SURF_ENCOUNTER)
         in LAND_ENCOUNTER -> TileKind.TallGrass
         in COSMETIC_FLOOR -> if (blocked) TileKind.Wall else TileKind.Floor
         NONE -> if (blocked) TileKind.Wall else TileKind.Floor

@@ -77,6 +77,22 @@ internal class HgssSave(private val mem: HgssMemory) {
         )
     }
 
+    /**
+     * Steps left of the Repel at work (`RoamerSaveData.repelSteps`, save array SAVE_ROAMER; 0 when none: the encounter
+     * check tests `RoamerSave_RepelNotInUse`), null when unreadable.
+     */
+    fun repelSteps(): Int? = array(SAVE_ROAMER)?.let { mem.u8(it + ROAMER_REPEL_STEPS) }
+
+    /**
+     * The player runs without holding B: the running shoes are owned and switched on with the touch screen's shoe
+     * button (`PlayerSaveData` in the LocalFieldData save array: `hasRunningShoes`, `runningShoesLock`, which
+     * FieldInput_Update turns into B held). Null when unreadable.
+     */
+    fun autoRun(): Boolean? {
+        val local = array(A.SAVE_LOCAL_FIELD_DATA) ?: return null
+        return mem.u16(local + LFD_HAS_RUNNING_SHOES) != 0 && mem.u16(local + LFD_RUNNING_SHOES_LOCK) != 0
+    }
+
     /** `PCStorage *` (SAVE_PCSTORAGE), or null. */
     fun pcStorage(): Long? = array(SAVE_PCSTORAGE)
 
@@ -95,6 +111,23 @@ internal class HgssSave(private val mem: HgssMemory) {
 
         /** `PlayerData.options` (include/player_data.h). */
         const val PD_OPTIONS = 0x00L
+
+        /** `SAVE_ROAMER` (include/constants/save_arrays.h): `RoamerSaveData` (include/roamer.h). */
+        const val SAVE_ROAMER = 21
+
+        /**
+         * `RoamerSaveData.repelSteps`: after `u32 rand[2]`, `u32 playerLocationHistory[2]`, `Roamer data[4]` (20 bytes
+         * each), `u8 locations[4]`, `u8 outbreak` (the next field, `unk_66`, confirms the offset).
+         */
+        const val ROAMER_REPEL_STEPS = 0x65L
+
+        /**
+         * `LocalFieldData.player` (src/save_local_field_data.c): after five `Location`s (20 bytes each), `u16 musicId`,
+         * `u16 weather`, `u16 lastSpawn`, `u8 cameraType` and the padding to 4 bytes: `u16 hasRunningShoes` at 0x6C,
+         * `u16 runningShoesLock` at 0x6E (`filler7A` after the counters at 0x74-0x79 confirms it).
+         */
+        const val LFD_HAS_RUNNING_SHOES = 0x6CL
+        const val LFD_RUNNING_SHOES_LOCK = 0x6EL
     }
 }
 

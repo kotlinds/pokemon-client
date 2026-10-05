@@ -1,6 +1,8 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BattleKind
+import dev.kotlinds.pokemonclient.state.BattleOutcome
 import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.BattlerState
 import dev.kotlinds.pokemonclient.state.GameState
@@ -87,6 +89,20 @@ enum class BattleEnd(
 
     /** Another battle over (wild: the foe fainted, was caught, or someone fled): the messages tell which. */
     OVER("BATTLE_OVER", "the battle is over (the foe fainted, was caught or fled: see the messages): the battle steps left were dropped (nothing to act on), the field steps went on"),
+    ;
+
+    companion object {
+        /**
+         * The end of a battle of [kind] the game decided as [outcome]. A draw (the last foe and the player's last
+         * Pokémon fainting together) is a loss: the game runs its battle-lost script for it ([BattleOutcome.DRAW]).
+         * A wild battle won is only "over" (the foe fainted), like a capture or a flight.
+         */
+        fun of(outcome: BattleOutcome, kind: BattleKind): BattleEnd = when (outcome) {
+            BattleOutcome.LOST, BattleOutcome.DRAW -> LOST
+            BattleOutcome.WON -> if (kind == BattleKind.TRAINER) WON else OVER
+            BattleOutcome.CAUGHT, BattleOutcome.PLAYER_FLED, BattleOutcome.FOE_FLED -> OVER
+        }
+    }
 }
 
 /** How long a chain may go on: [idle] without any progress in the game, [total] in all whatever the progress. */
@@ -95,17 +111,36 @@ data class ChainLimits(val idle: Duration, val total: Duration)
 /**
  * The battle as a chain found it, to stop the chain when what its steps were chosen for is gone: an opponent replaced
  * or fainted, or one of the player's battling Pokémon fainted. A switch the chain itself makes isn't a reason (only
- * faints count on the player's side). Once the battle is over, [ended] tells how, for the battle steps left to be
- * dropped ([isBattleStep]).
+ * faints count on the player's side), but the Pokémon it sends in is watched like the others: `switch` to Ho-Oh then
+ * `attack`, Ho-Oh knocked out by the switch turn, stops the chain with OWN_FAINTED. Once the battle is over, or decided
+ * while still on screen ([dev.kotlinds.pokemonclient.state.BattleState.outcome]), [ended] tells how, for the battle
+ * steps left to be dropped ([isBattleStep]).
  */
 class BattleWatch private constructor(
     private val kind: BattleKind,
     private val foes: Map<BattlerRef, BattlerState>,
     private val own: Map<MonId, String>,
+    /** The player's Pokémon already down on the field when the chain started (waiting to be replaced): no news. */
+    private val downAtStart: Set<MonId>,
 ) {
-    /** Why the chain must stop in [now], the battle going on (null: go on, or the battle is over: see [ended]). */
+    /**
+     * The outcome first seen while the battle was still on screen: once it has left the screen the party may tell
+     * otherwise (a draw is a loss, but the blackout heals the team before the chain looks again). The first one
+     * sticks: a later battle the chain walks into is another one.
+     */
+    private var decided: BattleOutcome? = null
+        set(value) {
+            if (field == null) field = value
+        }
+
+    /**
+     * Why the chain must stop in [now], the battle going on (null: go on, or the battle is over or decided: see
+     * [ended]). A decided battle stops nothing: its last foe fainting is a win (or, with the player's last Pokémon, a
+     * loss), told as the battle's end, not as FOE_FAINTED / OWN_FAINTED.
+     */
     fun check(now: GameState): ChainStop? {
         val battle = now.battle ?: return null
+        battle.outcome?.let { decided = it; return null }
         val current = battle.battlers.filter { !it.ref.isPlayerSide }.associateBy { it.ref }
         for (ref in (foes.keys + current.keys).distinct().sortedBy { it.ordinal }) {
             val was = foes[ref]
@@ -124,14 +159,37 @@ class BattleWatch private constructor(
         own.forEach { (mon, name) ->
             if ((battlerHp[mon] ?: partyHp[mon]) == 0) return ChainStop.OwnFainted(mon, name)
         }
+        // A Pokémon of the player that came in during the chain (its own switch, a replacement after a K.O. it started
+        // on) and is down now: the steps after it were chosen for it too.
+        battle.battlers.firstOrNull { it.ref.isPlayerSide && it.hp == 0 && it.mon != null && it.mon !in own && it.mon !in downAtStart }
+            ?.let { return ChainStop.OwnFainted(it.mon!!, name(it)) }
         return null
     }
 
-    /** How the chain's battle ended, when [now] is out of it (null while it goes on). */
-    fun ended(now: GameState): ChainStop.BattleOver? = if (now.battle == null) ChainStop.BattleOver(end(now)) else null
+    /**
+     * The game decided the battle as [outcome], seen frame by frame while the chain's steps ran (null: not seen; the
+     * first decision seen since the chain started is its battle's). The chain itself only looks between steps, often
+     * once the battle has left the screen: by then a loss can't be told from the state (the blackout heals the team
+     * at once).
+     */
+    fun saw(outcome: BattleOutcome?) {
+        if (outcome != null) decided = outcome
+    }
 
-    /** How the battle ended, from the state after it (see [BattleEnd]). */
+    /**
+     * How the chain's battle ended, when [now] is out of it or the game already decided it while it is still on
+     * screen (null while it goes on).
+     */
+    fun ended(now: GameState): ChainStop.BattleOver? {
+        val battle = now.battle ?: return ChainStop.BattleOver(end(now))
+        val outcome = battle.outcome ?: return null
+        decided = outcome
+        return ChainStop.BattleOver(BattleEnd.of(outcome, kind))
+    }
+
+    /** How the battle ended, from the outcome seen while it was on screen, else from the state after it (see [BattleEnd]). */
     private fun end(now: GameState): BattleEnd {
+        decided?.let { return BattleEnd.of(it, kind) }
         val team = now.party.filter { !it.isEgg }
         return when {
             team.isNotEmpty() && team.all { it.hp == 0 } -> BattleEnd.LOST
@@ -146,7 +204,8 @@ class BattleWatch private constructor(
             val battle = state.battle ?: return null
             val foes = battle.battlers.filter { !it.ref.isPlayerSide && it.hp > 0 }.associateBy { it.ref }
             val own = battle.battlers.filter { it.ref.isPlayerSide && it.hp > 0 }.mapNotNull { b -> b.mon?.let { it to name(b) } }.toMap()
-            return BattleWatch(battle.kind, foes, own)
+            val down = battle.battlers.filter { it.ref.isPlayerSide && it.hp == 0 }.mapNotNull { it.mon }.toSet()
+            return BattleWatch(battle.kind, foes, own, down).also { watch -> battle.outcome?.let { watch.decided = it } }
         }
 
         /**
@@ -215,16 +274,29 @@ data class ChainResult(
  * - before a step, when the game made no progress for [ChainLimits.idle] ([idle], from the recorder's
  *   `ProgressClock`) or the chain has run [ChainLimits.total] in all: long chains go on while things keep happening.
  *
- * Once the battle the chain started in is over, its battle steps left ([BattleWatch.isBattleStep]) are dropped
- * ([ChainResult.dropped], with how it ended) and the field steps go on: `attack, attack, interact` ending the battle
- * with the first attack still talks to the trainer behind.
+ * Once the battle the chain started in is over, or decided while its last messages are still on screen (the last foe
+ * fainting together with the player's Pokémon: a win, not FOE_FAINTED), its battle steps left
+ * ([BattleWatch.isBattleStep]) are dropped ([ChainResult.dropped], with how it ended) and the field steps go on:
+ * `attack, attack, interact` ending the battle with the first attack still talks to the trainer behind.
  *
- * [observe] reads the state, [execute] carries out one step (with its index: the first one is checked against the
- * agent's version), [onStep] is told before each step starts (progress for remote agents).
+ * A battle is only checked once the game waits for input again: a step may come back while its turn still plays out
+ * (the step's own settling has a frame budget: a long recipe leaves little), the foe's attack and the K.O. it causes
+ * not in RAM yet. Before checking, [settle] lets the game run by itself (frames only, never a button) until it waits
+ * for input, as the next step's recipe would do anyway before acting ([ActionRegistry] settles a busy screen before
+ * refusing): the check then sees what that step will find. Raw input steps (press, touch, drag, wait,
+ * advance_dialogue) are about timing and act on the busy screen itself: no settling before them.
+ *
+ * [observe] reads the state, [settle] lets the game settle then reads it (by default only reads: no frame runs),
+ * [execute] carries out one step (with its index: the first one is checked against the agent's version), [onStep] is
+ * told before each step starts (progress for remote agents), [decided] tells how the game decided the battle as seen
+ * frame by frame since the chain started (the recorder's [dev.kotlinds.pokemonclient.state.GameEvent.BattleDecided]):
+ * without it a lost battle that left the screen during a step reads as won (the team is healed by the blackout).
  */
 class ChainRunner(
     private val observe: suspend () -> GameState,
     private val execute: suspend (action: GameAction, index: Int) -> ActionOutcome,
+    private val settle: suspend () -> GameState = observe,
+    private val decided: () -> BattleOutcome? = { null },
     private val limits: ChainLimits? = null,
     private val idle: () -> Duration = { Duration.ZERO },
     private val timeSource: TimeSource = TimeSource.Monotonic,
@@ -246,6 +318,7 @@ class ChainRunner(
 
         /** True when [action] is a battle step and the chain's battle is over in [now]: it is dropped. */
         fun drops(action: GameAction, now: GameState): Boolean {
+            watch?.saw(decided())
             val over = watch?.ended(now) ?: return false
             if (!BattleWatch.isBattleStep(action, now)) return false
             ended = ended ?: over
@@ -255,7 +328,7 @@ class ChainRunner(
 
         for ((index, action) in actions.withIndex()) {
             if (index > 0) {
-                val now = observe()
+                val now = observe().let { if (busyBattle(it) && !isRawInput(action)) settle() else it }
                 if (drops(action, now)) continue
                 stopBefore(watch, now, started)?.let { stop -> return result(skipped = actions.drop(index), stop = stop) }
             }
@@ -286,6 +359,15 @@ class ChainRunner(
             }
         }
         return result()
+    }
+
+    /** The battle still plays out by itself in [state] (a turn, faint messages, the end of the battle). */
+    private fun busyBattle(state: GameState): Boolean = state.battle != null && state.screen.awaiting != Awaiting.INPUT
+
+    /** Steps that press, touch or wait themselves: they act on the screen as it is, busy or not. */
+    private fun isRawInput(action: GameAction): Boolean = when (action) {
+        is GameAction.Press, is GameAction.Touch, is GameAction.Drag, is GameAction.Wait, GameAction.AdvanceDialogue -> true
+        else -> false
     }
 
     /** Why the next step mustn't start in [now] (see the class). */

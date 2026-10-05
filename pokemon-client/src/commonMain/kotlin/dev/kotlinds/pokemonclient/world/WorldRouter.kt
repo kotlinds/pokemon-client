@@ -7,7 +7,8 @@ import dev.kotlinds.pokemonclient.Direction
  * ([WorldLinks]). One Dijkstra over (area, [Node]) pairs: inside an area the moves are the [Pathfinder]'s; stepping
  * onto a warp (or pressing its direction on an exit mat) or onto a hole jumps to the arrival tile of the other zone.
  * Changes of direction cost [RouteOptions.turnPenalty] like in the [Pathfinder] (the search state also holds the
- * direction the player arrived in, with the same cut of the headings that can't be cheaper).
+ * direction the player arrived in, with the same cut of the headings that can't be cheaper), and the moves their soft
+ * costs ([RouteOptions.weights]: wild encounters by zone, trainers' sight where the overlay shows trainers).
  *
  * The live state is only known for the player's zone ([overlayFor] gives the people, refused steps and active
  * triggers there); other zones use the static maps with their obstacle objects where the map places them
@@ -63,7 +64,6 @@ class WorldRouter(
         }
         val startPlace = Place(startArea, start)
         val first = State(startPlace, null)
-        val turnCost = options.turnPenalty
         val dist = HashMap<State, Int>()
         val previous = HashMap<State, Pair<State, ZoneLink?>>()
         // The cheapest cost each place was explored for (in its area: the same node in two areas is two places).
@@ -78,12 +78,15 @@ class WorldRouter(
             val place = state.place
             val known = settled.getOrPut(place.area) { HashMap() }
             val firstVisit = place.node !in known
+            val zone = place.zone ?: startZone
+            val here = info(place.area, zone)
+            // A turn costs more where wild Pokémon appear (see Pathfinder.turnCostAt); soft costs are left out while
+            // looking for what blocks a route.
+            val turnCost = here.pathfinder.turnCostAt(place.node, options, soft = !relaxed && !ignorePeople)
             if (turnDominated(known, place.node, d, turnCost)) continue
             if (place != startPlace && isGoal(place)) return WorldRoute(links(previous, first, state), place, d, places(previous, first, state))
             // The bound counts places, not headings: the same reach as a search without turns.
             if (firstVisit && ++explored > maxNodes) return null
-            val zone = place.zone ?: startZone
-            val here = info(place.area, zone)
             fun relax(next: Place, cost: Int, via: ZoneLink?, direction: Direction?) {
                 val nd = d + cost
                 val to = State(next, direction)

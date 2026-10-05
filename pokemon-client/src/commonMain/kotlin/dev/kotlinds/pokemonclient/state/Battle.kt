@@ -25,11 +25,46 @@ data class BattleState(
     val ballShakes: Int? = null,
     /** The game's ids of the opposing trainers ([FieldTrainer.trainerId]), in the order of [trainers]; empty when unknown. */
     val trainerIds: List<Int> = emptyList(),
+    /**
+     * How the battle ends, once the game decided it while the battle is still on screen (its last messages: the
+     * faints, "Player defeated...", the prize money); null while it goes on. The battle may be decided a while before
+     * it leaves the screen: the last foe and the player's Pokémon both fainting (Destiny Bond, Explosion) shows two
+     * faints before the end.
+     */
+    val outcome: BattleOutcome? = null,
 ) {
     companion object {
         /** [ballShakes] of a ball that catches the Pokémon. */
         const val CAUGHT_SHAKES = 4
     }
+}
+
+/**
+ * How the game decided a battle ends (`battleOutcomeFlag`, include/constants/battle.h `BATTLE_OUTCOME_*`, or the same
+ * rule computed a little earlier from the Pokémon still standing, see [BattleState.outcome]).
+ */
+enum class BattleOutcome {
+    /** The opposing side has no Pokémon left able to battle, the player has. */
+    WON,
+
+    /** The player has no Pokémon left able to battle. */
+    LOST,
+
+    /**
+     * Both sides ran out of Pokémon at once (the last foe fainting together with the player's last Pokémon). The game
+     * treats it as a loss (`IsBattleResultWin`, src/battle/battle_setup.c: DRAW is not a win; the controller runs the
+     * battle-lost script for it, src/battle/battle_controller_player.c).
+     */
+    DRAW,
+
+    /** The wild Pokémon was caught. */
+    CAUGHT,
+
+    /** The player fled. */
+    PLAYER_FLED,
+
+    /** The wild Pokémon fled (Roar, Teleport, a roamer). */
+    FOE_FLED,
 }
 
 /** Kinds of battles. */

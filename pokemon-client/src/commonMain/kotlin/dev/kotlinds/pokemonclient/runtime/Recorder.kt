@@ -145,6 +145,11 @@ class Recorder(
         if (screen !is Screen.Dialogue && pressedText == null && banner == null && screen !is Screen.Animation && !askingLastText) lastText = null
         recordBattleMessage(frame, message)
         if (now.battle == null) lastBattleMessage = null
+        // The battle's outcome, once decided (the chains read it after the battle, when the state no longer tells it).
+        val outcome = now.battle?.outcome
+        if (outcome != null && outcome != before?.battle?.outcome && now.battle.kind != BattleKind.DEMO) {
+            log.append { GameEvent.BattleDecided(it, frame, outcome, now.battle.kind) }
+        }
 
         if (before == null) {
             now.party.forEach { known[it.id] = it; pastSpecies.getOrPut(it.id) { mutableSetOf() } += it.species.id }

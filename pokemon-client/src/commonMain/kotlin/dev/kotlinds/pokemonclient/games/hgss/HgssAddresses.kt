@@ -418,6 +418,16 @@ object HgssAddresses {
     const val TRAINER_NAME = 0x14L
     const val BS_BATTLE_INPUT = 0x19CL
     const val BS_SAFARI_BALLS = 0x2414L
+    /**
+     * u8 battleOutcomeFlag (BATTLE_OUTCOME_* include/constants/battle.h: 1 win, 2 lose, 3 draw, 4 caught, 5 player
+     * fled, 6 foe fled; 0 while undecided): set by the controller's end check (ov12_0224D7EC,
+     * src/battle/battle_controller_player.c) once the faints are processed. Right after safariBallCnt (0x2414),
+     * unk2418[4], unk241C.
+     */
+    const val BS_OUTCOME_FLAG = 0x2420L
+
+    /** BATTLE_TYPE_MULTI | BATTLE_TYPE_TAG (include/constants/battle.h): a partner's party counts with the side's. */
+    const val BATTLE_TYPE_PARTNER_PARTIES = 0x8L or 0x10L
 
     const val BC_SELECTED_MON_INDEX = 0x219CL // u8[4] party slot of each battler
     const val BC_BATTLE_MONS = 0x2D40L
@@ -547,6 +557,7 @@ data class HgssVersion(
     val fnTaskStartMenu: Long,         // Task_StartMenu (start_menu.o)
     val fnTaskWildEncounter: Long,     // Task_WildEncounter (encounter.o)
     val fnTaskFollowMonInteract: Long, // Task_FollowMonInteract (overlay 2): talking to the following Pokémon
+    val fnTaskGameClear: Long,         // Task_GameClear (game_clear.o): Hall of Fame, save, credits after the Champion
 
     // --- Native script waits (ScriptContext.native_ptr), src/scrcmd_c.c ---
     val fnScrWaitABPress: Long,        // sub_02041000 (ScrCmd_WaitABPress)
@@ -613,6 +624,7 @@ data class HgssVersion(
             fnTaskStartMenu = 0x0203BEF0L,
             fnTaskWildEncounter = 0x02050C18L,
             fnTaskFollowMonInteract = 0x02250110L,
+            fnTaskGameClear = 0x02052AA0L,
             fnScrWaitABPress = 0x02041000L,
             fnScrWaitButtonOrDelay = 0x02041040L,
             fnScrWaitButton = 0x02041074L,

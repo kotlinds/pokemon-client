@@ -94,6 +94,8 @@ data class PlayerInfo(
     val playTime: Triple<Int, Int, Int>? = null,
     /** The badges owned by id: bit n of the Johto byte is n, bit n of the Kanto byte is 8 + n. */
     val badgeIds: Set<Int> = emptySet(),
+    /** The fly points visited (`FLAG_SYS_FLYPOINT_*` set), as indexes into [HgssFlyMapAddresses.FLYPOINTS]. */
+    val flyPoints: List<Int> = emptyList(),
 )
 
 @Serializable
@@ -319,6 +321,13 @@ data class BattleInfo(
     /** Last battle message put in the message buffer (may be stale once printed). */
     val message: String? = null,
     val safariBalls: Int? = null,
+    /** The game's `battleOutcomeFlag` (BATTLE_OUTCOME_*: 0 undecided, 1 win, 2 lose, 3 draw, 4 caught, 5/6 fled). */
+    val outcomeFlag: Int = 0,
+    /**
+     * Sides with no Pokémon left able to battle (0 the player's, 1 the opponent's), by the game's own end rule computed
+     * from what is in RAM before the game runs it: the end flag is only set once the faint messages are over.
+     */
+    val sidesOut: Set<Int> = emptySet(),
 )
 
 @Serializable

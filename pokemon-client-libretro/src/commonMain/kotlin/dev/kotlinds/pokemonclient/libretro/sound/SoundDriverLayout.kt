@@ -44,6 +44,11 @@ data class SoundDriverLayout(
      * (they are linked together): `sFinishedTag` block, waiting-list queue, current tag.
      */
     val arm9Commands: Arm9CommandLayout,
+    /**
+     * The game's own music logic (its ARM9 code, above the SDK), when known: tells a song change the game has queued
+     * (see [GameMusicLayout]). Null: unknown, and pauses are never put off for a song change.
+     */
+    val gameMusic: GameMusicLayout? = null,
 ) {
     /** A range of bus addresses [start, start + size). */
     data class AddressRange(val start: Int, val size: Int)
@@ -59,6 +64,38 @@ data class SoundDriverLayout(
         /** Number of slots of the waiting queue. */
         val waitingSlots: Int = 9,
     )
+
+    /**
+     * Where a game keeps its own music state machine: the ARM9 game code that changes the song, above the SDK sound
+     * driver. Unlike the driver (one ARM7 build, shared by every game built with it), these are addresses of one game's
+     * ARM9 binary, so they only apply to the ROM they were read from ([gameCode], [romVersion]). See [GameMusicPhase]
+     * for what its states mean.
+     */
+    data class GameMusicLayout(
+        /** The ROM header's game code (0x0C, e.g. `IPKE`), for which these addresses hold. */
+        val gameCode: String,
+        /** The ROM header's version byte (0x1E). */
+        val romVersion: Int,
+        /** The game's sound state machine (a u32 in main RAM). */
+        val state: Int,
+        /** [state] once the music was stopped (no song). */
+        val stoppedState: Int,
+        /** [state] the tick a song was started (it plays from the next one). */
+        val startingState: Int,
+        /** [state] while the music fades out, to stop or for the next map's song ([fadeTimer] running). */
+        val fadingOutStates: Set<Int>,
+        /** [state] values while a queued song waits for the fade (and the delay after it) to end. */
+        val songQueuedStates: Set<Int>,
+        /** The fade-out countdown (u16 used, in ticks of the game's sound update). */
+        val fadeTimer: Int,
+        /** The countdown after the fade, before the queued song starts (u16 used). */
+        val afterFadeTimer: Int,
+        /** The song started once the countdowns end (u16; 0: none). */
+        val queuedSong: Int,
+    ) {
+        /** Every main RAM address read (4 bytes each), to keep in test fixtures ([SoundFixtures]). */
+        val addresses: List<Int> get() = listOf(state, fadeTimer, afterFadeTimer, queuedSong)
+    }
 
     companion object {
         /** ARM7 WRAM base address. */
@@ -89,13 +126,36 @@ data class SoundDriverLayout(
             commandQueue = 0x0380858C,
             lockedChannels = listOf(0x038073E8, 0x038073E4),
             arm9Commands = Arm9CommandLayout(waitingQueue = -0x3C, waitingWrite = -0x48, currentTag = -0x40),
+            // pret/pokeheartgold `build/heartgold.us/main.elf.xMAP`: `_0211194C`, `sSoundWork` at 0x02111958
+            // (`fadeTimer` +0xBEBF0, `unk_BEBF4` +0xBEBF4, `queuedSeqNo` +0xBEBFE, `src/sound.c` `GF_SndCallback`,
+            // `asm/unk_02005D10.s` `PlayBGM` / `GF_SndStartFadeOutBGM`, `asm/unk_02004A44.s` `GF_NowStartMusicId`).
+            gameMusic = GameMusicLayout(
+                gameCode = "IPKE",
+                romVersion = 0,
+                state = 0x0211194C,
+                stoppedState = 0,
+                startingState = 1,
+                fadingOutStates = setOf(4),
+                songQueuedStates = setOf(5, 6),
+                fadeTimer = 0x021D0548,
+                afterFadeTimer = 0x021D054C,
+                queuedSong = 0x021D0556,
+            ),
         )
 
         /** Every known layout. */
         val KNOWN = listOf(HEARTGOLD_US)
 
-        /** The layout of the ROM's ARM7 binary, or null when this build isn't supported. */
-        fun forRom(rom: Path): SoundDriverLayout? = arm7Sha1(rom)?.let { hash -> KNOWN.firstOrNull { it.arm7Sha1 == hash } }
+        /**
+         * The layout of the ROM's ARM7 binary, or null when this build isn't supported. Its [gameMusic] only stays when
+         * the ROM is the very game it was read from (another game may share the ARM7 build: SoulSilver).
+         */
+        fun forRom(rom: Path): SoundDriverLayout? = arm7Sha1(rom)?.let { hash -> KNOWN.firstOrNull { it.arm7Sha1 == hash } }?.let { layout ->
+            val music = layout.gameMusic ?: return@let layout
+            val header = if (Files.size(rom) >= 0x200) Files.readRange(rom, 0, 0x20) else return@let layout.copy(gameMusic = null)
+            val sameGame = header.copyOfRange(0x0C, 0x10).decodeToString() == music.gameCode && (header[0x1E].toInt() and 0xFF) == music.romVersion
+            if (sameGame) layout else layout.copy(gameMusic = null)
+        }
 
         /** SHA-1 of the ROM's ARM7 binary (offset and size from the ROM header), or null if the header is invalid. */
         fun arm7Sha1(rom: Path): String? {

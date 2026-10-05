@@ -8,6 +8,7 @@ import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BagItem
 import dev.kotlinds.pokemonclient.state.AbilityId
 import dev.kotlinds.pokemonclient.state.BattleKind
+import dev.kotlinds.pokemonclient.state.BattleOutcome
 import dev.kotlinds.pokemonclient.state.BattleStat
 import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.BattlerRef
@@ -29,6 +30,7 @@ import dev.kotlinds.pokemonclient.state.MoveContext
 import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.Named
+import dev.kotlinds.pokemonclient.state.FlyDestination
 import dev.kotlinds.pokemonclient.state.PlayerInfo
 import dev.kotlinds.pokemonclient.state.PlayTime
 import dev.kotlinds.pokemonclient.state.ReadWarning
@@ -125,7 +127,16 @@ class HgssStateMapper {
             frame = state.frame,
             screen = screen,
             player = state.player?.let { p ->
-                PlayerInfo(p.name, p.money, p.badges, p.trainerId, p.playTime?.let { (h, m, s) -> PlayTime(h, m, s) }, badgeIds = p.badgeIds)
+                PlayerInfo(
+                    p.name, p.money, p.badges, p.trainerId, p.playTime?.let { (h, m, s) -> PlayTime(h, m, s) }, badgeIds = p.badgeIds,
+                    flyDestinations = p.flyPoints.mapNotNull { HgssFlyMapAddresses.FLYPOINTS.getOrNull(it) }.map { point ->
+                        FlyDestination(
+                            point.id, point.warpMap, HgssData.mapLocation(point.nameMap) ?: HgssData.mapName(point.nameMap),
+                            fromAnyRegion = point.warpMap in HgssFlyMapAddresses.ALWAYS_FLYABLE,
+                            regionHub = point.warpMap == HgssFlyMapAddresses.MAP_INDIGO_PLATEAU,
+                        )
+                    },
+                )
             },
             party = party,
             bag = state.bag?.map { pocket ->
@@ -202,8 +213,8 @@ class HgssStateMapper {
     private fun story(state: HgssState): StoryState? {
         val story = state.story ?: return null
         val mapId = state.location?.mapId
-        val open = HgssStoryTable.openGoals(story).map { StoryStep(it.id, it.describe(mapId)) }
-        val goal = open.firstOrNull() ?: HgssStoryTable.goal(story)?.let { StoryStep(it.id, it.describe(mapId)) }
+        val open = HgssStoryTable.openGoals(story).map { StoryStep(it.id, it.describe(mapId), HgssStoryTable.place(it.id)) }
+        val goal = open.firstOrNull() ?: HgssStoryTable.goal(story)?.let { StoryStep(it.id, it.describe(mapId), HgssStoryTable.place(it.id)) }
         val blockers = if (state.mode in FIELD_MODES) HgssBlockers.of(state) else emptyList()
         return StoryState(goal, blockers, open.ifEmpty { listOfNotNull(goal) })
     }
@@ -443,7 +454,28 @@ class HgssStateMapper {
             partyOrder = b.partyOrder.mapNotNull { bySlot[it]?.id },
             message = b.message,
             turn = b.turn,
+            outcome = outcome(b),
         )
+    }
+
+    /**
+     * How the battle ends once decided: the game's flag when set, else its end rule computed from the Pokémon still
+     * standing ([BattleInfo.sidesOut]), both sides out being a draw (a loss for the game, see [BattleOutcome.DRAW]).
+     */
+    private fun outcome(b: BattleInfo): BattleOutcome? = when (b.outcomeFlag) {
+        1 -> BattleOutcome.WON
+        2 -> BattleOutcome.LOST
+        3 -> BattleOutcome.DRAW
+        4 -> BattleOutcome.CAUGHT
+        5 -> BattleOutcome.PLAYER_FLED
+        6 -> BattleOutcome.FOE_FLED
+        // 0 (undecided), or the escape-attempt bits (BATTLE_RESULT_TRY_FLEE*) while a flight is being tried.
+        else -> when {
+            b.sidesOut.containsAll(listOf(0, 1)) -> BattleOutcome.DRAW
+            1 in b.sidesOut -> BattleOutcome.WON
+            0 in b.sidesOut -> BattleOutcome.LOST
+            else -> null
+        }
     }
 
     // endregion

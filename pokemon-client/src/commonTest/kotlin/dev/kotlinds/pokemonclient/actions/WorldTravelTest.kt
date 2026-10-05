@@ -66,7 +66,7 @@ private class FloorsGame(
     override val name = "Floors"
     override val world = object : WorldSource {
         override fun areaOf(zoneId: Int) = areas[zoneId]
-        override val zoneCount get() = 10
+        override val zoneCount get() = maxOf(10, areas.keys.max() + 1)
     }
     override fun zoneName(id: Int) = "Floor $id"
     override fun scriptVariable(memory: Memory, id: Int) = 0
@@ -358,6 +358,18 @@ class WorldTravelTest {
         val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 9"), game.context()))
         assertEquals(9, game.zone, done.detail)
         assertEquals((1..9).toList(), game.zonesVisited)
+    }
+
+    @Test
+    fun aGoToOfAsManyWarpsAsAllowedArrives() {
+        // Floors 1..13 in a row (a warp east to the next one, arriving on its west end): 12 warps, the most one go_to
+        // takes (Mt. Silver's summit to its Pokémon Center), then the walk on the last floor.
+        val floors = (1..13).associateWith { k ->
+            floor(k, listOf("..."), warps = listOfNotNull(Warp(k, 0, 0, 0, k - 1, 1).takeIf { k > 1 }, Warp(k, 1, 2, 0, k + 1, 0).takeIf { k < 13 }))
+        }
+        val game = FloorsGame(floors, zone = 1, x = 1, y = 0, transitionFrames = 10)
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null, map = "Floor 13"), game.context()))
+        assertEquals(Triple(13, 2, 0), Triple(game.zone, game.x, game.y), done.detail)
     }
 
     @Test

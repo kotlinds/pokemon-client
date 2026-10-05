@@ -1,6 +1,9 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.Direction
+import dev.kotlinds.pokemonclient.world.ClimbAxis
+import dev.kotlinds.pokemonclient.world.FieldMoveEdge
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Pathfinder
 import dev.kotlinds.pokemonclient.world.RouteOptions
@@ -124,4 +127,51 @@ class HgssWorldRoutingTest {
         // From the Fuchsia side it's open water.
         assertIs<Pathfinder.Result.Found>(Pathfinder(area).route(Node(1135, 497), surfing) { it.x == 1150 && it.y == 500 })
     }
+
+    // region Mt. Silver: Rock Climb
+
+    /** The field moves of the 16-badge save (Surf, Waterfall, Whirlpool, Strength, Rock Climb). */
+    private val climber = RouteOptions(
+        fieldMoves = setOf(FieldMoveKind.SURF, FieldMoveKind.WATERFALL, FieldMoveKind.WHIRLPOOL, FieldMoveKind.STRENGTH, FieldMoveKind.ROCK_CLIMB),
+    )
+
+    @Test
+    fun `the Upper Mountainside's pockets are linked by Rock Climb walls`() {
+        // Zone 459 (D41R0102): two-tile north-south walls between bands of floor 32 units apart (BDHC 144 / 176...).
+        val area = assertNotNull(world.areaOf(459))
+        assertEquals(TileKind.RockClimb(ClimbAxis.NORTH_SOUTH), area.tile(14, 42)?.kind)
+        assertEquals(TileKind.RockClimb(ClimbAxis.NORTH_SOUTH), area.tile(20, 51)?.kind)
+        // From the arrival of 2F's warp (18,51) to the ladder up to 3F (14,39): three walls climbed in a row, each
+        // landing on the floor of the band above (the chain the agent found by reading the levels by hand).
+        val found = assertIs<Pathfinder.Result.Found>(Pathfinder(area).route(Node(18, 51), climber, goalTiles = setOf(14 to 39)) { it.x == 14 && it.y == 39 })
+        val climbs = found.route.edges.filterIsInstance<FieldMoveEdge>()
+        assertEquals(listOf(FieldMoveKind.ROCK_CLIMB), climbs.map { it.move }.distinct())
+        assertEquals(listOf(Node(20, 49), Node(16, 45), Node(14, 41)), climbs.map { it.to })
+        assertTrue(climbs.all { it.direction == Direction.NORTH })
+        // Without Rock Climb, the first wall is named.
+        val failure = assertIs<Pathfinder.Result.Failed>(Pathfinder(area).route(Node(18, 51), RouteOptions(), goalTiles = setOf(14 to 39)) { it.x == 14 && it.y == 39 }).failure
+        assertEquals(FieldMoveKind.ROCK_CLIMB, assertIs<dev.kotlinds.pokemonclient.world.RouteFailure.NeedsFieldMove>(failure).move)
+    }
+
+    @Test
+    fun `Mt Silver is crossed from the summit to the Pokemon Center and back with Rock Climb`() {
+        val w = world
+        // Summit (465) 30,36 (its exit) → Mount Silver Pokecenter 1F (514): 12 warps (the bench walked it, NOTES).
+        val down = assertNotNull(WorldRouter(w).route(465, Node(30, 36), climber) { it.zone == 514 })
+        assertEquals(12, down.links.size)
+        assertEquals(listOf(465, 464, 459, 463, 459, 463, 459, 463, 122, 460, 122, 90), down.links.map { it.zone })
+        // And back up to the tile in front of Red (30,12), climbing the walls the other way.
+        val up = assertNotNull(WorldRouter(w).route(514, Node(7, 12), climber) { it.zone == 465 && it.node.x == 30 && it.node.y == 12 })
+        assertEquals(465, up.end.zone)
+        val climbed = up.places.zipWithNext().filter { (a, b) -> a.area === b.area && kotlin.math.abs(a.node.x - b.node.x) + kotlin.math.abs(a.node.y - b.node.y) > 1 }
+        // The 1F wall (44,59 → 44,53), the Upper Mountainside's three, and 3F's ten-tile wall (13,14 → 13,3).
+        assertEquals(
+            listOf(122 to Node(44, 53), 459 to Node(20, 49), 459 to Node(16, 45), 459 to Node(14, 41), 464 to Node(13, 3)),
+            climbed.map { (_, b) -> b.zone to b.node },
+        )
+        // Without Rock Climb, no way at all (every way up crosses a wall).
+        assertEquals(null, WorldRouter(w).route(465, Node(30, 36), climber.copy(fieldMoves = climber.fieldMoves - FieldMoveKind.ROCK_CLIMB)) { it.zone == 514 })
+    }
+
+    // endregion
 }

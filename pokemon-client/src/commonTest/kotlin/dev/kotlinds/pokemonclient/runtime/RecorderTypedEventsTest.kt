@@ -64,7 +64,7 @@ class RecorderTypedEventsTest {
             current = s
             recorder.onFrame(frame.toLong()) { memory }
         }
-        return recorder.log.since(0).filter { it is GameEvent.Caught || it is GameEvent.SentToBox || it is GameEvent.LearnedMove || it is GameEvent.PokemonObtained }
+        return recorder.log.since(0).filter { it is GameEvent.Caught || it is GameEvent.SentToBox || it is GameEvent.LearnedMove || it is GameEvent.PokemonObtained || it is GameEvent.BattleDecided }
     }
 
     @Test
@@ -127,5 +127,24 @@ class RecorderTypedEventsTest {
             state(listOf(piloswine), storage()),
         )
         assertEquals(emptyList(), events)
+    }
+
+    @Test
+    fun theBattlesOutcomeIsRecordedOnceWhenTheGameDecidesIt() {
+        // The last Pokémon down: "fainted!", "out of usable Pokémon", the prize... the outcome known all along, then
+        // the blackout heals the team (nothing after the battle tells it was lost).
+        val party = listOf(mon(ampharos, "AMPHAROS"))
+        val trainer = wild.copy(kind = BattleKind.TRAINER)
+        val lost = trainer.copy(outcome = dev.kotlinds.pokemonclient.state.BattleOutcome.LOST)
+        val events = record(
+            state(party, null),
+            state(party, null, trainer),
+            state(party, null, lost),
+            state(party, null, lost),
+            state(party, null),
+        )
+        assertEquals(listOf(GameEvent.BattleDecided::class), events.map { it::class })
+        val decided = events.single() as GameEvent.BattleDecided
+        assertEquals(dev.kotlinds.pokemonclient.state.BattleOutcome.LOST to BattleKind.TRAINER, decided.outcome to decided.kind)
     }
 }

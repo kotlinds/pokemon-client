@@ -64,7 +64,9 @@ class ShortList {
 /**
  * Bench checks of music during pauses, on the real implementation ([ShadowRun] on a [ConsoleRole.SHADOW] console,
  * [SoundResync] on the bench's console), headless and unpaced:
- * - `pausemusic:<name>[:<play s>,<pause s>,<resume s>]` (default 5,5,10): plays, pauses (the shadow plays), resumes
+ * - `pausemusic:<name>[:<play s>,<pause s>,<resume s>[,<max song wait>]]` (default 5,5,10,0): plays, pauses (up to
+ *   `max song wait` frames later while the game is about to change its song, [SoundResync.songChangePending], as the
+ *   app does; the game runs on meanwhile, heard), the shadow plays, resumes
  *   with the resync, and writes `<name>_app.wav` (what the app plays), `<name>_today.wav` (silence during the pause,
  *   then the music jumps back) and `<name>_ideal.wav` (as if the game never paused) to the out dir; prints the guards'
  *   decision, the continuity at resume (correlation with the ideal continuation) and the main RAM differences
@@ -106,9 +108,17 @@ class PauseMusicCheck(
 
     fun check(arg: String) {
         val name = arg.substringBefore(':')
-        val (play, pause, resume) = arg.substringAfter(':', "5,5,10").split(',').map { it.toDouble() }
+        val params = arg.substringAfter(':', "5,5,10").split(',').map { it.toDouble() }
+        val (play, pause, resume) = params
+        val maxSongWait = params.getOrElse(3) { 0.0 }.toInt()
         val played = ShortList().also { mainTap.target = it }
         main.step(seconds(play))
+        var songWait = 0
+        while (songWait < maxSongWait && resync.songChangePending(main.saveState(), afterFadeOut = songWait > 0)) {
+            main.step(1)
+            songWait++
+        }
+        if (maxSongWait > 0) println("  pause put off by $songWait frames for a song change")
         mainTap.target = null
 
         // Pause: the main console stays frozen at P; the shadow plays from P.
@@ -482,6 +492,86 @@ class PauseMusicCheck(
         }
     }
 
+    /**
+     * `pausemusicscan:<button>,<button>...:<frames>[,<every>,<pause frames>,<max delay>,<max song wait>,<save refused>]`
+     * (default 300,3,60,3,0,0): from the current frame, the game runs `frames` frames pressing the buttons in turn, 16
+     * frames each (`NONE`: nothing; one button: held all along, e.g. `LEFT` walks west across a map edge). Every `every`
+     * frames it pauses like the app: up to `max song wait` frames later while the game is about to change its song
+     * ([SoundResync.songChangePending]), then up to `max delay` frames later when [SoundResync.pauseRefusal] refuses the
+     * frame; the shadow plays `pause frames` and ends like the app ([ShadowRun.SETTLE_FRAMES]), the real resync
+     * resumes, and the outcome is printed with [where] (map, screen), the players at the pause and at the shadow's end,
+     * and the continuity. With `save refused` 1, the frame of each refused pause is saved as `scan_<offset>.state`. The
+     * main console goes back to the frame it paused at after each test.
+     */
+    fun scan(arg: String, where: () -> String) {
+        val parts = arg.split(':')
+        val dirs = parts[0].split(',').map { name ->
+            if (name.trim().uppercase() == "NONE") emptySet() else setOf(Button.valueOf(name.trim().uppercase()))
+        }
+        val params = parts.getOrNull(1)?.split(',')?.map(String::toInt).orEmpty()
+        val frames = params.getOrElse(0) { 300 }
+        val every = params.getOrElse(1) { 3 }
+        val pauseFrames = params.getOrElse(2) { 60 }
+        val maxDelay = params.getOrElse(3) { 3 }
+        val maxSongWait = params.getOrElse(4) { 0 }
+        val saveRefused = params.getOrElse(5) { 0 } == 1
+        fun input(i: Int) = InputFrame(dirs[(i / 16) % dirs.size])
+        val run = ShadowRun(shadow, resync, silence = { shadowTap.muted = it })
+        val outcomes = LinkedHashMap<String, Int>()
+        val continuity = mutableListOf<Double>()
+        for (f in 0 until frames) {
+            if (f % every == 0) {
+                val atFrame = main.saveState()
+                val raw = resync.pauseRefusal(atFrame)
+                var paused = atFrame
+                var delay = 0
+                var songWait = 0
+                while (true) {
+                    if (songWait < maxSongWait && resync.songChangePending(paused, afterFadeOut = songWait > 0)) songWait++
+                    else if (delay < maxDelay && resync.pauseRefusal(paused) != null) delay++
+                    else break
+                    main.step(1, input(f + delay + songWait))
+                    paused = main.saveState()
+                }
+                val ram = mainRam()
+                val place = where()
+                check(run.begin(paused))
+                repeat(pauseFrames) { run.step() }
+                val end = run.end(settleFrames = ShadowRun.SETTLE_FRAMES)
+                val ideal = ShortList().also { shadowTap.target = it }
+                if (end is ShadowEnd.Safe) shadow.step(30)
+                shadowTap.target = null
+                val result = resync.resume(main, paused, end)
+                val key = when (result) {
+                    is ResyncResult.Resynced -> "resynced"
+                    is ResyncResult.Refused -> result.reason::class.simpleName!!
+                    is ResyncResult.Aborted -> "ABORTED"
+                }
+                outcomes[key] = (outcomes[key] ?: 0) + 1
+                val endState = (end as? ShadowEnd.Safe)?.state
+                var detail = "P: ${players(paused)}" + (endState?.let { " | end (+${(end as ShadowEnd.Safe).frames - pauseFrames}): ${players(it)}" } ?: " | end: $end")
+                if (result is ResyncResult.Resynced && end is ShadowEnd.Safe) {
+                    check(mainRam().contentEquals(ram)) { "main RAM changed by the resync" }
+                    val resumed = ShortList().also { mainTap.target = it }
+                    main.step(30)
+                    mainTap.target = null
+                    val c = correlation(resumed, ideal, 0, rate / 4, rate / 100)
+                    if (!c.isNaN()) continuity += c
+                    detail = "corr %+.3f | ".fmt(c) + detail
+                } else if (result is ResyncResult.Refused) {
+                    detail = result.reason.message + " | " + detail
+                    if (saveRefused) Files.writeBytes(Path(out, "scan_$f.state"), paused)
+                }
+                val song = if (resync.songChangePending(atFrame)) "song change pending" else ""
+                println("  %4d %-46s raw %-24s %-19s delay %d+%3d -> %-20s %s".fmt(f, place.take(46), raw?.let { it::class.simpleName } ?: "ok", song, delay, songWait, key, detail))
+                check(main.loadState(atFrame))
+            }
+            main.step(1, input(f))
+        }
+        println("  outcomes: ${outcomes.entries.joinToString { "${it.key} ${it.value}" }}")
+        if (continuity.isNotEmpty()) println("  continuity (best lag 10 ms, first 0.25 s): mean %.3f min %.3f".fmt(continuity.average(), continuity.min()))
+    }
+
     /** The players of [state], short: index, flags (A active, P paused), tracks, bank. */
     private fun players(state: ByteArray): String = runCatching {
         SoundDriverState.read(spec.soundSplicer.locate(state), layout).players.joinToString(" ") { p ->
@@ -516,7 +606,12 @@ class PauseMusicCheck(
     private fun describe(state: ByteArray): String = runCatching {
         val s = SoundDriverState.read(spec.soundSplicer.locate(state), layout)
         "players ${s.players.map { p -> "#${p.index} flags ${p.flags} ${p.tracks.size} tracks" }}, sound thread running ${s.soundThreadRunning}, " +
-            "queued ${s.queuedCommandLists}, in flight ${s.commandsInFlight?.map { "0x%02X".fmt(it) }}, locked ${s.lockedChannels}"
+            "queued ${s.queuedCommandLists}, in flight ${s.commandsInFlight?.map { "0x%02X".fmt(it) }}, locked ${s.lockedChannels}, " +
+            "game music ${s.gameMusic}" + (layout.gameMusic?.let { m ->
+                val st = spec.soundSplicer.locate(state)
+                " (game music state ${st.main(m.state)}, fade ${st.main(m.fadeTimer) and 0xFFFF}, after ${st.main(m.afterFadeTimer) and 0xFFFF}, queued ${st.main(m.queuedSong) and 0xFFFF}, " +
+                    "player flags ${(0 until 16).joinToString("") { "%x".fmt(st.bytes[st.arm7Wram.offset + layout.work + 0x540 + it * 0x24 - SoundDriverLayout.ARM7_WRAM].toInt() and 0xF) }})"
+            } ?: "")
     }.getOrElse { "unreadable: ${it.message}" }
 
     private fun mainRam() = ByteArray(main.memorySize(MemoryRegion.MAIN_RAM)).also { main.read(MemoryRegion.MAIN_RAM, 0, it.size, it) }

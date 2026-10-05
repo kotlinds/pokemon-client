@@ -130,7 +130,9 @@ object PlatinumTileBehaviors {
         0x3A -> TileKind.Ledge(Direction.NORTH)
         0x3B -> TileKind.Ledge(Direction.SOUTH)
         in RAILINGS -> if (blocked) TileKind.Wall else TileKind.Railing(RAILINGS.getValue(behavior))
-        0x4B, 0x4C -> TileKind.RockClimb
+        // TILE_BEHAVIOR_ROCK_CLIMB_N_S / _E_W (map_tile_behaviors.h).
+        0x4B -> TileKind.RockClimb(dev.kotlinds.pokemonclient.world.ClimbAxis.NORTH_SOUTH)
+        0x4C -> TileKind.RockClimb(dev.kotlinds.pokemonclient.world.ClimbAxis.EAST_WEST)
         0x70 -> if (blocked) TileKind.Wall else TileKind.Bridge(start = true)
         0x71, 0x72, 0x74, 0x75 -> if (blocked) TileKind.Wall else TileKind.Bridge()
         0x73 -> TileKind.Bridge(overWater = true)

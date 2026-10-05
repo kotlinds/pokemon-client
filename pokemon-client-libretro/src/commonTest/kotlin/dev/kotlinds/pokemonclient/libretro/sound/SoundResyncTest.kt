@@ -36,6 +36,14 @@ import kotlin.test.assertTrue
  * 13 from Route 12's pier, the map name banner coming: the same, the shadow's end 5 s later) and `ds_r13_shore_new`
  * (paused mid-step on the shore: the shadow's game finishes the step onto the next soundplate and starts the ambient
  * sound again on another player);
+ * `ds_r22_fade` (DeSmuME, the user's Route 22 case: a step into Route 22 from Viridian City, the route-name banner
+ * coming, the game fading Viridian's music out to start Route 22's; the shadow's end 200 frames later, Route 22's
+ * music started), `ds_r22_load` (the frame the game stopped Viridian's music and loads Route 22's, before it starts;
+ * the shadow's end 90 frames later) and `ds_r22_new` (the pause put off until Route 22's music plays, as the app does;
+ * the shadow's end 120 frames later); `ds_r1_gate_fade` (DeSmuME, just out of the Viridian / Route 1 gatehouse onto
+ * Route 1, a warp: the gatehouse's music still fading out; the shadow's end 180 frames later, Route 1's music
+ * started) and `ds_r1_gate_gap` (the frames between that fade-out and Route 1's music: no music; the shadow's end 100
+ * frames later);
  * `mel`: melonDS 0.9.3.
  */
 class SoundResyncTest {
@@ -336,6 +344,96 @@ class SoundResyncTest {
         assertEquals(listOf(7), decision.atEnd.playing.map { it.index })
     }
 
+    /**
+     * The user's Route 22 case: walking from Viridian City onto Route 22, HeartGold fades Viridian's music out for ~2 s
+     * (the route-name banner sliding in) before it starts Route 22's. A pause starting then and lasting past the change
+     * sees the shadow's game start the new song, its data loaded into the sound heap (main RAM, never copied): refused,
+     * the music jumping back to Viridian's fade at resume. The paused state tells the change is coming (the game's sound
+     * state machine and countdowns), even on the frame between stopping the old song and starting the new one; the
+     * pause put off until the new song plays (as the app does) is resynced.
+     */
+    @Test
+    fun aPauseDuringTheSongChangeOfRoute22IsRefusedAndOneStartingOnTheNewSongIsResynced() {
+        val splicer = SavestateSoundSplicer.DESMUME
+        val ds = resync(splicer)
+        for (name in listOf("ds_r22_fade", "ds_r22_load")) {
+            val paused = fixture("${name}_p")
+            assertEquals(GameMusicPhase.SONG_QUEUED, SoundDriverState.read(splicer.locate(paused), layout).gameMusic, name)
+            assertTrue(ds.songChangePending(paused), name)
+            assertNull(ds.pauseRefusal(paused), name) // nothing a frame or two later would fix
+            assertEquals(ResyncRefusal.SongChanged, refusal(splicer, paused, fixture("${name}_s")), name)
+        }
+        assertEquals(11, SoundDriverState.read(splicer.locate(fixture("ds_r22_fade_p")), layout).playing.single().tracks.size)
+        // The frame between the two songs: Viridian's already stopped, Route 22's not started yet.
+        assertTrue(SoundDriverState.read(splicer.locate(fixture("ds_r22_load_p")), layout).playing.none { it.tracks.size > 1 })
+
+        val paused = fixture("ds_r22_new_p")
+        assertEquals(GameMusicPhase.PLAYING, SoundDriverState.read(splicer.locate(paused), layout).gameMusic)
+        assertTrue(!ds.songChangePending(paused))
+        assertTrue(!ds.songChangePending(paused, afterFadeOut = true))
+        val decision = assertIs<ResyncDecision.Spliced>(ds.splice(paused, fixture("ds_r22_new_s")))
+        assertEquals(11, decision.atEnd.playing.single().tracks.size)
+        val main = FakeConsole(splicer, paused.copyOf())
+        assertIs<ResyncResult.Resynced>(ds.apply(main, paused, decision))
+        val ram = splicer.locate(paused).mainRam
+        assertContentEquals(paused.copyOfRange(ram.offset, ram.end), main.state.copyOfRange(ram.offset, ram.end))
+    }
+
+    /**
+     * Out of the Viridian / Route 1 gatehouse (a warp): the player stands on Route 1 while the gatehouse's music still
+     * fades out (~1.5 s), then no music for a few frames, then Route 1's. A pause in the fade-out is a change coming;
+     * in the gap, only for a caller that saw the fade-out (a stopped music is otherwise a silent scene, not a change).
+     */
+    @Test
+    fun aPauseOutOfAGatehouseWaitsThroughTheFadeOutAndTheGap() {
+        val splicer = SavestateSoundSplicer.DESMUME
+        val ds = resync(splicer)
+        val fading = fixture("ds_r1_gate_fade_p")
+        assertEquals(GameMusicPhase.FADING_OUT, SoundDriverState.read(splicer.locate(fading), layout).gameMusic)
+        assertTrue(ds.songChangePending(fading))
+        assertEquals(ResyncRefusal.SongChanged, refusal(splicer, fading, fixture("ds_r1_gate_fade_s")))
+        val gap = fixture("ds_r1_gate_gap_p")
+        assertEquals(GameMusicPhase.STOPPED, SoundDriverState.read(splicer.locate(gap), layout).gameMusic)
+        assertTrue(SoundDriverState.read(splicer.locate(gap), layout).playing.isEmpty())
+        assertTrue(!ds.songChangePending(gap))
+        assertTrue(ds.songChangePending(gap, afterFadeOut = true))
+        assertEquals(ResyncRefusal.SongChanged, refusal(splicer, gap, fixture("ds_r1_gate_gap_s")))
+    }
+
+    /**
+     * The game's music state machine, word by word ([GameMusicPhase]): a queued song (state 5 / 6) with a countdown
+     * running, or once they ended with a song queued; left at 5 with no song queued, the music only kept stopped; a
+     * fade-out (4) while its countdown runs; a song starting (1); stopped (0); playing or fading in (2, 3). A layout that
+     * doesn't know the game's music logic never tells a change.
+     */
+    @Test
+    fun tellsTheGamesMusicPhaseFromItsStateMachine() {
+        val splicer = SavestateSoundSplicer.DESMUME
+        val music = assertNotNull(layout.gameMusic)
+        fun phase(vararg words: Pair<Int, Int>, layout: SoundDriverLayout = this.layout): GameMusicPhase? {
+            val state = fixture("ds_r22_load_p")
+            for ((address, value) in words) setMain(state, splicer, address, value)
+            return SoundDriverState.read(splicer.locate(state), layout).gameMusic
+        }
+        assertEquals(GameMusicPhase.SONG_QUEUED, phase()) // state 5, countdowns over, Route 22's song queued
+        assertEquals(GameMusicPhase.STOPPED, phase(music.queuedSong to 0)) // nothing queued: the music stays stopped
+        assertEquals(GameMusicPhase.SONG_QUEUED, phase(music.queuedSong to 0, music.fadeTimer to 12)) // fading out
+        assertEquals(GameMusicPhase.SONG_QUEUED, phase(music.queuedSong to 0, music.afterFadeTimer to 3)) // the delay after it
+        assertEquals(GameMusicPhase.SONG_QUEUED, phase(music.state to 6)) // the bicycle's change, with a fade-in
+        assertEquals(GameMusicPhase.FADING_OUT, phase(music.state to 4, music.fadeTimer to 12))
+        assertEquals(GameMusicPhase.PLAYING, phase(music.state to 4)) // fade-out over (the state machine moves on)
+        assertEquals(GameMusicPhase.STARTING, phase(music.state to 1))
+        assertEquals(GameMusicPhase.STOPPED, phase(music.state to 0))
+        assertEquals(GameMusicPhase.PLAYING, phase(music.state to 2))
+        assertEquals(GameMusicPhase.PLAYING, phase(music.state to 3, music.fadeTimer to 12)) // fading in
+        assertNull(phase(layout = layout.copy(gameMusic = null)))
+        assertTrue(!SoundResync(layout.copy(gameMusic = null), splicer).songChangePending(fixture("ds_r22_load_p")))
+        // Fixtures captured before the game's music words were kept read zeros (stopped): no change for a caller that
+        // didn't see one coming.
+        assertTrue(!resync(splicer).songChangePending(fixture("ds_r13_enter_p")))
+        assertTrue(!resync(SavestateSoundSplicer.MELONDS).songChangePending(fixture("mel_p")))
+    }
+
     /** Battles: the paused field music doesn't count as a second sound, and its state stays the paused game's. */
     @Test
     fun resyncsABattleWhoseFieldMusicIsPaused() {
@@ -629,6 +727,34 @@ class SoundResyncTest {
     fun recognizesHeartGoldUsByItsArm7Binary() {
         val rom = environmentVariable("POKEMON_ROM")?.let(::Path)?.takeIf(Files::exists) ?: return
         assertEquals(SoundDriverLayout.HEARTGOLD_US, SoundDriverLayout.forRom(rom))
+        assertNotNull(SoundDriverLayout.forRom(rom)?.gameMusic)
+    }
+
+    /**
+     * Another game built with the same ARM7 binary (SoulSilver shares HeartGold's) gets the driver layout, but not
+     * HeartGold's music state machine: its addresses are those of HeartGold's ARM9 binary.
+     */
+    @Test
+    fun keepsTheGamesMusicLogicForThatGameOnly() {
+        val real = environmentVariable("POKEMON_ROM")?.let(::Path)?.takeIf(Files::exists) ?: return
+        val header = Files.readRange(real, 0, 0x200)
+        val arm7 = Files.readRange(real, SoundDriverLayout.le32(header, 0x30).toLong(), SoundDriverLayout.le32(header, 0x3C))
+        val directory = Files.createTemporaryDirectory("rom")
+        try {
+            fun romWith(gameCode: String): Path = Path(directory, "$gameCode.nds").also { rom ->
+                val bytes = header.copyOf(0x200 + arm7.size)
+                gameCode.encodeToByteArray().copyInto(bytes, 0x0C)
+                for (b in 0 until 4) bytes[0x30 + b] = (0x200 ushr (8 * b)).toByte() // the ARM7 binary right after the header
+                arm7.copyInto(bytes, 0x200)
+                Files.writeBytes(rom, bytes)
+            }
+            assertEquals(SoundDriverLayout.HEARTGOLD_US, SoundDriverLayout.forRom(romWith("IPKE")))
+            val soulSilver = assertNotNull(SoundDriverLayout.forRom(romWith("IPGE")))
+            assertNull(soulSilver.gameMusic)
+            assertEquals(SoundDriverLayout.HEARTGOLD_US.copy(gameMusic = null), soulSilver)
+        } finally {
+            Files.deleteRecursively(directory)
+        }
     }
 
     @Test

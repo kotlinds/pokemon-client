@@ -11,6 +11,7 @@ import dev.kotlinds.pokemonclient.world.RouteFailure
 import dev.kotlinds.pokemonclient.world.WorldLinks
 import dev.kotlinds.pokemonclient.world.WorldRouter
 import dev.kotlinds.pokemonclient.world.WorldSource
+import dev.kotlinds.pokemonclient.world.RouteOptions
 import dev.kotlinds.pokemonclient.world.ZoneLink
 
 /**
@@ -41,10 +42,32 @@ internal object WorldTravel {
             is Resolved.Found -> resolved.goal
             is Resolved.Failed -> return resolved.outcome
         }
+        // The walk to another map, planned once from here: when there is none, the error may suggest a flight. A long
+        // walk is never refused for a shorter flight: walking is the agent's choice (training on the way...).
+        val onFoot = otherMap(world, field, goal)?.let { (area, goalArea) -> worldRoute(context, world, field, area, goalArea, goal, action.options) }?.tiles
         // A long trip (minutes of surfing) says how far it has got: tiles walked of the planned route, current map.
         val meter = TravelMeter("go_to ${describeGoal(context, field, goal)}", context.scope::report)
         val trip = context.navigator.watching(meter::observe) { travel(context, world, goal, action.options, meter) }
-        return finish(context, trip, goal).withNotes(trip.notes).withMovement(context, field, trip.taken)
+        return finish(context, trip, goal).withNotes(trip.notes).withMovement(context, field, trip.taken).withFly(context, field, goal, onFoot)
+    }
+
+    /** The player's area and [goal]'s when the goal is on another map (both areas known), else null. */
+    private fun otherMap(world: WorldSource, field: FieldState, goal: Goal): Pair<Area, Area>? {
+        if (goal.zone == field.mapId) return null
+        val area = world.areaOf(field.mapId) ?: return null
+        return world.areaOf(goal.zone)?.let { area to it }
+    }
+
+    /**
+     * No way on foot to another map (a field move missing, a long detour): when a visited fly destination lands
+     * there or near, the error's hint says so ([FlyAdvisor]).
+     */
+    private fun ActionOutcome.withFly(context: PlanContext, start: FieldState, goal: Goal, onFoot: Int?): ActionOutcome {
+        val error = (this as? ActionOutcome.Failed)?.error as? ActionError.Unavailable ?: return this
+        if (error.reason != UnavailableReason.NO_PATH || onFoot != null || goal.zone == start.mapId) return this
+        val suggestion = FlyAdvisor(context.game).suggest(context.state(), goal.zone, onFoot = null) ?: return this
+        val fly = "or fly: ${suggestion.landing}"
+        return ActionOutcome.Failed(error.copy(hint = error.hint?.let { "$it; $fly" } ?: fly))
     }
 
     /**
@@ -291,7 +314,9 @@ internal object WorldTravel {
     private fun travel(context: PlanContext, world: WorldSource, goal: Goal, options: MoveOptions, notes: MutableList<String>, meter: TravelMeter?): Trip {
         val taken = mutableListOf<ZoneLink>()
         var localFailure: MovePlans.Walk.NoRoute? = null
-        repeat(MAX_HOPS) {
+        // One pass per link taken, and one more for the walk on the destination's map: a route of [MAX_HOPS] links
+        // (accepted by [detour]) takes MAX_HOPS + 1 passes (Mt. Silver's summit to its Pokémon Center: 12 warps).
+        repeat(MAX_HOPS + 1) {
             // Back on the bicycle after each warp (a building gets the player off it).
             BikeRide.mount(context, options)?.let { if (it !in notes) notes += it }
             val state = context.navigator.settle()
@@ -422,8 +447,10 @@ internal object WorldTravel {
      * the party can use by itself), so a Cut tree in front of another map's door is cut like one on the way inside a
      * gym (NOTES: "needs Cut" in front of the Vermilion Gym while the walk out cut it).
      */
-    internal fun worldRouteOptions(context: PlanContext, field: FieldState, options: MoveOptions) =
-        MovePlans.routeOptions(field, options, FieldMoveWalk.usable(FieldMoveWalk.access(context, context.state())))
+    internal fun worldRouteOptions(context: PlanContext, field: FieldState, options: MoveOptions): RouteOptions {
+        val state = context.state()
+        return MovePlans.routeOptions(field, options, FieldMoveWalk.usable(FieldMoveWalk.access(context, state)), MovePlans.stepWeights(context, state, options))
+    }
 
     /**
      * Why there is no route across zones either: the first obstacle (field move, person) of the route that crosses

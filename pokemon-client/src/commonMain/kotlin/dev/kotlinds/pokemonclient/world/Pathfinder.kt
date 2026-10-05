@@ -26,9 +26,11 @@ sealed interface Edge {
         override val tiles get() = listOf(to)
     }
 
-    /** Jump down a ledge: two tiles in [direction], one way only. */
-    data class Jump(override val to: Node, override val direction: Direction) : Edge {
-        override val cost = 1
+    /**
+     * Jump down a ledge: two tiles in [direction], one way only. [cost]: one step, plus the [StepWeights] of the
+     * landing tile.
+     */
+    data class Jump(override val to: Node, override val direction: Direction, override val cost: Int = 1) : Edge {
         override val tiles get() = listOf(to)
     }
 
@@ -83,7 +85,7 @@ data class RouteOptions(
     val maxClimb: Int = DEFAULT_MAX_CLIMB,
     /**
      * Field moves the party can use now (a Pokémon knows it and the badge allows it): routes use them by themselves
-     * ([FieldMoveEdge]: Surf from the shore, Waterfall, Whirlpool, Cut, Rock Smash; Strength pushes are planned by
+     * ([FieldMoveEdge]: Surf from the shore, Waterfall, Whirlpool, Cut, Rock Smash, Rock Climb; Strength pushes are planned by
      * [PushPlanner]). [FieldMoveKind.SURF] here implies [canSurf].
      */
     val fieldMoves: Set<FieldMoveKind> = emptySet(),
@@ -93,6 +95,13 @@ data class RouteOptions(
      * with fewer turns wins: a diagonal zigzag is much slower to walk than an L (see [turnPenalty]).
      */
     val turnCost: Int? = null,
+    /**
+     * Soft costs of the moves on top of their length: wild encounter chances, unbeaten trainers' sight
+     * ([StepWeights]). Not a ban: unlike [avoidTallGrass] and [avoidTrainers], a costly tile is still crossed when the
+     * way around costs more. [StepWeights.NONE] (the default here) compares length and turns only; `go_to` always
+     * gives the weights of the game's state.
+     */
+    val weights: StepWeights = StepWeights.NONE,
 ) {
     /** The cost of a change of direction in this search: [turnCost], or the default for [mode]. */
     val turnPenalty: Int get() = turnCost ?: defaultTurnCost(mode)
@@ -106,7 +115,8 @@ data class RouteOptions(
          * n tiles takes 8n + 12 frames (the walker lets go and waits for the player to stand still at the end of each
          * straight run, see the walker's segments), and 6 more when it starts facing another way. Every change of
          * direction therefore costs 12 + 6 = 18 frames over going on straight, about 2.25 steps of 8 frames: 2. Running
-         * and surfing measured the same (8 frames per tile).
+         * (the running shoes: the bench's save had them switched on, so "walking" above was measured running) and
+         * surfing take 8 frames per tile; plain walking takes 16, so there a turn costs about 1 step.
          */
         const val TURN_COST = 2
 
@@ -266,8 +276,10 @@ sealed interface RouteFailure {
  * - ledges are crossed only in their direction, by a 2-tile jump;
  * - ice slides the player on until a tile that isn't ice or an obstacle; spinner arrows push the player (turning
  *   on each arrow) until a stop tile or an obstacle: both are one [Edge.Slide] landing where the game stops;
- * - field moves (Surf when not allowed, whirlpools, waterfalls, Rock Climb, obstacle objects) block, and a failed
- *   route tells which one would open the way ([RouteFailure.NeedsFieldMove]);
+ * - field moves the party can use are part of the routes ([RouteOptions.fieldMoves], [FieldMoveEdge]: Surf, Waterfall,
+ *   Whirlpool, Cut, Rock Smash, Rock Climb up and down a wall along its axis); the others (and Rock Climb walls
+ *   entered across their axis) block, and a failed route tells which one would open the way
+ *   ([RouteFailure.NeedsFieldMove]);
  * - warps and ladders are never crossed unless they are the destination; active triggers neither, unless they are the
  *   destination or the only way (the route then warns: [RouteWarning.StartsScene]);
  * - bridges: a bridge over water is floor for a player coming from the bridge, water otherwise; railings block the
@@ -277,7 +289,10 @@ sealed interface RouteFailure {
  * - live state ([Overlay]): closed shutters block their tiles; stepping on a teleport source is an [Edge.Teleport] to
  *   its destination (it is never walked through as a plain tile);
  * - turns: each change of direction between two moves costs [RouteOptions.turnPenalty] (the measured time of
- *   stopping and turning), so of two ways of about the same length the straighter one wins.
+ *   stopping and turning), so of two ways of about the same length the straighter one wins;
+ * - soft costs ([RouteOptions.weights]): each move also costs the expected time lost to what it may start (a wild
+ *   encounter in the grass or on the water, a trainer's sight), so a grass-free or sight-free way wins when it is
+ *   only a few tiles longer.
  */
 class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay()) {
 
@@ -392,8 +407,20 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     }
 
     /**
+     * What a change of direction on [node] costs: [RouteOptions.turnPenalty], plus, with [soft] costs, an encounter
+     * check where wild Pokémon appear (the game rolls one when the player turns in place there, like after a step:
+     * [StepWeights]). The same whatever the directions, so the cut of [turnDominated] holds with it.
+     */
+    fun turnCostAt(node: Node, options: RouteOptions, soft: Boolean = true): Int {
+        val penalty = options.turnPenalty
+        if (!soft || options.weights == StepWeights.NONE) return penalty
+        val tile = tile(node.x, node.y) ?: return penalty
+        return penalty + options.weights.encounter(tile, area.zoneAt(node.x, node.y))
+    }
+
+    /**
      * The cheapest route from [start] to a node where [isGoal] holds (Dijkstra), counting [RouteOptions.turnPenalty]
-     * for every change of direction between two moves.
+     * for every change of direction between two moves ([turnCostAt]).
      *
      * The turn makes the cost of a move depend on the previous one, so the search runs over [Heading]s (a node and the
      * direction the player arrived in), up to four per tile. Most of them are cut: a heading reached for at least one
@@ -415,7 +442,6 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     ): List<Edge>? {
         // Also while looking for what blocks a route: between ways crossing the same obstacles, the straighter one
         // tells where to stand (the tile in front of a boulder, a person).
-        val turnCost = options.turnPenalty
         val first = Heading(start, null)
         val dist = HashMap<Heading, Int>()
         val previous = HashMap<Heading, Pair<Heading, Edge>>()
@@ -427,6 +453,8 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
             val (heading, d) = queue.poll()
             if (d > (dist[heading] ?: Int.MAX_VALUE)) continue
             val node = heading.node
+            // Field moves and people are only crossed to tell what blocks: soft costs don't matter there.
+            val turnCost = turnCostAt(node, options, soft = !relaxed && !ignorePeople && !ignoreBarriers)
             if (turnDominated(settled, node, d, turnCost)) continue
             if (node != start && isGoal(node)) return path(previous, first, heading)
             for (edge in neighbours(node, options, goalTiles, allowJumps, relaxed, allowTriggers, ignorePeople, ignoreBarriers)) {
@@ -504,8 +532,18 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
                 return@mapNotNull null
             }
             val isGoalTile = (x to y) in goalTiles
-            // Field moves the party can use: Surf from the shore, Waterfall, Whirlpool, Cut, Rock Smash.
-            fieldMoveEdge(node, here, tile, x, y, dir, options)?.let { return@mapNotNull it }
+            // Field moves the party can use: Surf from the shore, Waterfall, Whirlpool, Cut, Rock Smash, Rock Climb.
+            fieldMoveEdge(node, here, tile, x, y, dir, options)?.let { edge ->
+                // The move ends on [edge.to] like a step: what may start there counts too.
+                val end = tile(edge.to.x, edge.to.y)
+                val soft = end?.let { softCost(it, edge.to.x, edge.to.y, options, relaxed || ignorePeople || ignoreBarriers) } ?: 0
+                return@mapNotNull when {
+                    soft == 0 -> edge
+                    edge is FieldMoveEdge -> edge.copy(cost = edge.cost + soft)
+                    edge is Edge.Slide -> edge.copy(cost = edge.cost + soft)
+                    else -> edge
+                }
+            }
             // Ledges: jump over in their direction only (land 2 tiles away).
             val kind = tile.kind
             if (kind is TileKind.Ledge) {
@@ -514,7 +552,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
                 val ly = y + dir.dy
                 val landing = tile(lx, ly) ?: return@mapNotNull null
                 if (!walkable(landing, lx, ly, options, goalTiles, relaxed)) return@mapNotNull null
-                return@mapNotNull Edge.Jump(Node(lx, ly, 0), dir)
+                return@mapNotNull Edge.Jump(Node(lx, ly, 0), dir, 1 + softCost(landing, lx, ly, options, relaxed || ignorePeople || ignoreBarriers))
             }
             if (!isGoalTile) teleportsFrom[x to y]?.let { links ->
                 // A lift only starts for a player entering at its height; any other teleport whatever the height.
@@ -612,7 +650,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
             is TileKind.Water -> FieldMoveKind.SURF.takeIf { kind.surfable && !canUse(FieldMoveKind.SURF, options) && options.mode != MovementMode.SURF }
             TileKind.Whirlpool -> FieldMoveKind.WHIRLPOOL
             TileKind.Waterfall -> FieldMoveKind.WATERFALL
-            TileKind.RockClimb -> FieldMoveKind.ROCK_CLIMB
+            is TileKind.RockClimb -> FieldMoveKind.ROCK_CLIMB
             else -> null
         }
     }
@@ -629,7 +667,9 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
      * - Surf: from a tile that isn't water onto surfable water;
      * - Waterfall (while surfing, north or south): through the waterfall tiles to the water at the other end;
      * - Whirlpool (while surfing): across the whirlpool tiles to the water behind;
-     * - Cut, Rock Smash: an obstacle object on a tile that is free once it's gone.
+     * - Cut, Rock Smash: an obstacle object on a tile that is free once it's gone;
+     * - Rock Climb (on foot, along the wall's [TileKind.RockClimb.axis]): over the wall tiles to the first tile after
+     *   them, up or down ([climb]).
      */
     private fun fieldMoveEdge(node: Node, here: TileInfo, tile: TileInfo, x: Int, y: Int, dir: Direction, options: RouteOptions): Edge? {
         val kind = tile.kind
@@ -655,6 +695,8 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
                 crossing(x, y, dir, FieldMoveKind.WATERFALL, TileKind.Waterfall)
             kind == TileKind.Whirlpool && onWater && canUse(FieldMoveKind.WHIRLPOOL, options) ->
                 crossing(x, y, dir, FieldMoveKind.WHIRLPOOL, TileKind.Whirlpool)
+            kind is TileKind.RockClimb && kind.axis.allows(dir) && !onWater && canUse(FieldMoveKind.ROCK_CLIMB, options) ->
+                climb(x, y, dir, options)
             else -> null
         }
     }
@@ -697,6 +739,39 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         val to = Node(cx, cy, waterLevel(landing, cx, cy))
         if (!onWater(to, landing)) return null
         return FieldMoveEdge(to, dir, move, tiles + to, tiles.size + 1 + FIELD_MOVE_USE_COST)
+    }
+
+    /**
+     * Up or down the Rock Climb wall starting at (x, y), going [dir] (the game's climb task, overlay 1 ov01_021F2628:
+     * the player hops onto the wall, moves on while the next tile is a wall climbable that way
+     * ([TileKind.RockClimb.axis]), and lands on the first tile after it). The landing must be free floor; its level is
+     * the surface closest to the wall's last tile (the top of the wall going up, its foot going down). Null when the
+     * wall doesn't end on such a tile.
+     */
+    private fun climb(x: Int, y: Int, dir: Direction, options: RouteOptions): Edge? {
+        val tiles = mutableListOf<Node>()
+        var cx = x
+        var cy = y
+        var last: TileInfo? = null
+        while (true) {
+            val wall = tile(cx, cy) ?: return null
+            val kind = wall.kind
+            if (kind !is TileKind.RockClimb || !kind.axis.allows(dir)) break
+            tiles += Node(cx, cy, 0)
+            last = wall
+            cx += dir.dx
+            cy += dir.dy
+            if (tiles.size > MAX_CROSSING) return null
+        }
+        val top = last ?: return null
+        val landing = tile(cx, cy) ?: return null
+        if ((cx to cy) in occupied || (cx to cy) in warpTiles || (cx to cy) in overlay.forbiddenTiles) return null
+        if (isWater(landing.kind) || !walkable(landing, cx, cy, options, emptySet())) return null
+        val wallHeight = top.heights.lastOrNull()
+        val level = if (landing.heights.size <= 1 || wallHeight == null) 0
+        else landing.heights.indices.minBy { kotlin.math.abs(landing.heights[it] - wallHeight) }
+        val to = Node(cx, cy, level)
+        return FieldMoveEdge(to, dir, FieldMoveKind.ROCK_CLIMB, tiles + to, tiles.size + 1 + FIELD_MOVE_USE_COST)
     }
 
     /** Direction of one step from [a] to the adjacent [b], or null when they aren't adjacent. */
@@ -760,6 +835,19 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         if (relaxed || diagnosing) return cost
         if (options.avoidTallGrass && tile.kind == TileKind.TallGrass) cost += GRASS_COST
         if (options.avoidTrainers && (x to y) in inSight) cost += SIGHT_COST
+        return cost + softCost(tile, x, y, options)
+    }
+
+    /**
+     * The soft cost of ending a move on [tile] at ([x], [y]) ([RouteOptions.weights]): its zone's encounter weight
+     * where wild Pokémon appear, a trainer battle in an unbeaten trainer's sight. None while [diagnosing] (looking for
+     * what blocks a route: only passability matters there).
+     */
+    private fun softCost(tile: TileInfo, x: Int, y: Int, options: RouteOptions, diagnosing: Boolean = false): Int {
+        val weights = options.weights
+        if (diagnosing || weights == StepWeights.NONE) return 0
+        var cost = weights.encounter(tile, area.zoneAt(x, y))
+        if (weights.trainerSight > 0 && (x to y) in inSight) cost += weights.trainerSight
         return cost
     }
 

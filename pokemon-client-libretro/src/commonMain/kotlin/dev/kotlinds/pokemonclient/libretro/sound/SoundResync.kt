@@ -75,6 +75,32 @@ class SoundResync(
         ResyncRefusal.UnsupportedState(error.message.orEmpty())
     }
 
+    /**
+     * Whether the game, at [state], is changing its song ([GameMusicPhase]: fading the current one out, a song queued
+     * or starting; known for the games of [SoundDriverLayout.gameMusic] only, false otherwise). [afterFadeOut]: the
+     * caller already saw the change coming at an earlier frame, so a stopped music ([GameMusicPhase.STOPPED]) is the
+     * gap between the fade-out and the next song, not a silent scene.
+     *
+     * A pause starting there and lasting past the new song's start can't be resynced: the shadow's game starts the new
+     * song during the pause, after loading its sequence into the sound heap (main RAM, never copied), so the resumed
+     * game must start it itself ([ResyncRefusal.SongChanged]) and the music jumps back to the old song's fade, then the
+     * new song starts again. Measured walking from a town onto a route with its own music (Viridian City → Route 22 /
+     * Route 2, Pallet Town → Route 1, Cherrygrove City → Route 30, New Bark Town → Route 29; 3 s pauses every 4 frames
+     * over 200 frames): 32 of 50 pauses refused, every one from the step into the route to the new song (~2 s, the
+     * route-name banner). Unlike [pauseRefusal]'s frame or two, this lasts up to ~2.5 s: `ShadowAudio` in the app may
+     * put the pause off until the new song plays (the game runs on normally meanwhile): 1 of 50 refused then (a pause
+     * mid-step, before the game sees the new map). Out of a gatehouse onto Route 1 (a warp, the old song fading out
+     * while the player already stands on the route): 37 of 50 refused, 3 once put off (two mid-step into the door,
+     * one starting right in the few silent frames before Route 1's song).
+     */
+    fun songChangePending(state: ByteArray, afterFadeOut: Boolean = false): Boolean = when (
+        runCatching { SoundDriverState.read(splicer.locate(state), layout).gameMusic }.getOrNull()
+    ) {
+        GameMusicPhase.FADING_OUT, GameMusicPhase.SONG_QUEUED, GameMusicPhase.STARTING -> true
+        GameMusicPhase.STOPPED -> afterFadeOut
+        GameMusicPhase.PLAYING, null -> false
+    }
+
     /** The guards on the paused state alone, in order; null when they all pass. */
     private fun pauseGuards(atPause: SoundDriverState): ResyncRefusal? = when {
         atPause.soundThreadRunning -> ResyncRefusal.SoundThreadRunningAtPause

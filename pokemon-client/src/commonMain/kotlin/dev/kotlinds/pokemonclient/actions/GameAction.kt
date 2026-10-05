@@ -231,6 +231,14 @@ sealed interface GameAction {
         override val key = "continue_game"
     }
 
+    /**
+     * After the Champion: waits through the Hall of Fame (each team member presented, then the whole team, where it
+     * presses A once that screen waits for it) and the save, until the credits start.
+     */
+    data object WatchHallOfFame : GameAction {
+        override val key = "watch_hall_of_fame"
+    }
+
     /** Opens the start menu (from the overworld) on [entry] (`option:bag`, `option:pokemon`...), checked by its id. */
     data class OpenMenu(val entry: String) : GameAction {
         override val key get() = "open_menu($entry)"
@@ -250,7 +258,13 @@ sealed interface GameAction {
      * object of this map, `exit:<direction>` (the map's edge towards a neighbouring map), a map's name, or
      * `frontier`; through warps, holes and map edges when needed, with the movement options.
      */
-    data class GoTo(val x: Int?, val y: Int?, val target: String?, val options: MoveOptions = MoveOptions(), val map: String? = null) : GameAction {
+    data class GoTo(
+        val x: Int?,
+        val y: Int?,
+        val target: String?,
+        val options: MoveOptions = MoveOptions(),
+        val map: String? = null,
+    ) : GameAction {
         override val key get() = "go_to(${target ?: "$x,$y"}${map?.let { " on $it" } ?: ""})"
     }
 

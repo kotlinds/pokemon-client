@@ -10,7 +10,8 @@ import dev.kotlinds.pokemonclient.Direction
  *   needs no move: surfing into it from above is an [Edge.Slide]);
  * - [FieldMoveKind.WHIRLPOOL]: across the whirlpool [tiles], to the water behind it [to];
  * - [FieldMoveKind.CUT], [FieldMoveKind.ROCK_SMASH]: the obstacle object on [to] disappears, then the player steps
- *   onto [to].
+ *   onto [to];
+ * - [FieldMoveKind.ROCK_CLIMB]: up or down the wall [tiles], to the floor after it [to].
  */
 data class FieldMoveEdge(
     override val to: Node,

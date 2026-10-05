@@ -37,6 +37,13 @@ object HgssWorldAddresses {
     /** `fielddata/script/scr_seq.narc`: one member per `MapHeader.scriptsBank` (the map's event scripts). */
     const val SCRIPT_NARC = "a/0/1/2"
 
+    /**
+     * `fielddata/encountdata/g_enc_data.narc` (HeartGold) / `s_enc_data.narc` (SoulSilver): one wild encounter table
+     * per `MapHeader.wildEncounterBank` ([HgssEncounterTable]). Both are in either ROM; the game reads its own
+     * (`ENCDATA_NARC`, include/encounter_tables_narc.h). SoulSilver's game codes start with `IPG`.
+     */
+    fun encounterNarc(gameCode: String): String = if (gameCode.startsWith("IPG")) "a/1/3/6" else "a/0/3/7"
+
     /** Address of `sMapHeaders` for the ROM with [gameCode], or null when that ROM is not supported yet. */
     fun mapHeadersAddress(gameCode: String): Long? = mapHeaders[gameCode]
 }

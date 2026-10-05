@@ -185,6 +185,12 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             val startMenuTask = tasks.firstOrNull { (func, _) -> func == v.fnTaskStartMenu }
             val followerTask = tasks.firstOrNull()?.first == v.fnTaskFollowMonInteract
             when {
+                // After the Hall of Fame (its app has ended): the game saves, then fades out to the credits.
+                tasks.any { (func, _) -> func == v.fnTaskGameClear } -> {
+                    mode = GameMode.FIELD_BUSY
+                    detail = HgssGameClear.SAVE_DETAIL
+                }
+
                 followerTask -> {
                     dialogue = readFollowerMessage(fs)
                     mode = if (dialogue.messageBoxOpen) GameMode.DIALOGUE else GameMode.SCRIPT
@@ -494,6 +500,16 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
                     layout = "horizontal", prompt = prompt, waiting = running && s32(om + A.OM_PROC_STATE) == A.CS_PROC_HANDLE_INPUT,
                 )
             }
+            // Only the whole team's wait takes input; the rest of the sequence plays by itself.
+            "hall_of_fame_register" -> AppInfo(
+                name, "Hall of Fame",
+                waiting = running && data != null && HgssGameClear.registration(HgssMemory(memory, v), data, isFading())?.waitsForButton == true,
+            )
+            // Only "The End" waits for input (the credits themselves can at most be skipped, and only on a replay).
+            "credits" -> AppInfo(
+                name, "Credits",
+                waiting = !isFading() && HgssGameClear.credits(HgssMemory(memory, v), om)?.stage == HgssGameClear.CreditsStage.THE_END,
+            )
             "mailbox" -> {
                 val slots = (0 until 10).map { i ->
                     val mail = saveData?.let { saveArray(it, A.SAVE_MAILBOX) }?.let { it + i * A.MAIL_SIZE }
@@ -583,8 +599,16 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             playTime = Triple(u16(pd + A.PD_PLAY_TIME), u8(pd + A.PD_PLAY_TIME + 2), u8(pd + A.PD_PLAY_TIME + 3))
                 .takeIf { (_, m, s) -> m < 60 && s < 60 },
             badgeIds = ((0 until 8).filter { johto shr it and 1 == 1 } + (0 until 8).filter { kanto shr it and 1 == 1 }.map { 8 + it }).toSet(),
+            flyPoints = saveArray(saveData, A.SAVE_FLAGS)?.let(::flyPoints).orEmpty(),
         )
     }
+
+    /** The fly points whose flag is set in the save's flags at [varsFlags] (`Save_VarsFlags_FlypointFlagAction`). */
+    private fun flyPoints(varsFlags: Long): List<Int> =
+        HgssFlyMapAddresses.FLYPOINTS.indices.filter { i ->
+            val flag = HgssFlyMapAddresses.FLAG_FLYPOINT_FIRST + HgssFlyMapAddresses.FLYPOINTS[i].flag
+            u8(varsFlags + A.FLAGS_OFFSET + flag / 8) shr (flag % 8) and 1 == 1
+        }
 
     private fun moveInfo(id: Int, pp: Int, maxPp: Int): MoveInfo {
         val d = HgssData.moveData[id]
@@ -1255,7 +1279,37 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             awaitingInput = awaiting,
             message = readGameString(ptr(bs + A.BS_MSG_BUFFER)),
             safariBalls = if (type and (1L shl 5) != 0L) s32(bs + A.BS_SAFARI_BALLS) else null,
+            outcomeFlag = u8(bs + A.BS_OUTCOME_FLAG),
+            sidesOut = sidesOut(ctx, bs, battleCtx, type, battlers),
         )
+    }
+
+    /**
+     * The sides (0 the player's, 1 the opponent's) left without any Pokémon able to battle, by the rule the game
+     * applies once the faints are processed (ov12_0224D7EC, src/battle/battle_controller_player.c): a battler of the
+     * side is at 0 HP and its party's HP add up to 0. Computed here because the game only sets its end flag after the
+     * faint messages, while an agent's chain must already know the battle is decided (the last foe fainting with the
+     * player's Pokémon by Destiny Bond: two faint messages before the flag). The Pokémon on the field count with their
+     * battle HP (`BattleMon.hp`, live), the party copy being updated a little later (CopyBattleMonToPartyMon).
+     * Multi and tag battles (a partner's party counts too) are left to the game's flag. A side whose party doesn't read
+     * cleanly (being rewritten) isn't decided.
+     */
+    private fun sidesOut(ctx: Ctx, bs: Long, battleCtx: Long, type: Long, battlers: List<Battler>): Set<Int> {
+        if (type and A.BATTLE_TYPE_PARTNER_PARTIES != 0L) return emptySet()
+        return (0..1).filter { side ->
+            val onField = battlers.filter { it.battlerId % 2 == side && it.species != 0 }
+            // The game only looks at a side once one of its battlers is down (and an empty side isn't a battle yet).
+            if (onField.none { it.hp == 0 }) return@filter false
+            // A battler caught mid-rewrite may read 0 HP: no decision on such a reading.
+            if (onField.any { HgssBattlerCheck.problems(it).isNotEmpty() }) return@filter false
+            // BattleSystem_GetParty: trainerParty[battlerId & 1] in doubles, trainerParty[battlerId] in singles: the side's party either way.
+            val partyPtr = ptr(bs + A.BS_TRAINER_PARTY + 4L * side) ?: return@filter false
+            val count = s32(partyPtr + A.PARTY_CUR_COUNT)
+            val party = runCatching { readPartyAt(ctx, partyPtr) }.getOrNull() ?: return@filter false
+            if (party.size != count || party.any { it.problems.isNotEmpty() }) return@filter false
+            val fieldHp = onField.mapNotNull { b -> b.partySlot?.let { it to b.hp } }.toMap()
+            party.filter { it.species != 0 && !it.isEgg }.sumOf { fieldHp[it.slot] ?: it.hp } == 0
+        }.toSet()
     }
 
     private fun readBattler(battleCtx: Long, id: Int): Battler {

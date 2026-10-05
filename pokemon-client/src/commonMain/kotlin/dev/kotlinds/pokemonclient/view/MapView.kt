@@ -217,7 +217,7 @@ object MapView {
         TileKind.Door -> 'E'
         is TileKind.Spinner -> '*'
         TileKind.SpinnerStop -> '+'
-        TileKind.RockClimb -> '%'
+        is TileKind.RockClimb -> '%'
         is TileKind.Unknown -> if (blocked) '#' else '?'
     }
 

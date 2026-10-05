@@ -41,6 +41,8 @@ internal class HgssServices {
                 hasPc = hasPc(field.mapId),
                 bikeAllowed = HgssData.world?.header(field.mapId)?.bikeAllowed,
                 radioMusic = HgssRadio.playing(mem),
+                repelSteps = runCatching { save.repelSteps() }.getOrNull(),
+                autoRun = runCatching { save.autoRun() }.getOrNull(),
                 objects = field.objects.map { o -> objects[o.id]?.let { info -> enrichObject(o, info, field.mapId, badges, save, badgeIds) } ?: o },
             ),
         )
