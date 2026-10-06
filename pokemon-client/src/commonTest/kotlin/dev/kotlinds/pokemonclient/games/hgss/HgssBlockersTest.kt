@@ -54,12 +54,16 @@ class HgssBlockersTest {
     fun theWomanOnTheGoldenrodGymDoorBlocksUntilTheRadioCardQuiz() {
         // obj_T25_gswoman2_4 (event 20) on 366,335, the tile in front of the Gym door, hidden by FLAG_UNK_318 once
         // the Radio Tower 1F quiz is won (scr_seq_0029_D23R0101.s:157).
-        val woman = person(20, 366, 335, mapId = 76, eventFlag = 0x318)
-        val blockers = HgssBlockers.of(state(76, listOf(woman)))
+        val woman = person(20, 366, 335, mapId = HgssBlockers.MAP_GOLDENROD, eventFlag = HgssStoryTable.Flags.WON_RADIO_CARD_QUIZ)
+        val blockers = HgssBlockers.of(state(HgssBlockers.MAP_GOLDENROD, listOf(woman)))
         assertEquals(listOf("person:20"), blockers.map { it.target })
-        assertTrue("Radio Tower" in blockers.single().reason && "quiz" in blockers.single().reason, blockers.single().reason)
+        val reason = blockers.single().reason
+        assertTrue("Radio Tower" in reason && "quiz" in reason, reason)
+        // The quiz's answers, as the yes / no menu's entry ids: the opening "try our Quiz?" first, then the five.
+        assertTrue(HgssStoryTable.RADIO_QUIZ_INSTRUCTIONS in reason, reason)
+        assertTrue("answer option:yes; then answer the five questions in order: option:yes, option:yes, option:no, option:yes, option:no" in reason, reason)
         val won = StoryInfo(flags = setOf(HgssStoryTable.Flags.WON_RADIO_CARD_QUIZ))
-        assertTrue(HgssBlockers.of(state(76, listOf(woman), story = won)).isEmpty())
+        assertTrue(HgssBlockers.of(state(HgssBlockers.MAP_GOLDENROD, listOf(woman), story = won)).isEmpty())
     }
 
     @Test

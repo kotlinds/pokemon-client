@@ -232,6 +232,21 @@ class HgssWorldRoutingTest {
         assertNotNull(toShrine(moves(FieldMoveKind.SURF, FieldMoveKind.WHIRLPOOL)))
     }
 
+    /**
+     * HM07 (the item ball at 47,10 on Ice Path 1F, zone 120, zone_event 117_D39R0101.json) lies in the part entered
+     * from Route 44 (door 11,58): walked to on 1F alone. From the Blackthorn City door (55,40) the way goes down
+     * through B1F, B2F and B3F (237..239) and back up: the whole Ice Path crossed back ([HgssStoryTable] `johto:hm07`).
+     */
+    @Test
+    fun `HM07 lies in the Ice Path part entered from Route 44`() {
+        val w = world
+        fun toHm07(from: Node) = WorldRouter(w).route(120, from, RouteOptions(acceptOneWay = true)) {
+            it.zone == 120 && kotlin.math.abs(it.node.x - 47) + kotlin.math.abs(it.node.y - 10) == 1
+        }
+        assertEquals(emptyList(), assertNotNull(toHm07(Node(11, 57))).links.map { it.zone })
+        assertTrue(237 in assertNotNull(toHm07(Node(55, 39))).links.map { it.zone })
+    }
+
     @Test
     fun `Blaines Gym is reached from Pallet Town by Route 21 and Cinnabar Island`() {
         val w = world

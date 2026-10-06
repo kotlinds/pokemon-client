@@ -151,7 +151,8 @@ object HgssBlockers {
     private const val MAP_ROUTE_32 = 36
     private const val MAP_ROUTE_36 = 40
     private const val MAP_AZALEA = 74
-    private const val MAP_GOLDENROD = 76
+    /** Internal: the Gym door blocker's test builds the woman on this map. */
+    internal const val MAP_GOLDENROD = 76
     private const val MAP_BURNED_TOWER_1F = 7
     private const val MAP_BURNED_TOWER_B1F = 217
     private const val MAP_BELL_TOWER_BARRIER_STATION = 83
@@ -236,7 +237,7 @@ object HgssBlockers {
         Curated(
             Target.Person(MAP_GOLDENROD, 20),
             "A woman stands in front of the Gym door: Whitney went to the Radio Tower for its Radio Card quiz. Win the quiz at the Radio Tower 1F counter " +
-                "(answers: ${HgssStoryTable.RADIO_QUIZ_ANSWERS}); Whitney goes back to her Gym and the woman leaves.",
+                "(${HgssStoryTable.RADIO_QUIZ_INSTRUCTIONS}); Whitney goes back to her Gym and the woman leaves.",
             StoryCondition.FlagSet(HgssStoryTable.Flags.WON_RADIO_CARD_QUIZ),
         ),
         // Route 36: the Sudowoodo (obj_R36_usokky) needs the SquirtBottle (Goldenrod Flower Shop, after the Plain Badge).

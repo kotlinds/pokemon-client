@@ -117,8 +117,8 @@ object HgssStoryTable {
         /** FLAG_HIDE_ITEMBALL_D39R0101_HM07: HM07 Waterfall picked up in Ice Path 1F. */
         const val GOT_HM07 = 0x457
 
-        /** FLAG_SYS_FLYPOINT_BLACKTHORN: reached Blackthorn City (fly point set on entering the town). */
-        const val REACHED_BLACKTHORN = 0x9C5
+        /** FLAG_SYS_FLYPOINT_BLACKTHORN: reached Blackthorn City (fly point 21, set on entering the town). */
+        const val REACHED_BLACKTHORN = HgssFlyMapAddresses.FLAG_FLYPOINT_FIRST + 21
 
         /** FLAG_UNK_0D1: Clair beaten in the Blackthorn Gym (scr_seq_0943_T30GYM0101.s:105). */
         const val BEAT_CLAIR = 0xD1
@@ -135,11 +135,11 @@ object HgssStoryTable {
         /** FLAG_UNK_108: Ho-Oh caught or defeated (scr_seq_0021_D17R0110.s:83). */
         const val HO_OH_DONE = 0x108
 
-        /** FLAG_SYS_FLYPOINT_VICTORY_ROAD: reached the Pokémon League Reception Gate (scr_seq_0213_R22R0101.s:29). */
-        const val REACHED_LEAGUE_GATE = 0x9D1
+        /** FLAG_SYS_FLYPOINT_VICTORY_ROAD: reached the Pokémon League Reception Gate (fly point 33, scr_seq_0213_R22R0101.s:29). */
+        const val REACHED_LEAGUE_GATE = HgssFlyMapAddresses.FLAG_FLYPOINT_FIRST + 33
 
-        /** FLAG_SYS_FLYPOINT_INDIGO: reached the Indigo Plateau (fly point set on entering the town). */
-        const val REACHED_INDIGO_PLATEAU = 0x9B9
+        /** FLAG_SYS_FLYPOINT_INDIGO: reached the Indigo Plateau (fly point 9, set on entering the town). */
+        const val REACHED_INDIGO_PLATEAU = HgssFlyMapAddresses.FLAG_FLYPOINT_FIRST + 9
 
         /** FLAG_GAME_CLEAR: entered the Hall of Fame (src/sys_flags.c:69). The Elite Four flags are reset at each attempt. */
         const val GAME_CLEAR = 0x964
@@ -250,10 +250,22 @@ object HgssStoryTable {
     const val EARTH = 15
 
     /**
-     * The Radio Card quiz's answers in order (Radio Tower 1F), from the script's checks of each Yes / No choice
-     * (scr_seq_0029_D23R0101.s); said by the step and by the Goldenrod Gym door's blocker. By position, so in every language.
+     * The Radio Card quiz's five answers in order (Radio Tower 1F counter), true for YES: the script checks each
+     * yes / no choice (`GetMenuChoice`, 0 = YES) and stops at the first wrong one (scr_seq_0029_D23R0101.s:118-143).
+     * The counter first asks whether to try the quiz at all (another yes / no, :112), which is not one of them.
      */
-    internal const val RADIO_QUIZ_ANSWERS = "Yes, Yes, No, Yes, No"
+    internal val RADIO_QUIZ_ANSWERS: List<Boolean> = listOf(true, true, false, true, false)
+
+    /**
+     * How to win the quiz, said by the step and by the Goldenrod Gym door's blocker: the answers named by the ids of
+     * the yes / no menu's entries ([HgssTouchMenus.YES_NO_ENTRIES], what the agent picks), never by their displayed
+     * text, so the same in every language; the opening "try our Quiz?" is named apart so no answer gets shifted.
+     */
+    internal val RADIO_QUIZ_INSTRUCTIONS: String by lazy {
+        fun id(yes: Boolean) = HgssTouchMenus.YES_NO_ENTRIES[if (yes) 0 else 1].id
+        "the counter first asks whether you want to try the quiz: answer ${id(true)}; then answer the five questions in order: " +
+            RADIO_QUIZ_ANSWERS.joinToString(", ") { id(it) } + " (${id(true)} is the first choice of each yes / no menu, ${id(false)} the second)"
+    }
 
     private fun flag(id: Int) = FlagSet(id)
     private fun atLeast(id: Int, value: Int) = VarAtLeast(id, value)
@@ -363,7 +375,7 @@ object HgssStoryTable {
         HgssStoryStep(
             // A woman stands on the tile in front of the Gym door until the quiz is won (obj_T25_gswoman2_4, hidden by
             // FLAG_UNK_318): Whitney is away trying it.
-            "johto:radio_card", "Cross Ilex Forest and Route 34 north to Goldenrod City. The Gym is closed for now (a woman stands in front of its door: Whitney went to the Radio Tower): enter the Radio Tower (1F) and take the quiz at the counter (answers: $RADIO_QUIZ_ANSWERS) to win the Radio Card; Whitney then goes back to her Gym",
+            "johto:radio_card", "Cross Ilex Forest and Route 34 north to Goldenrod City. The Gym is closed for now (a woman stands in front of its door: Whitney went to the Radio Tower): enter the Radio Tower (1F) and take the quiz at the counter ($RADIO_QUIZ_INSTRUCTIONS) to win the Radio Card; Whitney then goes back to her Gym",
             Or(flag(Flags.WON_RADIO_CARD_QUIZ), badge(PLAIN)),
         ),
         HgssStoryStep(
@@ -389,8 +401,10 @@ object HgssStoryTable {
             "johto:surf", "Visit the Ecruteak Dance Theater (south of the Pokémon Center): beat the Rocket grunt bothering the Kimono Girls, then talk to the old man to get HM03 Surf",
             Or(flag(Flags.GOT_HM03), badge(STORM)),
         ),
-        // After Surf, three sides in any order (none checks a badge: scr_seq T29 / R43 / D35R01 / T24 / D27R01):
-        // Jasmine's errand and her Gym, Chuck (then Fly), the Lake of Rage and Pryce. The Radio Tower waits for them all.
+        // After the Fog Badge, three sides in any order (none checks a badge: scr_seq T29 / R43 / D35R01 / T24 / D27R01):
+        // Jasmine's errand and her Gym (the Lighthouse from the Fog Badge, the pharmacy across the sea once Surf is
+        // in hand), Chuck (then Fly) and the Lake of Rage then Pryce, both once Surf is in hand (Cianwood lies across
+        // the sea, the red Gyarados on the lake). The Radio Tower waits for them all.
         HgssStoryStep(
             "johto:lighthouse", "Go west through Route 38 and 39 to Olivine City; the Gym leader Jasmine is away: climb the Olivine Lighthouse (by the sea, south) and talk to her at the top, next to the sick Ampharos",
             Or(atLeast(Vars.LIGHTHOUSE_JASMINE, 1), flag(Flags.TALKED_TO_JASMINE_LIGHTHOUSE), badge(MINERAL)),
@@ -485,7 +499,9 @@ object HgssStoryTable {
         ),
         HgssStoryStep(
             // Split from johto:ice_path: crossing the Ice Path without the item must not hold Blackthorn back.
-            "johto:hm07", "Get HM07 Waterfall: it lies on Ice Path 1F (Route 44, between Mahogany Town and Blackthorn City). Tohjo Falls, on the way to the Pokémon League, can only be climbed with Waterfall",
+            // On Ice Path 1F at 47,10 (zone_event 117_D39R0101.json), in the part entered from Route 44: from the
+            // Blackthorn City door the whole Ice Path must be crossed back (HgssWorldRoutingTest).
+            "johto:hm07", "Get HM07 Waterfall: it lies on Ice Path 1F, in the part entered from Route 44 (east of Mahogany Town), not near the Blackthorn City exit (from Blackthorn the whole Ice Path must be crossed back). Tohjo Falls, on the way to the Pokémon League, can only be climbed with Waterfall",
             Or(flag(Flags.GOT_HM07), flag(Flags.REACHED_LEAGUE_GATE), flag(Flags.REACHED_INDIGO_PLATEAU)),
         ),
         HgssStoryStep(
@@ -665,7 +681,6 @@ object HgssStoryTable {
         const val LAKE_OF_RAGE = 88
         const val BLACKTHORN_CITY = 89
         const val MOUNT_SILVER = 90
-        const val ROUTE_20 = 92
         const val ILEX_FOREST = 117
     }
 
@@ -685,11 +700,17 @@ object HgssStoryTable {
             "johto:rocket_hideout" to MAHOGANY_TOWN, "johto:badge_glacier" to MAHOGANY_TOWN, "johto:radio_tower" to GOLDENROD_CITY,
             "johto:ice_path" to BLACKTHORN_CITY, "johto:clair" to BLACKTHORN_CITY, "johto:badge_rising" to BLACKTHORN_CITY,
             "johto:visit_elm" to NEW_BARK_TOWN, "johto:kimono_call" to ECRUTEAK_CITY, "johto:kimono_girls" to ECRUTEAK_CITY,
-            "johto:bell_tower" to ECRUTEAK_CITY, "johto:ho_oh" to ECRUTEAK_CITY, "johto:hm07" to BLACKTHORN_CITY, "johto:league_gate" to ROUTE_26,
+            "johto:bell_tower" to ECRUTEAK_CITY, "johto:ho_oh" to ECRUTEAK_CITY, "johto:league_gate" to ROUTE_26,
+            // HM07 lies in the Ice Path's part entered from Route 44: Mahogany Town is the fly point next to it.
+            "johto:hm07" to MAHOGANY_TOWN,
             "johto:victory_road" to INDIGO_PLATEAU, "johto:elite_four" to INDIGO_PLATEAU,
             "kanto:ss_ticket" to NEW_BARK_TOWN, "kanto:ss_aqua" to OLIVINE_CITY,
             "kanto:badge_thunder" to VERMILION_CITY, "kanto:badge_marsh" to SAFFRON_CITY, "kanto:badge_rainbow" to CELADON_CITY,
-            "kanto:badge_soul" to FUCHSIA_CITY, "kanto:badge_volcano" to ROUTE_20, "kanto:power_plant" to ROUTE_10,
+            "kanto:badge_soul" to FUCHSIA_CITY, "kanto:power_plant" to ROUTE_10,
+            // Blaine's Gym (Seafoam Islands) is reached from Cinnabar Island by Route 20 (Route 19 stays closed until
+            // he is beaten): Cinnabar is the fly point next to it (Route 20 is none, and its nearest landing on the
+            // static maps could be Fuchsia City, through that closed route).
+            "kanto:badge_volcano" to CINNABAR_ISLAND,
             "kanto:cerulean_gym_rocket" to CERULEAN_CITY, "kanto:route_24_rocket" to ROUTE_24, "kanto:machine_part" to CERULEAN_CITY,
             "kanto:restore_power" to ROUTE_10, "kanto:misty" to ROUTE_25, "kanto:badge_cascade" to CERULEAN_CITY,
             "kanto:expansion_card" to LAVENDER_TOWN, "kanto:snorlax" to ROUTE_11, "kanto:viridian" to VIRIDIAN_CITY,

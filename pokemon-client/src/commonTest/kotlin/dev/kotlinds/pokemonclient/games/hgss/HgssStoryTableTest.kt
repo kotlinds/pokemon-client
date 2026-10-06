@@ -144,7 +144,15 @@ class HgssStoryTableTest {
         // Cut in hand, no quiz: the Radio Tower comes before the Gym (the woman on its door leaves with FLAG_UNK_318).
         val cut = StoryInfo(badges = setOf(HgssStoryTable.ZEPHYR, HgssStoryTable.HIVE), flags = setOf(HgssStoryTable.Flags.GOT_HM01))
         assertEquals("johto:radio_card", goal(cut))
-        assertTrue("Radio Tower" in HgssStoryTable.step("johto:radio_card")!!.description)
+        val description = HgssStoryTable.step("johto:radio_card")!!.description
+        assertTrue("Radio Tower" in description)
+        // Accept the quiz (its own yes / no, scr_seq_0029_D23R0101.s:112), then the five answers checked by the
+        // script (0 = YES): named by the menu's entry ids, never by displayed text.
+        assertEquals(listOf(true, true, false, true, false), HgssStoryTable.RADIO_QUIZ_ANSWERS)
+        assertTrue(
+            "answer option:yes; then answer the five questions in order: option:yes, option:yes, option:no, option:yes, option:no" in description,
+            description,
+        )
         assertEquals("johto:badge_plain", goal(cut.copy(flags = cut.flags + HgssStoryTable.Flags.WON_RADIO_CARD_QUIZ)))
         // The Plain Badge counts the quiz as done (a save without the flag never asks for it again).
         assertEquals("johto:sudowoodo", goal(StoryInfo(badges = setOf(HgssStoryTable.PLAIN))))
@@ -160,12 +168,26 @@ class HgssStoryTableTest {
             flags = setOf(HgssStoryTable.Flags.BEAT_RADIO_TOWER_ROCKETS, HgssStoryTable.Flags.REACHED_BLACKTHORN),
         )
         assertEquals("johto:clair", goal(crossed))
+        // The other way round: HM07 picked up (it lies in the part entered from Route 44) but Blackthorn not reached
+        // yet, the Ice Path is still the goal.
+        val hm07Only = crossed.copy(flags = setOf(HgssStoryTable.Flags.BEAT_RADIO_TOWER_ROCKETS, HgssStoryTable.Flags.GOT_HM07))
+        assertEquals("johto:ice_path", goal(hm07Only))
         // HM07 is asked for again only on the way to the League, right after Ho-Oh.
         val hoOh = StoryInfo(badges = (0..7).toSet(), flags = setOf(HgssStoryTable.Flags.HO_OH_DONE))
         assertEquals("johto:hm07", goal(hoOh))
+        // Its fly suggestion is Mahogany Town, next to the Route 44 entrance (not Blackthorn City, across the whole Ice Path).
+        assertEquals(87, HgssStoryTable.place("johto:hm07"))
         assertEquals("johto:league_gate", goal(hoOh.copy(flags = hoOh.flags + HgssStoryTable.Flags.GOT_HM07)))
         // Reaching the Reception Gate (Tohjo Falls climbed) counts it as done.
         assertEquals("johto:victory_road", goal(hoOh.copy(flags = hoOh.flags + HgssStoryTable.Flags.REACHED_LEAGUE_GATE)))
+    }
+
+    @Test
+    fun theFlyPointFlagsAreTheDecompsOnes() {
+        // FLAG_SYS_FLYPOINT_BLACKTHORN / _VICTORY_ROAD / _INDIGO (include/constants/flags.h), built from the fly map's first flag.
+        assertEquals(0x9C5, HgssStoryTable.Flags.REACHED_BLACKTHORN)
+        assertEquals(0x9D1, HgssStoryTable.Flags.REACHED_LEAGUE_GATE)
+        assertEquals(0x9B9, HgssStoryTable.Flags.REACHED_INDIGO_PLATEAU)
     }
 
     @Test
