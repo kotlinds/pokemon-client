@@ -151,6 +151,7 @@ object HgssBlockers {
     private const val MAP_ROUTE_32 = 36
     private const val MAP_ROUTE_36 = 40
     private const val MAP_AZALEA = 74
+    private const val MAP_GOLDENROD = 76
     private const val MAP_BURNED_TOWER_1F = 7
     private const val MAP_BURNED_TOWER_B1F = 217
     private const val MAP_BELL_TOWER_BARRIER_STATION = 83
@@ -230,6 +231,14 @@ object HgssBlockers {
             Target.Trigger(MAP_AZALEA, 0),
             "Your rival waits at the west exit toward Ilex Forest: stepping here starts the battle (heal first).",
         ),
+        // Goldenrod: a woman stands on the tile in front of the Gym door (obj_T25_gswoman2_4 at 366,335, door 366,334)
+        // until the Radio Tower 1F quiz is won (FLAG_UNK_318, scr_seq_0029_D23R0101.s:157): Whitney went to try it.
+        Curated(
+            Target.Person(MAP_GOLDENROD, 20),
+            "A woman stands in front of the Gym door: Whitney went to the Radio Tower for its Radio Card quiz. Win the quiz at the Radio Tower 1F counter " +
+                "(answers: ${HgssStoryTable.RADIO_QUIZ_ANSWERS}); Whitney goes back to her Gym and the woman leaves.",
+            StoryCondition.FlagSet(HgssStoryTable.Flags.WON_RADIO_CARD_QUIZ),
+        ),
         // Route 36: the Sudowoodo (obj_R36_usokky) needs the SquirtBottle (Goldenrod Flower Shop, after the Plain Badge).
         Curated(
             Target.Person(MAP_ROUTE_36, 4),
@@ -290,7 +299,7 @@ object HgssBlockers {
         // Radio Tower 1F: the grunt on the stairs only lets a disguised player up (takeover var 3).
         Curated(
             Target.Person(MAP_RADIO_TOWER_1F, 6),
-            "A Rocket grunt guards the stairs: he only lets someone in a Team Rocket uniform up. Get it in the Goldenrod Underground (Basement), from the Rocket hideout there.",
+            "A Rocket grunt guards the stairs: he only lets someone in a Team Rocket uniform up. Get it in the Goldenrod Underground (Tunnel B1F): a Rocket grunt there gives you one.",
             StoryCondition.VarAtLeast(HgssStoryTable.Vars.ROCKET_TAKEOVER, 3),
         ),
         Curated(

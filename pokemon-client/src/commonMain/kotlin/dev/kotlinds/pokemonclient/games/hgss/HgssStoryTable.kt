@@ -43,7 +43,9 @@ data class HgssStoryStep(
  * - a var is compared with >= only when it only grows along the story;
  * - a step that the game lets the player skip or do later is written so that a later milestone also counts as done
  *   (an [Or] with the next badge), so a skipped optional event never hides the real next step.
- * SoulSilver differences (Tidal Bell, Lugia) are not covered: the Clear Bell / Ho-Oh steps are HeartGold's.
+ * HeartGold only: it is the one version the library supports ([HgssVersion.ALL]). SoulSilver's story differs at the
+ * Bell Tower (Tidal Bell and Lugia instead of the Clear Bell and Ho-Oh, the Silver Wing instead of the Rainbow Wing):
+ * supporting it means a variant of those steps per version, not this table as is.
  */
 object HgssStoryTable {
 
@@ -72,6 +74,12 @@ object HgssStoryTable {
         /** FLAG_FOUND_FIRST/SECOND_FARFETCHD (scr_seq_0092_D36R0101.s:246, :634). */
         const val FOUND_FIRST_FARFETCHD = 0x7D
         const val FOUND_SECOND_FARFETCHD = 0x7E
+
+        /**
+         * FLAG_UNK_318: the Radio Tower 1F quiz won (Radio Card); it also hides the woman standing in front of the
+         * Goldenrod Gym door, who waits for Whitney to come back from the quiz (scr_seq_0029_D23R0101.s:157).
+         */
+        const val WON_RADIO_CARD_QUIZ = 0x318
 
         /** FLAG_GOT_HM01: Cut (scr_seq_0092_D36R0101.s:1294). */
         const val GOT_HM01 = 0x80
@@ -108,6 +116,9 @@ object HgssStoryTable {
 
         /** FLAG_HIDE_ITEMBALL_D39R0101_HM07: HM07 Waterfall picked up in Ice Path 1F. */
         const val GOT_HM07 = 0x457
+
+        /** FLAG_SYS_FLYPOINT_BLACKTHORN: reached Blackthorn City (fly point set on entering the town). */
+        const val REACHED_BLACKTHORN = 0x9C5
 
         /** FLAG_UNK_0D1: Clair beaten in the Blackthorn Gym (scr_seq_0943_T30GYM0101.s:105). */
         const val BEAT_CLAIR = 0xD1
@@ -183,9 +194,6 @@ object HgssStoryTable {
         /** VAR_UNK_40A1: 1 once the beasts fled in the Burned Tower basement (scr_seq_0024_D18R0102.s:132). */
         const val BURNED_TOWER_BEASTS = 0x40A1
 
-        /** VAR_UNK_4079: Ecruteak scene; >= 2 after the Burned Tower (the Gym opens). */
-        const val ECRUTEAK = 0x4079
-
         /** VAR_SCENE_LIGHTHOUSE_JASMINE: 1 talked to Jasmine, 2 medicine given, 3 back in Olivine (scr_seq_0066_D27R0107.s). */
         const val LIGHTHOUSE_JASMINE = 0x40A5
 
@@ -201,7 +209,10 @@ object HgssStoryTable {
         /** VAR_SCENE_NEW_BARK_EAST_EXIT: 1 Rising Badge, 2 visited Elm, 3 Ho-Oh done (scr_seq_0843_T20R0101.s:949). */
         const val NEW_BARK_EAST_EXIT = 0x4081
 
-        /** VAR_UNK_410C: Dance Theater; 4 Kimono Girl's call in Ecruteak (scr_seq_0920_T27.s:122), 6 Clear Bell. */
+        /**
+         * VAR_UNK_410C: Dance Theater; 4 once the rival, just beaten by the Kimono Girls, bumped into the player at the
+         * Theater's door (scr_seq_0920_T27.s:122, after Elm said they wait there), 6 Clear Bell.
+         */
         const val DANCE_THEATER = 0x410C
 
         /** VAR_UNK_40F3: 1 once the Bell Tower 1F sage let you in with the Rainbow Wing. */
@@ -237,6 +248,12 @@ object HgssStoryTable {
     const val MARSH = 13
     const val VOLCANO = 14
     const val EARTH = 15
+
+    /**
+     * The Radio Card quiz's answers in order (Radio Tower 1F), from the script's checks of each Yes / No choice
+     * (scr_seq_0029_D23R0101.s); said by the step and by the Goldenrod Gym door's blocker. By position, so in every language.
+     */
+    internal const val RADIO_QUIZ_ANSWERS = "Yes, Yes, No, Yes, No"
 
     private fun flag(id: Int) = FlagSet(id)
     private fun atLeast(id: Int, value: Int) = VarAtLeast(id, value)
@@ -333,15 +350,24 @@ object HgssStoryTable {
         ),
         HgssStoryStep("johto:badge_hive", "Challenge Bugsy at the Azalea Town Gym (bug type: Fire and Flying moves work well)", badge(HIVE), checkpoint = true),
         HgssStoryStep(
+            // The rival's trigger is armed once the Slowpoke Well is cleared (VAR_UNK_4075 = 1, scr_seq_0060_D26R0102.s:89),
+            // before Bugsy as well as after.
             "johto:rival_azalea", "Leave Azalea Town to the west toward Ilex Forest: your rival waits at the exit",
             Or(atLeast(Vars.AZALEA_RIVAL, 2), flag(Flags.GOT_HM01)),
+            after = listOf("johto:slowpoke_well"),
         ),
         HgssStoryStep(
             "johto:ilex_forest", "In Ilex Forest, find the charcoal maker's lost Farfetch'd (follow it and push it back toward the entrance) to get HM01 Cut; teach Cut and cut the tree that blocks the forest path",
             Or(flag(Flags.GOT_HM01), badge(PLAIN)),
         ),
         HgssStoryStep(
-            "johto:badge_plain", "Cross Ilex Forest and Route 34 north to Goldenrod City and challenge Whitney at the Gym (Normal type: Fighting moves work well)",
+            // A woman stands on the tile in front of the Gym door until the quiz is won (obj_T25_gswoman2_4, hidden by
+            // FLAG_UNK_318): Whitney is away trying it.
+            "johto:radio_card", "Cross Ilex Forest and Route 34 north to Goldenrod City. The Gym is closed for now (a woman stands in front of its door: Whitney went to the Radio Tower): enter the Radio Tower (1F) and take the quiz at the counter (answers: $RADIO_QUIZ_ANSWERS) to win the Radio Card; Whitney then goes back to her Gym",
+            Or(flag(Flags.WON_RADIO_CARD_QUIZ), badge(PLAIN)),
+        ),
+        HgssStoryStep(
+            "johto:badge_plain", "Challenge Whitney at the Goldenrod City Gym (Normal type: Fighting moves work well)",
             badge(PLAIN),
             checkpoint = true,
         ),
@@ -351,7 +377,8 @@ object HgssStoryTable {
         ),
         HgssStoryStep(
             "johto:burned_tower", "Go on through Route 37 to Ecruteak City and enter the Burned Tower (north-west): beat your rival, then go down to the basement where the legendary beasts sleep",
-            Or(atLeast(Vars.BURNED_TOWER_BEASTS, 1), atLeast(Vars.ECRUTEAK, 2), badge(FOG)),
+            // Not VAR_UNK_4079 (the Ecruteak scene): it goes 2, 1, 0, 3, 4 along the story, never compared with >=.
+            Or(atLeast(Vars.BURNED_TOWER_BEASTS, 1), badge(FOG)),
         ),
         HgssStoryStep("johto:badge_fog", "Challenge Morty at the Ecruteak City Gym (Ghost type: Dark moves work well; Normal and Fighting moves can't hit)", badge(FOG), checkpoint = true),
         // endregion
@@ -367,7 +394,9 @@ object HgssStoryTable {
         HgssStoryStep(
             "johto:lighthouse", "Go west through Route 38 and 39 to Olivine City; the Gym leader Jasmine is away: climb the Olivine Lighthouse (by the sea, south) and talk to her at the top, next to the sick Ampharos",
             Or(atLeast(Vars.LIGHTHOUSE_JASMINE, 1), flag(Flags.TALKED_TO_JASMINE_LIGHTHOUSE), badge(MINERAL)),
-            after = listOf("johto:surf"),
+            // Olivine is reached on foot (Routes 38 and 39) and the Lighthouse checks no badge: only the pharmacy
+            // across the sea needs Surf (johto:secretpotion).
+            after = listOf("johto:badge_fog"),
         ),
         HgssStoryStep(
             "johto:badge_storm", "Surf west from Olivine City across Routes 40 and 41 to Cianwood City and challenge Chuck at the Gym (Fighting type: Flying and Psychic moves work well)",
@@ -382,7 +411,7 @@ object HgssStoryTable {
         HgssStoryStep(
             "johto:secretpotion", "Get the SecretPotion for the sick Ampharos at the Cianwood City pharmacy (surf west from Olivine City across Routes 40 and 41)",
             Or(flag(Flags.GOT_SECRETPOTION), atLeast(Vars.LIGHTHOUSE_JASMINE, 2), badge(MINERAL)),
-            after = listOf("johto:lighthouse"),
+            after = listOf("johto:lighthouse", "johto:surf"),
         ),
         HgssStoryStep(
             "johto:medicine", "Bring the SecretPotion to Jasmine at the top of the Olivine Lighthouse",
@@ -394,7 +423,9 @@ object HgssStoryTable {
             after = listOf("johto:medicine"),
         ),
         HgssStoryStep(
-            "johto:red_gyarados", "Go east from Ecruteak (Route 42, through Mt. Mortar) to Mahogany Town, then north on Route 43 to the Lake of Rage: surf to the red Gyarados and defeat or catch it",
+            // The Hiker's HM04 comes from a trigger across Route 42 east of the Ecruteak gate (x 434, y 172..176,
+            // scr_seq_0252_R42.s:64): every player walking to Mahogany gets it, so it is no step of its own.
+            "johto:red_gyarados", "Go east from Ecruteak (Route 42, through Mt. Mortar; right after the gate a Hiker gives you HM04 Strength, keep it for the Ice Path) to Mahogany Town, then north on Route 43 to the Lake of Rage: surf to the red Gyarados and defeat or catch it",
             Or(flag(Flags.GOT_RED_SCALE), atLeast(Vars.LANCE_LAKE_OF_RAGE, 1), flag(Flags.ROCKET_HIDEOUT_CLEARED), badge(GLACIER)),
             after = listOf("johto:surf"),
         ),
@@ -413,20 +444,21 @@ object HgssStoryTable {
             after = listOf("johto:rocket_hideout"),
         ),
         HgssStoryStep(
-            "johto:radio_tower", "Team Rocket has taken over the Goldenrod Radio Tower: get the Basement Key (Radio Tower 5F) and the Card Key (Director, Goldenrod Underground Warehouse), then free every floor and beat Archer at the top",
+            "johto:radio_tower", "Team Rocket has taken over the Goldenrod Radio Tower. In order: 1) in the Goldenrod Underground (Tunnel B1F), a Rocket grunt gives you a Team Rocket uniform (the grunt on Radio Tower 1F only lets a Rocket up the stairs); 2) go up from Radio Tower 1F (your rival battles you there); 3) on 5F the fake Director (Executive Petrel) battles you and gives the Basement Key; 4) open the locked door of Goldenrod Tunnel B1F with it and go through B2F to the Warehouse, where the real Director gives you the Card Key; 5) open the 3F shutter with it, climb to the Observation Deck and beat Archer",
             Or(atLeast(Vars.ROCKET_TAKEOVER, 5), flag(Flags.BEAT_RADIO_TOWER_ROCKETS)),
             checkpoint = true,
         ),
         HgssStoryStep(
-            "johto:ice_path", "Leave Mahogany Town east by Route 44 into the Ice Path: pick up HM07 Waterfall inside and cross it to Blackthorn City",
-            Or(flag(Flags.GOT_HM07), badge(RISING)),
+            // B1F's boulders must drop to B2F, where they stop the ice slides next to the stairs (HgssPuzzles, Ice Path).
+            "johto:ice_path", "Leave Mahogany Town east by Route 44 into the Ice Path and cross it to Blackthorn City. You need Strength (HM04, from the Hiker on Route 42) taught to a party Pokémon: on B1F push the boulders into the holes, they land on B2F and stop the slides on the ice. Pick up HM07 Waterfall on 1F on the way (Tohjo Falls needs it later)",
+            Or(flag(Flags.REACHED_BLACKTHORN), flag(Flags.BEAT_CLAIR), flag(Flags.PASSED_DRAGONS_DEN), badge(RISING)),
         ),
         HgssStoryStep(
             "johto:clair", "Challenge Clair at the Blackthorn City Gym (Dragon type: Ice moves work well)",
             Or(flag(Flags.BEAT_CLAIR), flag(Flags.PASSED_DRAGONS_DEN), badge(RISING)),
         ),
         HgssStoryStep(
-            "johto:badge_rising", "Clair wants you to pass the Dragon's Den test: enter the Den behind the Gym, surf to the shrine and answer the elder's questions (be kind to your Pokémon); Clair then gives you the Rising Badge",
+            "johto:badge_rising", "Clair wants you to pass the Dragon's Den test: enter the Den behind the Gym, surf and cross the whirlpools (Whirlpool, HM05 from Lance in the Rocket hideout, taught to a party Pokémon) to the shrine and answer the elder's questions (be kind to your Pokémon); Clair then gives you the Rising Badge",
             badge(RISING),
             checkpoint = true,
         ),
@@ -435,7 +467,7 @@ object HgssStoryTable {
             atLeast(Vars.NEW_BARK_EAST_EXIT, 2),
         ),
         HgssStoryStep(
-            "johto:kimono_call", "Go to Ecruteak City: a Kimono Girl meets you in town and asks you to come to the Dance Theater",
+            "johto:kimono_call", "Go to the Ecruteak Dance Theater (Elm says the Kimono Girls wait for you there): at its door your rival, just beaten by them, bumps into you",
             Or(atLeast(Vars.DANCE_THEATER, 4), flag(Flags.BEAT_KIMONO_GIRLS)),
         ),
         HgssStoryStep(
@@ -452,11 +484,16 @@ object HgssStoryTable {
             checkpoint = true,
         ),
         HgssStoryStep(
+            // Split from johto:ice_path: crossing the Ice Path without the item must not hold Blackthorn back.
+            "johto:hm07", "Get HM07 Waterfall: it lies on Ice Path 1F (Route 44, between Mahogany Town and Blackthorn City). Tohjo Falls, on the way to the Pokémon League, can only be climbed with Waterfall",
+            Or(flag(Flags.GOT_HM07), flag(Flags.REACHED_LEAGUE_GATE), flag(Flags.REACHED_INDIGO_PLATEAU)),
+        ),
+        HgssStoryStep(
             "johto:league_gate", "Leave New Bark Town east: surf Route 27, climb Tohjo Falls (Waterfall) and follow Route 26 north to the Pokémon League Reception Gate",
             Or(flag(Flags.REACHED_LEAGUE_GATE), flag(Flags.REACHED_INDIGO_PLATEAU), flag(Flags.GAME_CLEAR)),
         ),
         HgssStoryStep(
-            "johto:victory_road", "Cross Victory Road (north of the Reception Gate; Strength boulders) to the Indigo Plateau; your rival waits near the exit",
+            "johto:victory_road", "Cross Victory Road (north of the Reception Gate) to the Indigo Plateau; your rival waits near the exit. Strength (HM04) is needed: on 1F push the boulder out of the way of the ladder up; on 3F the way on goes down a hole to 2F, where another boulder must be pushed to reach the next ladder",
             Or(flag(Flags.REACHED_INDIGO_PLATEAU), flag(Flags.GAME_CLEAR)),
         ),
         HgssStoryStep(
@@ -477,7 +514,8 @@ object HgssStoryTable {
         ),
         HgssStoryStep("kanto:vermilion", "Get off the ship at Vermilion City, Kanto", flag(Flags.ARRIVED_IN_VERMILION), checkpoint = true),
         // From Vermilion, Kanto is open: every gym in any order, and two story lines (the Power Plant, then Misty on
-        // one side and the way west through Snorlax and Brock on the other). Blue waits for the seven other badges.
+        // one side and the way west through Snorlax and Brock on the other). Blaine waits for the way west (Route 19
+        // is closed until he is beaten), Blue for the seven other badges.
         HgssStoryStep(
             "kanto:badge_thunder", "Challenge Lt. Surge at the Vermilion City Gym (find the switches under the trash cans; Electric type: Ground moves work well)",
             badge(THUNDER),
@@ -493,11 +531,6 @@ object HgssStoryTable {
         ),
         HgssStoryStep(
             "kanto:badge_soul", "Challenge Janine at the Fuchsia City Gym (south Kanto: Routes 12 to 15 from Lavender Town, or the Cycling Road from Celadon; invisible walls; Poison type: Ground and Psychic moves work well)", badge(SOUL),
-            after = listOf("kanto:vermilion"),
-        ),
-        HgssStoryStep(
-            "kanto:badge_volcano", "Challenge Blaine: his Gym is inside the Seafoam Islands on Route 20 (surf south from Fuchsia City by Route 19, or from Pallet Town by Route 21 and Cinnabar Island; Fire type: Water and Ground moves work well)",
-            badge(VOLCANO),
             after = listOf("kanto:vermilion"),
         ),
         HgssStoryStep(
@@ -546,7 +579,7 @@ object HgssStoryTable {
             after = listOf("kanto:expansion_card"),
         ),
         HgssStoryStep(
-            "kanto:viridian", "Go through Diglett's Cave and north along Route 2 to reach western Kanto (Viridian City)",
+            "kanto:viridian", "Go through Diglett's Cave: it comes out on Route 2; go south (through the Route 2 south-east gatehouse) to reach western Kanto at Viridian City (north leads to Pewter City)",
             flag(Flags.UNLOCKED_WEST_KANTO),
             after = listOf("kanto:snorlax"),
         ),
@@ -555,17 +588,24 @@ object HgssStoryTable {
             after = listOf("kanto:viridian"),
         ),
         HgssStoryStep(
+            "kanto:badge_volcano", "Challenge Blaine: his Gym is inside the Seafoam Islands. From Viridian City go south to Pallet Town, surf Route 21 south to Cinnabar Island, then east on Route 20 into the Seafoam Islands cave (Route 19, south of Fuchsia City, stays closed by workmen until Blaine is beaten; Fire type: Water and Ground moves work well)",
+            badge(VOLCANO),
+            // The workmen of Route 19 (obj_W19_workman, _2) leave only once Blaine is beaten (scr_seq_0015_D11R0106.s:95),
+            // and Pallet Town is only reached through Viridian City, after the Route 2 / Diglett's Cave way west.
+            after = listOf("kanto:viridian"),
+        ),
+        HgssStoryStep(
             "kanto:blue_cinnabar", "With seven Kanto badges, talk to Blue on Cinnabar Island: he goes back to open the Viridian City Gym",
             Or(flag(Flags.BLUE_OPENED_VIRIDIAN_GYM), badge(EARTH)),
         ),
         HgssStoryStep("kanto:badge_earth", "Challenge Blue at the Viridian City Gym", badge(EARTH), checkpoint = true),
         HgssStoryStep(
-            "kanto:mt_silver_permission", "Visit Prof. Oak in his Pallet Town lab: with all 16 badges he lets you enter Mt. Silver",
+            "kanto:mt_silver_permission", "Visit Prof. Oak in his Pallet Town lab: with all 16 badges he gives you HM08 Rock Climb (needed in Mt. Silver) and lets you enter Mt. Silver",
             flag(Flags.UNLOCKED_MT_SILVER),
             checkpoint = true,
         ),
         HgssStoryStep(
-            "kanto:red", "Go through the Pokémon League gate (Route 22, west of Viridian City) to Route 28 and Mt. Silver, climb to the summit and beat Red",
+            "kanto:red", "Go through the Pokémon League gate (Route 22, west of Viridian City) to Route 28 and Mt. Silver, climb to the summit and beat Red. Rock Climb (HM08 from Prof. Oak, taught to a party Pokémon) is needed for the walls on the way up",
             atLeast(Vars.BEAT_RED, 1),
         ),
     )
@@ -637,7 +677,7 @@ object HgssStoryTable {
         mapOf(
             "johto:sprout_tower" to VIOLET_CITY, "johto:badge_zephyr" to VIOLET_CITY, "johto:togepi_egg" to VIOLET_CITY,
             "johto:route_32" to AZALEA_TOWN, "johto:slowpoke_well" to AZALEA_TOWN, "johto:badge_hive" to AZALEA_TOWN,
-            "johto:rival_azalea" to AZALEA_TOWN, "johto:ilex_forest" to ILEX_FOREST, "johto:badge_plain" to GOLDENROD_CITY,
+            "johto:rival_azalea" to AZALEA_TOWN, "johto:ilex_forest" to ILEX_FOREST, "johto:radio_card" to GOLDENROD_CITY, "johto:badge_plain" to GOLDENROD_CITY,
             "johto:sudowoodo" to ROUTE_36, "johto:burned_tower" to ECRUTEAK_CITY, "johto:badge_fog" to ECRUTEAK_CITY,
             "johto:surf" to ECRUTEAK_CITY, "johto:lighthouse" to OLIVINE_CITY, "johto:badge_storm" to CIANWOOD_CITY,
             "johto:fly" to CIANWOOD_CITY, "johto:secretpotion" to CIANWOOD_CITY, "johto:medicine" to OLIVINE_CITY,
@@ -645,7 +685,7 @@ object HgssStoryTable {
             "johto:rocket_hideout" to MAHOGANY_TOWN, "johto:badge_glacier" to MAHOGANY_TOWN, "johto:radio_tower" to GOLDENROD_CITY,
             "johto:ice_path" to BLACKTHORN_CITY, "johto:clair" to BLACKTHORN_CITY, "johto:badge_rising" to BLACKTHORN_CITY,
             "johto:visit_elm" to NEW_BARK_TOWN, "johto:kimono_call" to ECRUTEAK_CITY, "johto:kimono_girls" to ECRUTEAK_CITY,
-            "johto:bell_tower" to ECRUTEAK_CITY, "johto:ho_oh" to ECRUTEAK_CITY, "johto:league_gate" to ROUTE_26,
+            "johto:bell_tower" to ECRUTEAK_CITY, "johto:ho_oh" to ECRUTEAK_CITY, "johto:hm07" to BLACKTHORN_CITY, "johto:league_gate" to ROUTE_26,
             "johto:victory_road" to INDIGO_PLATEAU, "johto:elite_four" to INDIGO_PLATEAU,
             "kanto:ss_ticket" to NEW_BARK_TOWN, "kanto:ss_aqua" to OLIVINE_CITY,
             "kanto:badge_thunder" to VERMILION_CITY, "kanto:badge_marsh" to SAFFRON_CITY, "kanto:badge_rainbow" to CELADON_CITY,

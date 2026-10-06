@@ -112,7 +112,78 @@ class HgssStoryTableTest {
     @Test
     fun inOrderOnlyOneGoalIsOpen() {
         assertEquals(listOf("johto:talk_to_mom"), open(StoryInfo()))
-        assertEquals(listOf("johto:surf"), open(StoryInfo(badges = setOf(HgssStoryTable.FOG))))
+        assertEquals(listOf("johto:togepi_egg"), open(StoryInfo(badges = setOf(HgssStoryTable.ZEPHYR))))
+    }
+
+    @Test
+    fun fromTheFogBadgeSurfAndTheLighthouseAreOpenButThePharmacyWaitsForSurf() {
+        // Olivine is reached on foot and the Lighthouse checks no badge (scr_seq_0066_D27R0107.s): Jasmine's errand
+        // opens with the Fog Badge, beside the Surf errand at the Dance Theater.
+        val fog = StoryInfo(badges = (0..3).toSet())
+        assertEquals(listOf("johto:surf", "johto:lighthouse"), open(fog))
+        // Jasmine talked to, still no Surf: the Cianwood pharmacy is across the sea, not open yet.
+        val talked = fog.copy(flags = setOf(HgssStoryTable.Flags.TALKED_TO_JASMINE_LIGHTHOUSE))
+        assertEquals(listOf("johto:surf"), open(talked))
+        assertEquals(listOf("johto:badge_storm", "johto:secretpotion", "johto:red_gyarados"), open(talked.copy(flags = talked.flags + HgssStoryTable.Flags.GOT_HM03)))
+    }
+
+    @Test
+    fun theAzaleaRivalCanBeMetBeforeBugsy() {
+        // The rival's trigger is armed once the Slowpoke Well is cleared (scr_seq_0060_D26R0102.s:89).
+        val well = StoryInfo(
+            badges = setOf(HgssStoryTable.ZEPHYR),
+            flags = setOf(HgssStoryTable.Flags.AZALEA_ROCKETS_BEATEN),
+            vars = mapOf(HgssStoryTable.Vars.ROUTE_32_GATE to 1),
+        )
+        assertEquals(listOf("johto:badge_hive", "johto:rival_azalea"), open(well))
+        assertEquals("johto:badge_hive", goal(well))
+    }
+
+    @Test
+    fun whitneysGymWaitsForTheRadioCardQuiz() {
+        // Cut in hand, no quiz: the Radio Tower comes before the Gym (the woman on its door leaves with FLAG_UNK_318).
+        val cut = StoryInfo(badges = setOf(HgssStoryTable.ZEPHYR, HgssStoryTable.HIVE), flags = setOf(HgssStoryTable.Flags.GOT_HM01))
+        assertEquals("johto:radio_card", goal(cut))
+        assertTrue("Radio Tower" in HgssStoryTable.step("johto:radio_card")!!.description)
+        assertEquals("johto:badge_plain", goal(cut.copy(flags = cut.flags + HgssStoryTable.Flags.WON_RADIO_CARD_QUIZ)))
+        // The Plain Badge counts the quiz as done (a save without the flag never asks for it again).
+        assertEquals("johto:sudowoodo", goal(StoryInfo(badges = setOf(HgssStoryTable.PLAIN))))
+    }
+
+    @Test
+    fun theIcePathNeedsStrengthAndCrossingItWithoutHm07DoesNotHoldBlackthornBack() {
+        val description = HgssStoryTable.step("johto:ice_path")!!.description
+        assertTrue("Strength" in description && "Route 42" in description, description)
+        // The Radio Tower freed, the Ice Path crossed (Blackthorn's fly point) without picking up HM07: Clair is next.
+        val crossed = StoryInfo(
+            badges = (0..6).toSet(),
+            flags = setOf(HgssStoryTable.Flags.BEAT_RADIO_TOWER_ROCKETS, HgssStoryTable.Flags.REACHED_BLACKTHORN),
+        )
+        assertEquals("johto:clair", goal(crossed))
+        // HM07 is asked for again only on the way to the League, right after Ho-Oh.
+        val hoOh = StoryInfo(badges = (0..7).toSet(), flags = setOf(HgssStoryTable.Flags.HO_OH_DONE))
+        assertEquals("johto:hm07", goal(hoOh))
+        assertEquals("johto:league_gate", goal(hoOh.copy(flags = hoOh.flags + HgssStoryTable.Flags.GOT_HM07)))
+        // Reaching the Reception Gate (Tohjo Falls climbed) counts it as done.
+        assertEquals("johto:victory_road", goal(hoOh.copy(flags = hoOh.flags + HgssStoryTable.Flags.REACHED_LEAGUE_GATE)))
+    }
+
+    @Test
+    fun theFieldMovesTheWayNeedsAreNamedWhereTheyAreNeeded() {
+        // Checked on the ROM's maps (HgssWorldRoutingTest): Whirlpool in the Dragon's Den, Strength on Victory Road,
+        // Rock Climb (and not Rock Smash) up Mt. Silver; Oak gives HM08 with the permission (scr_seq_0740_T01R0301.s:201).
+        fun text(id: String) = HgssStoryTable.step(id)!!.description
+        assertTrue("Whirlpool" in text("johto:badge_rising"))
+        assertTrue("Strength" in text("johto:victory_road"))
+        assertTrue("Rock Climb" in text("kanto:mt_silver_permission"))
+        assertTrue("Rock Climb" in text("kanto:red") && "Rock Smash" !in text("kanto:red"))
+    }
+
+    @Test
+    fun theEcruteakSceneVarIsNotReadItGoesUpAndDown() {
+        // VAR_UNK_4079 goes 2, 1, 0, 3, 4 along the story (D18R0102, T27GYM0101, T27, T20R0101): never compared with >=.
+        assertFalse(0x4079 in HgssStoryTable.varIds)
+        assertEquals("johto:burned_tower", goal(StoryInfo(badges = setOf(HgssStoryTable.ZEPHYR, HgssStoryTable.HIVE, HgssStoryTable.PLAIN), flags = setOf(HgssStoryTable.Flags.SUDOWOODO_GONE), vars = mapOf(0x4079 to 3))))
     }
 
     @Test
@@ -127,15 +198,30 @@ class HgssStoryTableTest {
     }
 
     @Test
-    fun fromVermilionEveryKantoGymAndThePowerPlantAreOpen() {
+    fun fromVermilionEveryKantoGymButBlainesAndThePowerPlantAreOpen() {
         val story = StoryInfo(badges = (0..7).toSet(), flags = setOf(HgssStoryTable.Flags.GAME_CLEAR, HgssStoryTable.Flags.ARRIVED_IN_VERMILION))
+        // Blaine waits for the way west: Route 19 is closed by workmen until he is beaten (scr_seq_0015_D11R0106.s:95).
         assertEquals(
-            listOf("kanto:badge_thunder", "kanto:badge_marsh", "kanto:badge_rainbow", "kanto:badge_soul", "kanto:badge_volcano", "kanto:power_plant"),
+            listOf("kanto:badge_thunder", "kanto:badge_marsh", "kanto:badge_rainbow", "kanto:badge_soul", "kanto:power_plant"),
             open(story),
         )
         // The Cerulean Gym scene opens two lines: the grunt on Route 24 (→ power → the way west) and Misty on Route 25.
         val gym = story.copy(flags = story.flags + HgssStoryTable.Flags.POWER_PLANT_STORY, vars = mapOf(HgssStoryTable.Vars.ROUTE_24_ROCKET to 1))
         assertEquals(listOf("kanto:route_24_rocket", "kanto:misty"), open(gym).filterNot { it.contains("badge_") })
+    }
+
+    @Test
+    fun blainesGymOpensWithViridianCityAndIsReachedFromPalletTown() {
+        val west = StoryInfo(
+            badges = (0..7).toSet(),
+            flags = setOf(HgssStoryTable.Flags.GAME_CLEAR, HgssStoryTable.Flags.ARRIVED_IN_VERMILION, HgssStoryTable.Flags.RESTORED_POWER, HgssStoryTable.Flags.UNLOCKED_WEST_KANTO),
+            vars = mapOf(HgssStoryTable.Vars.MISTY to 2),
+        )
+        assertTrue("kanto:badge_volcano" in open(west))
+        val volcano = HgssStoryTable.step("kanto:badge_volcano")!!.description
+        assertTrue("Pallet Town" in volcano && "Route 21" in volcano, volcano)
+        // The same save before Viridian City: Blaine is not open.
+        assertFalse("kanto:badge_volcano" in open(west.copy(flags = west.flags - HgssStoryTable.Flags.UNLOCKED_WEST_KANTO)))
     }
 
     @Test
@@ -158,7 +244,7 @@ class HgssStoryTableTest {
         val story = StoryInfo(badges = (0..3).toSet(), flags = setOf(HgssStoryTable.Flags.GOT_HM03))
         assertEquals(3, HgssStoryTable.openGoals(story).size)
         // One goal: a list of one.
-        assertEquals(listOf(HgssStoryTable.step("johto:surf")!!.description), HgssStoryTable.openGoals(StoryInfo(badges = setOf(HgssStoryTable.FOG))).map { it.description })
+        assertEquals(listOf(HgssStoryTable.step("johto:togepi_egg")!!.description), HgssStoryTable.openGoals(StoryInfo(badges = setOf(HgssStoryTable.ZEPHYR))).map { it.description })
     }
 
     @Test

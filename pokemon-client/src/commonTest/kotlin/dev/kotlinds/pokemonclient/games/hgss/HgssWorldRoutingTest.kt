@@ -175,4 +175,70 @@ class HgssWorldRoutingTest {
     }
 
     // endregion
+
+    // region The field moves the story table names (HgssStoryTable descriptions)
+
+    /** Route options with exactly the field moves [kinds] (surfing allowed when Surf is one of them), ledges allowed. */
+    private fun moves(vararg kinds: FieldMoveKind) = RouteOptions(canSurf = FieldMoveKind.SURF in kinds, fieldMoves = kinds.toSet(), acceptOneWay = true)
+
+    @Test
+    fun `Mt Silver is climbed from Route 28 to Red with Rock Climb and without Rock Smash`() {
+        val w = world
+        // Route 28 (zone 32) next to the League gate's west door, to the tile in front of Red (summit 465, 30,12).
+        fun toRed(options: RouteOptions) = WorldRouter(w).route(32, Node(885, 266), options) { it.zone == 465 && it.node.x == 30 && it.node.y == 12 }
+        // Rock Climb alone is enough; the Rock Smash rocks (2F, zone 463: five of them) are off the way.
+        assertEquals(5, assertNotNull(w.areaOf(463)).people.count { it.zone == 463 && it.obstacle == FieldMoveKind.ROCK_SMASH })
+        assertNotNull(toRed(moves(FieldMoveKind.ROCK_CLIMB)))
+        // Without Rock Climb, no way (even with every other field move).
+        assertEquals(null, toRed(moves(FieldMoveKind.SURF, FieldMoveKind.WATERFALL, FieldMoveKind.WHIRLPOOL, FieldMoveKind.STRENGTH, FieldMoveKind.ROCK_SMASH, FieldMoveKind.CUT)))
+    }
+
+    /**
+     * Victory Road (1F 124, 2F 178, 3F 179) needs Strength twice: on 1F the boulder at 43,52 closes the way to the
+     * ladder up; from 3F's first part the only way on is the hole at 55,42 down to 2F (57,42), where the boulder at
+     * 50,28 closes the way to the ladder at 56,21; past it, 3F leads to holes into 2F's last part and its ladder up to
+     * the exit. The router treats boulders as walls ([WorldRouter.staticOverlay]); the pushes are the [PushPlanner]'s.
+     */
+    @Test
+    fun `Victory Road needs Strength on 1F and on 2F after the hole`() {
+        val w = world
+        val all = moves(FieldMoveKind.SURF, FieldMoveKind.WATERFALL, FieldMoveKind.ROCK_SMASH, FieldMoveKind.ROCK_CLIMB)
+        // Boulders in place, no way through; without them the floors are linked.
+        assertEquals(null, WorldRouter(w).route(124, Node(46, 58), all) { it.zone == 58 })
+        assertNotNull(WorldRouter(w) { _, _ -> dev.kotlinds.pokemonclient.world.Overlay() }.route(124, Node(46, 58), RouteOptions(acceptOneWay = true)) { it.zone == 58 })
+        fun floor(zone: Int, from: Node, ladder: Pair<Int, Int>, options: RouteOptions): dev.kotlinds.pokemonclient.world.Route? {
+            val area = assertNotNull(w.areaOf(zone))
+            return dev.kotlinds.pokemonclient.world.PushPlanner(area, WorldRouter.staticOverlay(area)).route(from, options, setOf(ladder)) { it.x == ladder.first && it.y == ladder.second }
+        }
+        val strength = moves(FieldMoveKind.STRENGTH)
+        // 1F: from the entrance to the ladder up (19,7).
+        assertEquals(null, floor(124, Node(46, 58), 19 to 7, RouteOptions(acceptOneWay = true)))
+        assertNotNull(floor(124, Node(46, 58), 19 to 7, strength))
+        // 2F: from 1F's ladder only the ladder at 51,38 is reached; 3F from there only reaches the hole at 55,42.
+        assertNotNull(floor(178, Node(7, 30), 51 to 38, RouteOptions(acceptOneWay = true)))
+        val third = assertNotNull(w.areaOf(179))
+        assertIs<Pathfinder.Result.Failed>(Pathfinder(third, WorldRouter.staticOverlay(third)).route(Node(49, 39), all, setOf(38 to 13)) { it.x == 38 && it.y == 13 })
+        // Below the hole (2F 57,42): the ladder at 56,21 needs the boulder at 50,28 pushed.
+        assertEquals(null, floor(178, Node(57, 42), 56 to 21, RouteOptions(acceptOneWay = true)))
+        assertNotNull(floor(178, Node(57, 42), 56 to 21, strength))
+    }
+
+    @Test
+    fun `the Dragons Den shrine is reached only with Whirlpool`() {
+        val w = world
+        // From the Den's entrance hall (125) down its ladder (6,5) to the shrine (288).
+        fun toShrine(options: RouteOptions) = WorldRouter(w).route(125, Node(6, 5), options) { it.zone == 288 }
+        assertEquals(null, toShrine(moves(FieldMoveKind.SURF)))
+        assertNotNull(toShrine(moves(FieldMoveKind.SURF, FieldMoveKind.WHIRLPOOL)))
+    }
+
+    @Test
+    fun `Blaines Gym is reached from Pallet Town by Route 21 and Cinnabar Island`() {
+        val w = world
+        // Pallet Town (49) by its first house door, surfing, to the Seafoam Islands Gym (457): Route 20, then the cave.
+        val route = assertNotNull(WorldRouter(w).route(49, Node(1033, 364), moves(FieldMoveKind.SURF)) { it.zone == 457 })
+        assertEquals(listOf(92, 146), route.links.map { it.zone })
+    }
+
+    // endregion
 }

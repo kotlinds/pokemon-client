@@ -51,6 +51,18 @@ class HgssBlockersTest {
     }
 
     @Test
+    fun theWomanOnTheGoldenrodGymDoorBlocksUntilTheRadioCardQuiz() {
+        // obj_T25_gswoman2_4 (event 20) on 366,335, the tile in front of the Gym door, hidden by FLAG_UNK_318 once
+        // the Radio Tower 1F quiz is won (scr_seq_0029_D23R0101.s:157).
+        val woman = person(20, 366, 335, mapId = 76, eventFlag = 0x318)
+        val blockers = HgssBlockers.of(state(76, listOf(woman)))
+        assertEquals(listOf("person:20"), blockers.map { it.target })
+        assertTrue("Radio Tower" in blockers.single().reason && "quiz" in blockers.single().reason, blockers.single().reason)
+        val won = StoryInfo(flags = setOf(HgssStoryTable.Flags.WON_RADIO_CARD_QUIZ))
+        assertTrue(HgssBlockers.of(state(76, listOf(woman), story = won)).isEmpty())
+    }
+
+    @Test
     fun theLeagueGateGuardStepsAsideWithOaksPermission() {
         val guard = person(1, 8, 9, mapId = 299)
         assertEquals(1, HgssBlockers.of(state(299, listOf(guard))).size)

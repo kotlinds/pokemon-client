@@ -102,7 +102,7 @@ data class StoryState(
 
 /** One step of a game's story table. */
 data class StoryStep(
-    /** Stable id of the step, e.g. `johto:badge_8` (language-independent). */
+    /** Stable id of the step, e.g. `johto:badge_rising` (language-independent). */
     val id: String,
     /** What to do, written for the agent (our walkthrough text, not the game's). */
     val description: String,
