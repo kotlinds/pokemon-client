@@ -16,7 +16,9 @@ import dev.kotlinds.pokemonclient.state.MovementMode
  *   `FieldSystem_EncounterRateRoll`: 40 running or cycling, 20 walking), unless [MoveOptions.runInEncounterAreas], or
  *   the running shoes switched on (the game runs whatever is pressed: walking there would need them switched off).
  *   Only where walking makes the roll rarer ([dev.kotlinds.pokemonclient.world.StepWeights.walkedZones]: Platinum rolls
- *   the same on foot, its walks run through).
+ *   the same on foot, its walks run through), and where something can appear at that point of the walk (a Repel at
+ *   work keeps the weaker wild Pokémon away for its steps left: run through until it wears off,
+ *   [dev.kotlinds.pokemonclient.world.StepWeights.after]).
  *   The bike rides on (getting off for a few tiles costs more than it saves).
  */
 internal data class FootPace(val land: MovementMode, val encounterTiles: MovementMode) {

@@ -32,7 +32,7 @@ internal object WalkSegments {
     /**
      * A straight run of plain steps in [direction], [tiles] in order (the last one is the segment's end), each run (B
      * held) or walked onto as [runs] says (one per tile, [MovePlans.runOnto]: a walk lets go of B onto the tiles where
-     * wild Pokémon appear).
+     * wild Pokémon appear, once a Repel no longer keeps them away).
      */
     data class Segment(val direction: Direction, val tiles: List<Node>, val runs: List<Boolean> = tiles.map { false }) {
         init {
@@ -57,9 +57,10 @@ internal object WalkSegments {
 
     /**
      * The segment starting at [edges]`[start]`: the following [Edge.Step]s in the same direction that don't enter a
-     * warp tile of [area] (a door is a single, longer step). Null when that edge isn't a plain step.
+     * warp tile of [area] (a door is a single, longer step). Null when that edge isn't a plain step. [taken]: the steps
+     * the game counted before [edges]`[start]` ([dev.kotlinds.pokemonclient.world.Route.stepsBefore]), for [runOnto].
      */
-    fun segmentAt(edges: List<Edge>, start: Int, area: Area, runOnto: (Node) -> Boolean): Segment? {
+    fun segmentAt(edges: List<Edge>, start: Int, area: Area, runOnto: RunOnto, taken: Int): Segment? {
         val first = edges[start] as? Edge.Step ?: return null
         if (enters(area, first)) return null
         val tiles = mutableListOf(first.to)
@@ -70,11 +71,15 @@ internal object WalkSegments {
             tiles += next.to
             i++
         }
-        return line(first.direction, tiles, runOnto)
+        return line(first.direction, tiles, runOnto, taken)
     }
 
-    /** The straight line [tiles] in [direction], each tile run onto or walked onto as [runOnto] says. */
-    fun line(direction: Direction, tiles: List<Node>, runOnto: (Node) -> Boolean): Segment = Segment(direction, tiles, tiles.map(runOnto))
+    /**
+     * The straight line [tiles] in [direction], each tile run onto or walked onto as [runOnto] says, the first one
+     * after [taken] steps of the walk (each tile of the line one more: plain steps).
+     */
+    fun line(direction: Direction, tiles: List<Node>, runOnto: RunOnto, taken: Int): Segment =
+        Segment(direction, tiles, tiles.mapIndexed { i, tile -> runOnto.runs(tile, taken + i) })
 
     private fun enters(area: Area, edge: Edge) = area.warps.any { it.x == edge.to.x && it.y == edge.to.y }
 
@@ -181,4 +186,13 @@ internal object WalkSegments {
 
     /** Frames in a row of the game busy while the player stands still after which the hold lets go. */
     private const val BUSY_FRAMES = 2
+}
+
+/**
+ * Whether a walk holds B onto a tile ([MovePlans.runOnto]): [runs] for the move onto [Node] made after the game counted
+ * `taken` steps of the walk ([dev.kotlinds.pokemonclient.world.Edge.gameSteps]), so that a Repel wearing off on the way
+ * is followed tile by tile, like the route was planned.
+ */
+internal fun interface RunOnto {
+    fun runs(node: Node, taken: Int): Boolean
 }

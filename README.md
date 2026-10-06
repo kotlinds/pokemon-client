@@ -5,6 +5,7 @@ plays it through typed, self-checking actions. Used by [ai-plays-pokemon](https:
 to let AIs play Pokémon HeartGold / SoulSilver and Platinum.
 
 [![License](https://img.shields.io/github/license/kotlinds/pokemon-client)](LICENSE)
+[![Maven Central Version](https://img.shields.io/maven-central/v/dev.kotlinds/pokemon-client)](https://klibs.io/project/kotlinds/pokemon-client)
 [![Issues](https://img.shields.io/github/issues/kotlinds/pokemon-client)]()
 [![Pull Requests](https://img.shields.io/github/issues-pr/kotlinds/pokemon-client)]()
 

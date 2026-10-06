@@ -65,6 +65,9 @@ data class SwitchEdge(
 ) : Edge {
     override val tiles: List<Node> get() = emptyList()
 
+    /** Pressing A moves nobody: no step counted ([Edge.gameSteps]). */
+    override val gameSteps: Int get() = 0
+
     companion object {
         /** Turning to a lever and pressing it (its animation) takes a second or two: worth a few steps. */
         const val PRESS_COST = 6
@@ -77,8 +80,9 @@ data class SwitchEdge(
  * [Edge.Teleport] (step onto the trigger, the mechanism carries the player to [Edge.Teleport.to]); pressing a switch is
  * a [SwitchEdge]. The walker re-reads the position after each one and plans again when the game disagrees.
  *
- * The rules are the plain routes' ones: the same cost of a turn ([RouteOptions.turnPenalty]; none after a ride, which
- * leaves the player facing wherever it does), the same ledge rule ([boundedLedgeRule], the way back checked with the
+ * The rules are the plain routes' ones: the same search ([repelDijkstra]: a Repel wearing off on the way counted step
+ * by step), the same cost of a turn ([RouteOptions.turnPenalty]; none after a ride, which leaves the player facing
+ * wherever it does), the same ledge rule ([boundedLedgeRule], the way back checked with the
  * mechanism where the route leaves it) and the same warnings ([Pathfinder.describe]). A trigger that is the destination
  * is stepped on like a plain tile (the ride that follows ends the walk there, like any destination that moves the
  * player).
@@ -113,15 +117,16 @@ class MechanismPlanner<S>(
      */
     fun route(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>> = emptySet(), isGoal: (Node) -> Boolean): Route? {
         val initial = State(Heading(start, null), mechanics.state)
-        fun plan(allowJumps: Boolean, allowTriggers: Boolean): SearchResult<State<S>, *, Edge> = dijkstra(
+        fun plan(allowJumps: Boolean, allowTriggers: Boolean): SearchResult<State<S>, *, Edge> = repelDijkstra(
             start = initial,
+            options = options,
             place = { it.place },
             isGoal = { isGoal(it.node) },
             maxPlaces = maxStates,
-            turnCost = { pathfinder(it.mechanism).turnCostAt(it.node, options) },
-        ) { state, turnCost ->
-            moves(state, options, goalTiles, allowJumps, allowTriggers).map { (edge, next) ->
-                SearchMove(next, edge.cost + turn(state.heading.direction, edge, turnCost), edge)
+            turnCost = { state, now -> pathfinder(state.mechanism).turnCostAt(state.node, now) },
+        ) { state, now, turnCost ->
+            moves(state, now, goalTiles, allowJumps, allowTriggers).map { (edge, next) ->
+                SearchMove(next, edge.cost + turn(state.heading.direction, edge, turnCost), edge, edge.gameSteps)
             }
         }
         // The way back is walked with the mechanism where the plan leaves it.

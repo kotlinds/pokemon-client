@@ -10,7 +10,8 @@ import kotlin.test.assertTrue
 /**
  * The soft step weights ([StepWeights]): the expected time a step loses to a wild encounter or a trainer, always
  * counted by routes (unlike the avoid options, which ban). Areas in ASCII, every tile in zone [ZONE]: '.' floor,
- * '#' wall, '"' tall grass, '~' surfable water with wild Pokémon, '=' calm surfable water (none).
+ * '#' wall, '"' tall grass, 'c' cave floor, '~' surfable water with wild Pokémon, '=' calm surfable water (none),
+ * 'v' / '>' ledges jumped south / east.
  */
 class StepWeightsTest {
 
@@ -25,6 +26,9 @@ class StepWeightsTest {
                 '~' -> TileInfo(false, TileKind.Water(surfable = true, fishable = true))
                 '=' -> TileInfo(false, TileKind.Water(surfable = true, fishable = true, wildEncounters = false))
                 '#' -> TileInfo(true, TileKind.Wall)
+                'c' -> TileInfo(false, TileKind.Cave, listOf(0))
+                'v' -> TileInfo(false, TileKind.Ledge(Direction.SOUTH))
+                '>' -> TileInfo(false, TileKind.Ledge(Direction.EAST))
                 else -> null
             }
         }
@@ -214,4 +218,182 @@ class StepWeightsTest {
         val tiles = route!!.places.map { it.node }
         assertTrue(tiles.none { map.tile(it.x, it.y)?.kind == TileKind.TallGrass }, tiles.toString())
     }
+
+    // region A Repel wearing off on the way
+
+    /**
+     * A world whose zone [zone] rolls [land] on the land walking ([landRunning] running), none at all under a Repel (a
+     * lead stronger than every wild Pokémon there).
+     */
+    private fun repelWorld(land: Double, landRunning: Double = land) = object : WorldSource {
+        override fun areaOf(zoneId: Int): Area? = null
+        override val zoneCount = 10
+        override val encounterTables = EncounterTables.DECODED
+        override fun encounterChance(zoneId: Int, water: Boolean, conditions: EncounterConditions) = when {
+            zoneId != zone || water || conditions.repelLevel != null -> 0.0
+            conditions.landMovement == MovementMode.WALK -> land
+            else -> landRunning
+        }
+    }
+
+    /** Running everywhere, a Repel of [steps] steps left keeping every wild Pokémon of the zone away; 10 steps a grass tile without it. */
+    private fun repelled(steps: Int) = StepWeights.of(repelWorld(land = 0.08), EncounterConditions(MovementMode.RUN, repelLevel = 50, repelSteps = steps))
+
+    @Test
+    fun aRepelCoversTheStepsItHasLeftThenTheWeightsWithoutItApply() {
+        val weights = repelled(steps = 3)
+        val grass = TileInfo(false, TileKind.TallGrass)
+        assertEquals(RepelCover(3, StepWeights(landEncounter = mapOf(zone to 10), trainerSight = 500)), weights.repel)
+        // The moves after 0, 1 and 2 steps are covered (the 3rd step brings the counter to 0: the game says it wore off
+        // instead of checking), the ones after 3 steps aren't.
+        assertEquals(listOf(0, 0, 0, 10, 10), (0..4).map { weights.after(it).encounter(grass, zone) })
+        // Without a known count of steps left, the Repel lasts the whole trip (no cover to count).
+        assertEquals(null, StepWeights.of(repelWorld(land = 0.08), EncounterConditions(MovementMode.RUN, repelLevel = 50)).repel)
+        // A Repel that changes nothing (no wild Pokémon anywhere): nothing to count either.
+        assertEquals(null, StepWeights.of(repelWorld(land = 0.0), EncounterConditions(MovementMode.RUN, repelLevel = 50, repelSteps = 3)).repel)
+        // Walking onto the grass where running doubles the roll: run through while the Repel keeps everything away,
+        // walked once it's gone (the walker's B: MovePlans.runOnto).
+        val walking = StepWeights.of(repelWorld(land = 0.04, landRunning = 0.08), EncounterConditions(MovementMode.WALK, repelLevel = 50, travelMovement = MovementMode.RUN, repelSteps = 2))
+        assertEquals(listOf(false, false, true), (0..2).map { walking.after(it).walksOnto(grass, zone) })
+        assertEquals(listOf(0, 0, 6), (0..2).map { walking.after(it).moveOnto(grass, zone) })
+    }
+
+    @Test
+    fun theStepsTheGameCountsAreTheMovesThePlayerMakes() {
+        // A step, a ledge jump and the step starting a slide count one each; a ride, Surf's hop, a Strength push or a
+        // lever none (the game counts the player's own moves only).
+        val node = Node(0, 0)
+        val edges = listOf(
+            Edge.Step(node, Direction.EAST, 1),
+            Edge.Jump(node, Direction.SOUTH),
+            Edge.Teleport(node, Direction.EAST, node, 8),
+            FieldMoveEdge(node, Direction.EAST, FieldMoveKind.SURF, listOf(node), 14),
+            Edge.Slide(node, Direction.EAST, listOf(node, node)),
+            Edge.Slide(node, Direction.SOUTH, listOf(node, node), scripted = true),
+            FieldMoveEdge(node, Direction.EAST, FieldMoveKind.CUT, listOf(node), 9),
+            PushEdge(node, Direction.EAST, 1 to 0, 2 to 0, needsStrength = true),
+            SwitchEdge(node, Direction.NORTH, "switch:1"),
+            Edge.Step(node, Direction.EAST, 1),
+        )
+        assertEquals(listOf(1, 1, 0, 0, 1, 0, 1, 0, 0, 1), edges.map { it.gameSteps })
+        assertEquals(listOf(0, 1, 2, 2, 2, 3, 3, 4, 4, 4), Route(edges, emptyList()).stepsBefore)
+    }
+
+    /** The cost of [route] the way the game plays it: each move and turn weighed by the steps counted before it. */
+    private fun replayCost(pathfinder: Pathfinder, start: Node, route: Route, options: RouteOptions): Int {
+        var at = start
+        var direction: Direction? = null
+        var cost = 0
+        route.edges.zip(route.stepsBefore).forEach { (edge, taken) ->
+            val now = options.copy(weights = options.weights.after(taken))
+            val move = pathfinder.neighbours(at, now).single { it.to == edge.to && it.direction == edge.direction }
+            cost += move.cost + if (direction != null && move.direction != direction) pathfinder.turnCostAt(at, now) else 0
+            at = move.to
+            direction = move.endDirection
+        }
+        return cost
+    }
+
+    @Test
+    fun aRepelExactlyLongEnoughCrossesTheGrassOneStepShortGoesAround() {
+        // Straight east through 5 grass tiles (6 moves), or around them by the top row (8 moves and 2 turns).
+        val map = area(
+            ".......",
+            ".\"\"\"\"\".",
+            "#######",
+        )
+        val pathfinder = Pathfinder(map)
+        fun route(steps: Int) = assertIs<Pathfinder.Result.Found>(pathfinder.to(6, 1, Node(0, 1), RouteOptions(weights = repelled(steps)))).route
+        // The 5th step is the last grass tile: 5 steps left cover it.
+        val enough = route(5)
+        assertEquals(6, enough.edges.size, enough.toString())
+        assertEquals(6, replayCost(pathfinder, Node(0, 1), enough, RouteOptions(weights = repelled(5))))
+        // 4 steps left: the 5th grass tile would cost a whole encounter check (10): around is cheaper (8 + 2 × 2).
+        val short = route(4)
+        assertTrue(short.tiles().none { map.tile(it.x, it.y)?.kind == TileKind.TallGrass }, short.toString())
+        assertEquals(12, replayCost(pathfinder, Node(0, 1), short, RouteOptions(weights = repelled(4))))
+        // Taken as lasting the whole way (the previous rule), it went through the grass: 6 + 10 the way the game plays.
+        assertEquals(16, replayCost(pathfinder, Node(0, 1), enough, RouteOptions(weights = repelled(4))))
+    }
+
+    @Test
+    fun aShortRepelTakesTheGrassItCoversNowRatherThanTheGrassLater() {
+        // Two ways of the same length around a wall: grass right away (top), or grass at the end (bottom). Counted as
+        // lasting, both are free and equal; with 4 steps left only the top one is covered.
+        val map = area(
+            ".\"\"\".....",
+            ".#######.",
+            ".....\"\"\".",
+        )
+        val options = RouteOptions(weights = repelled(4))
+        val pathfinder = Pathfinder(map)
+        val route = assertIs<Pathfinder.Result.Found>(pathfinder.to(8, 1, Node(0, 1), options)).route
+        assertEquals(Node(0, 0), route.edges.first().to, route.toString())
+        // Every grass tile entered within the Repel's steps: 10 moves and 2 turns, nothing else.
+        assertEquals(10 + 2 * RouteOptions.TURN_COST, replayCost(pathfinder, Node(0, 1), route, options))
+        // The world router counts the same.
+        val world = object : WorldSource {
+            override fun areaOf(zoneId: Int): Area? = if (zoneId == zone) map else null
+        }
+        val routed = WorldRouter(world).route(zone, Node(0, 1), options) { it.node.x == 8 && it.node.y == 1 }!!
+        assertEquals(Node(0, 0), routed.places.first().node)
+        assertEquals(10 + 2 * RouteOptions.TURN_COST, routed.cost)
+    }
+
+    @Test
+    fun withAnyRepelLeftTheRouteCostsWhatAnExhaustiveSearchFinds() {
+        // Random maps with grass, cave floors, water and ledges, a Repel of 0 to 12 steps left: the two-pass search
+        // (lower bound, then the Pareto labels of cost and steps left) costs exactly what a search over every
+        // (node, direction, steps counted) state finds, and its cost is the one the route really has.
+        val random = kotlin.random.Random(11)
+        val kinds = "......#\"\"\"c~v>"
+        var compared = 0
+        repeat(300) {
+            val rows = Array(7) { (0 until 9).map { kinds[random.nextInt(kinds.length)] }.joinToString("") }
+            rows[0] = "." + rows[0].drop(1)
+            val map = area(*rows)
+            val covered = StepWeights(landEncounter = mapOf(zone to random.nextInt(3)), surfEncounter = mapOf(zone to random.nextInt(3)))
+            val after = StepWeights(landEncounter = mapOf(zone to 3 + random.nextInt(12)), surfEncounter = mapOf(zone to 2 + random.nextInt(8)))
+            val weights = covered.copy(repel = RepelCover(random.nextInt(13), after))
+            val options = RouteOptions(canSurf = random.nextBoolean(), acceptOneWay = true, turnCost = random.nextInt(4), weights = weights)
+            val goal = Node(random.nextInt(9), random.nextInt(7))
+            val pathfinder = Pathfinder(map)
+            val expected = exhaustive(pathfinder, Node(0, 0), goal, options)
+            if (expected == null || goal == Node(0, 0)) return@repeat
+            val route = assertIs<Pathfinder.Result.Found>(pathfinder.route(Node(0, 0), options) { it.x == goal.x && it.y == goal.y }, rows.joinToString("\n")).route
+            assertEquals(expected, replayCost(pathfinder, Node(0, 0), route, options), rows.joinToString("\n") + " → $goal $options")
+            compared++
+        }
+        assertTrue(compared > 100, "$compared maps compared")
+    }
+
+    /** The cheapest cost from [start] to [goal] over every (node, direction, steps counted) state, without any cut. */
+    private fun exhaustive(pathfinder: Pathfinder, start: Node, goal: Node, options: RouteOptions): Int? {
+        val cap = options.weights.repel?.steps ?: 0
+        data class S(val node: Node, val direction: Direction?, val taken: Int)
+        val dist = HashMap<S, Int>()
+        val queue = ArrayList<Pair<S, Int>>()
+        dist[S(start, null, 0)] = 0
+        queue += S(start, null, 0) to 0
+        while (queue.isNotEmpty()) {
+            val next = queue.minBy { it.second }
+            queue.remove(next)
+            val (state, d) = next
+            if (d > dist.getValue(state)) continue
+            if (state.node.x == goal.x && state.node.y == goal.y && state.node != start) return d
+            val now = options.copy(weights = options.weights.after(state.taken))
+            for (edge in pathfinder.neighbours(state.node, now)) {
+                val turn = if (state.direction != null && edge.direction != state.direction) pathfinder.turnCostAt(state.node, now) else 0
+                val cost = d + edge.cost + turn
+                val to = S(edge.to, edge.endDirection, minOf(cap, state.taken + edge.gameSteps))
+                if (cost < (dist[to] ?: Int.MAX_VALUE)) {
+                    dist[to] = cost
+                    queue += to to cost
+                }
+            }
+        }
+        return null
+    }
+
+    // endregion
 }

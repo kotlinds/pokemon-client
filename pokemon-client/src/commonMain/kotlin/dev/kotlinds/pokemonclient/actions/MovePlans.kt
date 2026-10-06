@@ -193,8 +193,8 @@ internal object MovePlans {
         val tiles = (1..action.tiles).map { Node(start.x + d.dx * it, start.y + d.dy * it) }
         // Run, but walk onto the tiles where wild Pokémon appear (like go_to): the pace changes tile by tile, held on.
         val area = context.game.world?.areaOf(start.mapId)
-        val runOnto = area?.let { runOnto(it, start, action.options, stepWeights(context, state, action.options)) } ?: { _: Node -> action.options.run }
-        val walked = WalkSegments.walk(context, WalkSegments.line(d, tiles, runOnto))
+        val runOnto = area?.let { runOnto(it, start, action.options, stepWeights(context, state, action.options)) } ?: RunOnto { _, _ -> action.options.run }
+        val walked = WalkSegments.walk(context, WalkSegments.line(d, tiles, runOnto, taken = 0))
         // Into a door, onto stairs or a hole: the walk ends there (the rest of the tiles aren't walked on the new map).
         FieldControl.awaitOutcome(context, mark)?.takeUnless { PuzzleSolving.isRide(it) }?.let { return@ActionPlan ActionOutcome.Done(through(context, it).describe(it.last.to)) }
         when (walked) {
@@ -621,6 +621,8 @@ internal object MovePlans {
                     }
             }
             avoidanceNotes(route, options).forEach { if (it !in notes) notes += it }
+            // The steps the game counts before each move: where a Repel wearing off still covers the walk (runOnto).
+            val stepsBefore = route.stepsBefore
             val scenes = sceneTiles(area, field, overlay(context, field, refused), if (target.warp == true) goalTiles else emptySet())
             var from = start
             var index = -1
@@ -628,7 +630,7 @@ internal object MovePlans {
             while (++index < route.edges.size) {
                 val edge = route.edges[index]
                 // Straight runs of plain steps: walked holding the direction (smooth), checked on every tile.
-                val segment = WalkSegments.segmentAt(route.edges, index, area, runOnto)
+                val segment = WalkSegments.segmentAt(route.edges, index, area, runOnto, stepsBefore[index])
                 if (segment != null) {
                     val walked = WalkSegments.walk(context, segment, scenes)
                     warped()?.let { return it }
@@ -715,7 +717,7 @@ internal object MovePlans {
                 val slide = (edge as? Edge.Slide)?.tiles?.size ?: (edge as? PushEdge)?.takeIf { !it.needsStrength }?.tiles?.size ?: 0
                 val long = edge is Edge.Jump || intoWarp || (edge as? PushEdge)?.needsStrength == true
                 val step = if (edge is PushEdge && edge.needsStrength) FieldMoveWalk.push(context, edge, options)
-                else stepOnce(context, edge.direction, edge.to, options, long = long, slide = slide, run = runOnto(edge.to))
+                else stepOnce(context, edge.direction, edge.to, options, long = long, slide = slide, run = runOnto.runs(edge.to, stepsBefore[index]))
                 // Entering a door, stairs or a hole (or any warp on the way): the walk is over there.
                 warped()?.let { return it }
                 when (step) {
@@ -1038,8 +1040,9 @@ internal object MovePlans {
      * of how the player will move on land ([FootPace]: the bike, running or walking; walking onto the tiles where wild
      * Pokémon appear unless [MoveOptions.runInEncounterAreas], which costs the time walking loses there);
      * - with a Repel at work ([FieldState.repelSteps]), the level of the first Pokémon able to fight: weaker wild
-     *   Pokémon don't appear (a strong enough lead makes the grass free). Its last steps are counted as if it lasted:
-     *   the game stops the walk with a message when it wears off, and the next walk plans without it;
+     *   Pokémon don't appear (a strong enough lead makes the grass free), for the steps it has left only: the route
+     *   counts its steps and weighs the encounter tiles after them without it ([StepWeights.repel]), and the walker
+     *   walks onto them from there ([runOnto]);
      * - the item the first Pokémon holds (a Cleanse Tag makes encounters rarer).
      */
     internal fun stepWeights(context: PlanContext, state: GameState, options: MoveOptions): StepWeights =
@@ -1049,19 +1052,22 @@ internal object MovePlans {
     internal fun encounterConditions(state: GameState, options: MoveOptions): EncounterConditions {
         val field = state.field
         val pace = FootPace.of(field, options)
-        val repelLevel = if ((field?.repelSteps ?: 0) > 0) state.party.firstOrNull { !it.isEgg && it.hp > 0 }?.level else null
+        val repelSteps = field?.repelSteps?.takeIf { it > 0 }
+        val repelLevel = if (repelSteps != null) state.party.firstOrNull { !it.isEgg && it.hp > 0 }?.level else null
         val leadItem = state.party.firstOrNull()?.heldItem?.id?.value
-        return EncounterConditions(pace.encounterTiles, repelLevel, leadItem, travelMovement = pace.land)
+        return EncounterConditions(pace.encounterTiles, repelLevel, leadItem, travelMovement = pace.land, repelSteps = repelSteps?.takeIf { repelLevel != null })
     }
 
     /**
      * Whether a walk on [area] with [options] holds B onto each tile: when it runs ([FootPace.land]), except onto the
-     * tiles it walks to keep wild encounters rare ([StepWeights.walksOnto] of [weights], the same weights its route
-     * was planned with: one source for the plan and the walker).
+     * tiles it walks to keep wild encounters rare ([StepWeights.walksOnto] of [weights] after the steps already taken,
+     * [StepWeights.after]: a Repel wearing off on the way leaves the grass free, run through, for its steps left only).
+     * The same weights and the same count of steps as the route was planned with ([Route.stepsBefore]): one source for
+     * the plan and the walker.
      */
-    internal fun runOnto(area: Area, field: FieldState, options: MoveOptions, weights: StepWeights): (Node) -> Boolean {
-        if (FootPace.of(field, options).land != MovementMode.RUN) return { false }
-        return { node -> area.tile(node.x, node.y)?.let { !weights.walksOnto(it, area.zoneAt(node.x, node.y)) } ?: true }
+    internal fun runOnto(area: Area, field: FieldState, options: MoveOptions, weights: StepWeights): RunOnto {
+        if (FootPace.of(field, options).land != MovementMode.RUN) return RunOnto { _, _ -> false }
+        return RunOnto { node, taken -> area.tile(node.x, node.y)?.let { !weights.after(taken).walksOnto(it, area.zoneAt(node.x, node.y)) } ?: true }
     }
 
     /**

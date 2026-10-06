@@ -341,7 +341,8 @@ object CommonActions {
         Parameter(
             "run_in_encounter_areas", ParameterType.BOOLEAN,
             "Also run on the tiles where wild Pokémon can appear (tall grass, cave floors...). Off by default: walks walk there " +
-                "when this game makes encounters more frequent running (with the running shoes switched on, the game always runs).",
+                "when this game makes encounters more frequent running (with the running shoes switched on, the game always runs), " +
+                "except while a Repel keeps them all away (until its repel_steps run out: walks count them).",
             required = false,
         ),
         Parameter("bike", ParameterType.BOOLEAN, "Ride the Bicycle (from the bag, or Y when registered) where cycling is allowed: faster.", required = false),

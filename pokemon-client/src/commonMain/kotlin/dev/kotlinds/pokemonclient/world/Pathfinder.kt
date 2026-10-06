@@ -22,6 +22,18 @@ sealed interface Edge {
      */
     val endDirection: Direction? get() = direction
 
+    /**
+     * How many steps the game's step counter counts for this move: what wears a Repel off ([StepWeights.after],
+     * [Route.stepsBefore]). The game counts a move the player makes when it ends (HGSS src/field/field_control.c
+     * `FieldSystem_ProcessStep`, Platinum `Field_ProcessStep`, on `PLAYER_MOVE_STATE_END` of a moving avatar): one per
+     * tile walked, run, cycled or surfed (checked on the bench, the `repel_steps` of the state), and one for a ledge
+     * jump (one move over two tiles). Not counted: what a script moves (Surf's hop onto the water, Waterfall,
+     * Whirlpool, Rock Climb, a ride: [FieldMoveEdge], [Edge.Teleport]), a turn in place, the forced moves of a slide
+     * (`PlayerAvatar_CheckForcedMovement` returns before the count: only the step starting it counts), and a step onto
+     * a warp or a scene trigger (their event comes first, but the walk ends there anyway).
+     */
+    val gameSteps: Int get() = 1
+
     /** Walk one tile. */
     data class Step(override val to: Node, override val direction: Direction, override val cost: Int) : Edge {
         override val tiles get() = listOf(to)
@@ -45,7 +57,15 @@ sealed interface Edge {
         override val direction: Direction,
         override val tiles: List<Node>,
         override val cost: Int = tiles.size,
+        /** Moved by a script rather than by the player's own step (surfing down a waterfall: the waterfall task). */
+        val scripted: Boolean = false,
     ) : Edge {
+        /**
+         * The step onto the first ice or spinner tile is the player's (one counted); the forced moves after it aren't,
+         * nor a scripted slide ([Edge.gameSteps]).
+         */
+        override val gameSteps: Int get() = if (scripted) 0 else 1
+
         /** Spinners turn the push on the way: the direction of the last tile entered. */
         override val endDirection: Direction?
             get() {
@@ -64,6 +84,9 @@ sealed interface Edge {
 
         /** The player arrives facing wherever the ride leaves them: no turn is counted after it. */
         override val endDirection: Direction? get() = null
+
+        /** The trigger (a pad, a cart, a lift) runs before the step is counted, the ride is scripted: none counted. */
+        override val gameSteps: Int get() = 0
     }
 }
 
@@ -106,6 +129,13 @@ data class RouteOptions(
 ) {
     /** The cost of a change of direction in this search: [turnCost], or the default for [mode]. */
     val turnPenalty: Int get() = turnCost ?: defaultTurnCost(mode)
+
+    /**
+     * These options with the Repel's weights for the whole way ([StepWeights.repel] dropped): for the searches that
+     * only tell whether a way exists (a way back, what blocks a route), where the steps it has left change no cost
+     * worth a second pass ([repelDijkstra]).
+     */
+    fun withoutRepelWear(): RouteOptions = if (weights.repel == null) this else copy(weights = weights.copy(repel = null))
 
     companion object {
         /** Gen 4 walks across height differences of about one stair step (BDHC heights, NOTES 17s §4). */
@@ -221,6 +251,12 @@ data class TeleportLink(
 /** A route found: the edges in order, and what the agent should know about it. */
 data class Route(val edges: List<Edge>, val warnings: List<RouteWarning>) {
     val end: Node? get() = edges.lastOrNull()?.to
+
+    /**
+     * For each edge, the steps the game counts before it ([Edge.gameSteps] of the edges before): whether a Repel wearing
+     * off still covers it ([StepWeights.after]), for the walker as for the search that planned it.
+     */
+    val stepsBefore: List<Int> get() = edges.runningFold(0) { taken, edge -> taken + edge.gameSteps }.dropLast(1)
 }
 
 /**
@@ -426,7 +462,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
      * triggers with [triggers].
      */
     internal fun hasWayBack(end: Node, start: Node, options: RouteOptions, triggers: Boolean = false): Boolean =
-        search(end, options, setOf(start.x to start.y), { it.x == start.x && it.y == start.y }, allowJumps = true, allowTriggers = triggers) != null
+        search(end, options.withoutRepelWear(), setOf(start.x to start.y), { it.x == start.x && it.y == start.y }, allowJumps = true, allowTriggers = triggers) != null
 
     /** The outcome of [route]. */
     sealed interface Result {
@@ -555,7 +591,8 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
      * for every change of direction between two moves ([turnCostAt]).
      *
      * The turn makes the cost of a move depend on the previous one, so the search runs over [Heading]s (a node and the
-     * direction the player arrived in), up to four per tile, most of them cut by the search (see [dijkstra]).
+     * direction the player arrived in), up to four per tile, most of them cut by the search (see [dijkstra]). A Repel
+     * wearing off on the way makes it depend on the steps before it too ([repelDijkstra]).
      */
     private fun search(
         start: Node,
@@ -567,19 +604,23 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         allowTriggers: Boolean = false,
         ignorePeople: Boolean = false,
         ignoreBarriers: Boolean = false,
-    ): List<Edge>? = dijkstra(
-        start = Heading(start, null),
-        place = { it.node },
-        isGoal = { isGoal(it.node) },
-        // Field moves and people are only crossed to tell what blocks: soft costs don't matter there. The turns count
-        // also while looking for what blocks a route: between ways crossing the same obstacles, the straighter one
-        // tells where to stand (the tile in front of a boulder, a person).
-        turnCost = { turnCostAt(it.node, options, soft = !relaxed && !ignorePeople && !ignoreBarriers) },
-    ) { heading, turnCost ->
-        neighbours(heading.node, options, goalTiles, allowJumps, relaxed, allowTriggers, ignorePeople, ignoreBarriers).map { edge ->
-            SearchMove(Heading(edge.to, edge.endDirection), edge.cost + turn(heading.direction, edge, turnCost), edge)
-        }
-    }.found?.labels
+    ): List<Edge>? {
+        // Field moves and people are only crossed to tell what blocks: soft costs don't matter there (nor the Repel's
+        // steps). The turns count also while looking for what blocks a route: between ways crossing the same
+        // obstacles, the straighter one tells where to stand (the tile in front of a boulder, a person).
+        val soft = !relaxed && !ignorePeople && !ignoreBarriers
+        return repelDijkstra(
+            start = Heading(start, null),
+            options = if (soft) options else options.withoutRepelWear(),
+            place = { it.node },
+            isGoal = { isGoal(it.node) },
+            turnCost = { heading, now -> turnCostAt(heading.node, now, soft) },
+        ) { heading, now, turnCost ->
+            neighbours(heading.node, now, goalTiles, allowJumps, relaxed, allowTriggers, ignorePeople, ignoreBarriers).map { edge ->
+                SearchMove(Heading(edge.to, edge.endDirection), edge.cost + turn(heading.direction, edge, turnCost), edge, edge.gameSteps)
+            }
+        }.found?.labels
+    }
 
     /**
      * Every node reachable from [start] within [maxCost] ([dijkstra] without a goal), with its cost: one search
@@ -587,7 +628,8 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
      * [allowJumps] (by default only when [RouteOptions.acceptOneWay] is set), active triggers walked on with
      * [allowTriggers]. [goalTiles] may be entered (warps, a neighbouring map's first tiles) but end the way: a door
      * entered is taken, nothing is reached beyond it. With [crossing], what [diagnose] crosses to tell what blocks a
-     * way is crossed too (field-move obstacles, people, closed shutters): the places no diagnosis can reach.
+     * way is crossed too (field-move obstacles, people, closed shutters): the places no diagnosis can reach. A Repel
+     * wearing off ([StepWeights.repel]) is counted as lasting: a bound on what a target costs, not a route.
      */
     fun reachable(
         start: Node,
@@ -803,7 +845,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
             // Going down a waterfall needs no move: surfing into it from above slides the player down
             // (ov01_021F24F4: surfing, facing south, a waterfall ahead → the waterfall task, no question).
             kind == TileKind.Waterfall && onWater && dir == Direction.SOUTH ->
-                (crossing(x, y, dir, FieldMoveKind.WATERFALL, TileKind.Waterfall) as? FieldMoveEdge)?.let { Edge.Slide(it.to, dir, it.tiles, it.cost) }
+                (crossing(x, y, dir, FieldMoveKind.WATERFALL, TileKind.Waterfall) as? FieldMoveEdge)?.let { Edge.Slide(it.to, dir, it.tiles, it.cost, scripted = true) }
             kind == TileKind.Waterfall && onWater && dir == Direction.NORTH && canUse(FieldMoveKind.WATERFALL, options) ->
                 crossing(x, y, dir, FieldMoveKind.WATERFALL, TileKind.Waterfall)
             kind == TileKind.Whirlpool && onWater && canUse(FieldMoveKind.WHIRLPOOL, options) ->

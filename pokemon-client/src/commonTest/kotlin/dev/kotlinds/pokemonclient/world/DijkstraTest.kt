@@ -63,4 +63,34 @@ class DijkstraTest {
         ).path
         assertEquals(4, plain.cost)
     }
+
+    /**
+     * [repelDijkstra] on the line: every move forward costs 1 plus the grass weight of the moment (0 under the Repel,
+     * 10 once it's worn off). A goal within the Repel's steps is found by the first pass alone (the start expanded
+     * once); beyond them, the second pass counts the steps, and the cost is the real one.
+     */
+    @Test
+    fun theRepelsStepsAreCountedOnlyWhenTheWayIsLongerThanThem() {
+        val options = RouteOptions(weights = StepWeights(repel = RepelCover(3, StepWeights(landEncounter = mapOf(0 to 10)))))
+        var startExpanded = 0
+        fun search(goal: Int) = assertIs<SearchResult.Found<Int, String>>(repelDijkstra(
+            start = 0,
+            options = options,
+            place = { it },
+            isGoal = { it == goal },
+            turnCost = { _, _ -> 0 },
+        ) { state, now, _ ->
+            if (state == 0) startExpanded++
+            listOf(SearchMove(state + 1, 1 + (now.weights.landEncounter[0] ?: 0), "forward", gameSteps = 1))
+        }).path
+        val within = search(goal = 3)
+        assertEquals(3, within.cost)
+        assertEquals(3, within.gameSteps)
+        assertEquals(1, startExpanded)
+        startExpanded = 0
+        val beyond = search(goal = 5)
+        // 3 covered moves, then 2 at 11.
+        assertEquals(3 + 2 * 11, beyond.cost)
+        assertEquals(2, startExpanded)
+    }
 }

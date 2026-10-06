@@ -8,7 +8,8 @@ import dev.kotlinds.pokemonclient.Direction
  * onto a warp (or pressing its direction on an exit mat, [WarpTrigger]) or onto a hole jumps to the arrival tile of the other zone.
  * Changes of direction cost [RouteOptions.turnPenalty] like in the [Pathfinder] (the search state also holds the
  * direction the player arrived in, with the same cut of the headings that can't be cheaper), and the moves their soft
- * costs ([RouteOptions.weights]: wild encounters by zone, trainers' sight where the overlay shows trainers).
+ * costs ([RouteOptions.weights]: wild encounters by zone, trainers' sight where the overlay shows trainers; a Repel
+ * wearing off on the way counted step by step, [repelDijkstra]).
  *
  * The live state is only known for the player's zone ([overlayFor] gives the people, refused steps and active
  * triggers there); other zones use the static maps with their obstacle objects where the map places them
@@ -62,44 +63,47 @@ class WorldRouter(
             val links = zones.flatMap { WorldLinks.links(world, area, it) }.filterNot { (it.x to it.y) in pads }.associateBy { it.x to it.y }
             AreaInfo(Pathfinder(area, overlayFor(zone, area)), links, goalTiles(area))
         }
-        val result = dijkstra(
+        // Soft costs (and the Repel's steps) are left out while looking for what blocks a route.
+        val soft = !relaxed && !ignorePeople
+        val result = repelDijkstra(
             start = State(Place(startArea, start), null),
+            options = if (soft) options else options.withoutRepelWear(),
             // The same node in two areas is two places; the bound counts places, not headings: the same reach as a
             // search without turns.
             place = { it.place },
             isGoal = { isGoal(it.place) },
             maxPlaces = maxNodes,
-            // A turn costs more where wild Pokémon appear (see Pathfinder.turnCostAt); soft costs are left out while
-            // looking for what blocks a route.
-            turnCost = { info(it.place.area, it.place.zone ?: startZone).pathfinder.turnCostAt(it.place.node, options, soft = !relaxed && !ignorePeople) },
-        ) { state, turnCost ->
+            // A turn costs more where wild Pokémon appear (see Pathfinder.turnCostAt).
+            turnCost = { state, now -> info(state.place.area, state.place.zone ?: startZone).pathfinder.turnCostAt(state.place.node, now, soft) },
+        ) { state, now, turnCost ->
             val place = state.place
             val here = info(place.area, place.zone ?: startZone)
             buildList {
-                fun relax(next: Place, cost: Int, via: ZoneLink?, direction: Direction?) = add(SearchMove(State(next, direction), cost, via))
+                fun relax(next: Place, cost: Int, via: ZoneLink?, direction: Direction?, gameSteps: Int) = add(SearchMove(State(next, direction), cost, via, gameSteps))
+                // A warp or a hole is taken before the game counts the step onto it ([Edge.gameSteps]): none counted.
                 fun take(link: ZoneLink, cost: Int) {
                     val toX = link.toX ?: return
                     val toY = link.toY ?: return
                     val area = world.areaOf(link.targetZone) ?: return
                     if (area.tile(toX, toY) == null) return
                     // Arrived through a warp or a fall: facing whichever way the game leaves the player, no turn counted.
-                    relax(Place(area, Node(toX, toY)), cost + LINK_COST, link, null)
+                    relax(Place(area, Node(toX, toY)), cost + LINK_COST, link, null, gameSteps = 0)
                 }
                 // Pressing the direction of the exit mat the player stands on.
                 here.links[place.node.x to place.node.y]?.takeIf { it.trigger is WarpTrigger.Press }?.let { take(it, 0) }
                 val enterable = here.goalTiles + here.links.keys
-                for (edge in here.pathfinder.neighbours(place.node, options, enterable, allowJumps = options.acceptOneWay, relaxed = relaxed, ignorePeople = ignorePeople)) {
+                for (edge in here.pathfinder.neighbours(place.node, now, enterable, allowJumps = options.acceptOneWay, relaxed = relaxed, ignorePeople = ignorePeople)) {
                     val to = edge.to
                     val next = Place(place.area, to)
                     val link = here.links[to.x to to.y]
                     val cost = edge.cost + turn(state.direction, edge, turnCost)
                     when {
-                        link == null -> if ((to.x to to.y) !in here.goalTiles || isGoal(next)) relax(next, cost, null, edge.endDirection)
+                        link == null -> if ((to.x to to.y) !in here.goalTiles || isGoal(next)) relax(next, cost, null, edge.endDirection, edge.gameSteps)
                         // Stepping on a door, a ladder down or a hole takes it at once (unless it's the destination).
-                        link.trigger == WarpTrigger.Enter -> if (isGoal(next)) relax(next, cost, null, edge.endDirection) else take(link, cost)
+                        link.trigger == WarpTrigger.Enter -> if (isGoal(next)) relax(next, cost, null, edge.endDirection, edge.gameSteps) else take(link, cost)
                         // An exit mat is floor until its direction is pressed (the Pathfinder never leaves it that way);
                         // a warp nothing takes is floor.
-                        else -> relax(next, cost, null, edge.endDirection)
+                        else -> relax(next, cost, null, edge.endDirection, edge.gameSteps)
                     }
                 }
             }

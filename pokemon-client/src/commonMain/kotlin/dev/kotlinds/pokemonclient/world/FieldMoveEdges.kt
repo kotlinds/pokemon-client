@@ -22,6 +22,12 @@ data class FieldMoveEdge(
 ) : Edge {
     /** True when the move clears an obstacle object and the player still has to step onto [to] afterwards. */
     val clearsObstacle: Boolean get() = move == FieldMoveKind.CUT || move == FieldMoveKind.ROCK_SMASH
+
+    /**
+     * The step onto [to] after Cut or Rock Smash is the player's own (one counted); Surf, Waterfall, Whirlpool and
+     * Rock Climb move the player by script (none counted, see [Edge.gameSteps]).
+     */
+    override val gameSteps: Int get() = if (clearsObstacle) 1 else 0
 }
 
 /**
@@ -41,6 +47,12 @@ data class PushEdge(
     override val tiles: List<Node> = listOf(to),
     override val cost: Int = PUSH_COST,
 ) : Edge {
+    /**
+     * A Strength push moves the boulder, not the player (none counted); an ice block is pushed by the slide into it,
+     * whose first step counts ([Edge.gameSteps]).
+     */
+    override val gameSteps: Int get() = if (needsStrength) 0 else 1
+
     companion object {
         /** A push is slower than a step, and routes should push as little as possible: worth several steps. */
         const val PUSH_COST = 10

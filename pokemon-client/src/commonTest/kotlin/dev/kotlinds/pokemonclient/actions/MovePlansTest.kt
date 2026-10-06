@@ -65,6 +65,11 @@ private class WalkingGame(
     val autoRun: Boolean? = null,
     /** Whether the world knows its encounter tables ([landEncounters]) or not (then only the tile kinds tell). */
     val encounterTables: dev.kotlinds.pokemonclient.world.EncounterTables = dev.kotlinds.pokemonclient.world.EncounterTables.DECODED,
+    /**
+     * [FieldState.repelSteps]: a Repel with that many steps left, the party's lead (level 50) stronger than every wild
+     * Pokémon of the map (nothing appears while it works). The count as read when the walk plans.
+     */
+    val repelSteps: Int? = null,
 ) : GridGame(x, y) {
     private var fadeLeft = 0
     val area: Area = run {
@@ -94,14 +99,15 @@ private class WalkingGame(
         override val zoneCount = 2
         override val encounterTables = this@WalkingGame.encounterTables
         override fun encounterChance(zoneId: Int, water: Boolean, conditions: dev.kotlinds.pokemonclient.world.EncounterConditions) =
-            if (water) 0.0 else landEncounters * if (conditions.landMovement == MovementMode.WALK) 1.0 else 2.0
+            if (water || conditions.repelLevel != null) 0.0 else landEncounters * if (conditions.landMovement == MovementMode.WALK) 1.0 else 2.0
     }
     override fun fieldMoveRule(move: FieldMoveKind) = FieldMoveRule(MoveId(57), "Fog")
     override fun state(memory: Memory): GameState {
         val height = (area.tile(x, y)?.heights?.firstOrNull() ?: 0) / dev.kotlinds.pokemonclient.world.FIELD_HEIGHT_UNITS
         val field = FieldState(1, MapName(1, map = "test"), x, y, height, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted,
-            engagedTrainerId = spotterId.takeIf { spotted }, autoRun = autoRun)
+            engagedTrainerId = spotterId.takeIf { spotted }, autoRun = autoRun, repelSteps = repelSteps)
         val battle = if (inBattle) BattleState(BattleKind.WILD, false, null, emptyList(), emptyList(), emptyList(), null) else null
+        val party = if (repelSteps == null) emptyList() else listOf(lead)
         val screen = when {
             inBattle -> Screen.Battle(Awaiting.ANIMATION)
             // The "!" and the walk up: still the overworld, busy.
@@ -111,8 +117,15 @@ private class WalkingGame(
             spotted -> Screen.Dialogue(TextSource.FIELD, "Youngster Joey", "I just lost, so I'm trying to find more Pokémon.", Awaiting.INPUT)
             else -> Screen.Overworld(null, Awaiting.INPUT)
         }
-        return GameState(0, screen, null, emptyList(), null, battle, field.takeIf { !inBattle })
+        return GameState(0, screen, null, party, null, battle, field.takeIf { !inBattle })
     }
+
+    /** The party's lead with a Repel at work ([repelSteps]): level 50. */
+    private val lead = dev.kotlinds.pokemonclient.state.PartyMon(
+        id = dev.kotlinds.pokemonclient.state.MonId(1, 1), slot = 0, species = dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.SpeciesId(25), "Pikachu"),
+        nickname = null, level = 50, hp = 10, maxHp = 10, status = null, types = emptyList(), heldItem = null, ability = null, moves = emptyList(),
+        stats = emptyMap(), exp = 0, expToNextLevel = null, isEgg = false,
+    )
 
     override fun busy(): Boolean {
         if (fadeLeft > 0) {
@@ -183,6 +196,28 @@ class MovePlansTest {
         val walking = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
         assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null, MoveOptions(run = false)), walking.context()))
         assertEquals(listOf(false, false, false, false), walking.ran)
+    }
+
+    @Test
+    fun walksRunOntoTheGrassARepelCoversThenWalkOnceItWearsOff() {
+        // Floor, four grass tiles, floor, a Repel of 2 steps left: the first two grass tiles are covered (nothing can
+        // appear: run), the next two come after it wore off (walked, like without Repel), then the floor again.
+        val rows = listOf(".\"\"\"\".")
+        val game = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1, repelSteps = 2)
+        game.facing = Direction.EAST
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(5, 0, null), game.context()))
+        assertEquals(listOf(true, true, false, false, true), game.ran)
+        // step counts the same way.
+        val stepped = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1, repelSteps = 2)
+        assertIs<ActionOutcome.Done>(MovePlans.step.run(GameAction.Step(Direction.EAST, 5), stepped.context()))
+        assertEquals(listOf(true, true, false, false, true), stepped.ran)
+        // A Repel lasting the whole way: run all along; without Repel, the grass is walked.
+        val lasting = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1, repelSteps = 10)
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(5, 0, null), lasting.context()))
+        assertEquals(listOf(true, true, true, true, true), lasting.ran)
+        val none = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(5, 0, null), none.context()))
+        assertEquals(listOf(false, false, false, false, true), none.ran)
     }
 
     @Test

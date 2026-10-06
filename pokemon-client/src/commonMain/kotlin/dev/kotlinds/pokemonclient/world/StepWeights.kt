@@ -29,6 +29,12 @@ data class EncounterConditions(
      * ([StepWeights.walkedTileCost]).
      */
     val travelMovement: MovementMode = landMovement,
+    /**
+     * With [repelLevel]: the steps the Repel has left ([dev.kotlinds.pokemonclient.state.FieldState.repelSteps]); the
+     * trip's first [repelSteps] steps are covered, the following ones aren't ([StepWeights.repel]). Null: it lasts the
+     * whole trip (unknown).
+     */
+    val repelSteps: Int? = null,
 )
 
 /**
@@ -47,6 +53,9 @@ data class EncounterConditions(
  *   ([TRAINER_BATTLE_FRAMES]): walking into it starts one for sure.
  *
  * Costs are whole steps (the search is a Dijkstra over integer costs, all non-negative: exact, see [Pathfinder]).
+ *
+ * A Repel wearing off on the way ([repel]): these are the weights of the steps it covers, [RepelCover.after] those of
+ * the steps after it ([after]); the route searches count the steps to tell which apply ([repelDijkstra]).
  */
 data class StepWeights(
     /** Extra cost of an encounter check on a land encounter tile of each zone (zone id → steps); absent: 0. */
@@ -63,7 +72,25 @@ data class StepWeights(
     val walkedZones: Set<Int> = emptySet(),
     /** What walking a tile of [walkedZones] costs on top of running it, in steps of the trip's pace. */
     val walkedTileCost: Int = 0,
+    /**
+     * A Repel at work that wears off during long trips: these weights are its own (weaker wild Pokémon kept away) for
+     * its [RepelCover.steps] steps left, [RepelCover.after] the weights once it's gone. Null without Repel, or when it
+     * changes nothing (no wild Pokémon weaker than the lead anywhere).
+     */
+    val repel: RepelCover? = null,
 ) {
+    /**
+     * The weights of a move (or of a turn in place) made after the game counted [taken] steps of the trip
+     * ([Edge.gameSteps]): these while the Repel covers it, [RepelCover.after] once it's worn off. The game counts the
+     * step first, then checks for an encounter (HGSS src/field/field_control.c `FieldInput_Process`:
+     * `FieldSystem_ProcessStep` runs `PlayerStepEvent_RepelCounterDecrement` before `FieldSystem_CheckWildEncounter`;
+     * Platinum src/overlay005/field_control.c the same, `Field_ProcessStep` → `Repel_UpdateSteps`), and the step that
+     * brings the counter to 0 starts the "Repel's effect wore off" script instead of any check: with `N` steps left,
+     * the moves after 0..N-1 steps are covered (the N-th step included), the moves and turns in place after N steps
+     * aren't (a turn isn't a step: the counter stays, the check runs).
+     */
+    fun after(taken: Int): StepWeights = repel?.takeIf { taken >= it.steps }?.after ?: this
+
     /** What one encounter check on [tile] (of zone [zone]) costs, in steps: 0 where nothing can appear. */
     fun encounter(tile: TileInfo, zone: Int?): Int {
         zone ?: return 0
@@ -121,6 +148,16 @@ data class StepWeights(
          * depend on the pace, like Platinum, runs through), they are [walkedZones] and cost the time walking loses.
          */
         fun of(world: WorldSource?, conditions: EncounterConditions, zones: Iterable<Int>? = null): StepWeights {
+            val covered = weights(world, conditions, zones)
+            // A Repel with a known number of steps left: the weights without it take over after them ([after]).
+            val steps = conditions.repelSteps ?: return covered
+            if (conditions.repelLevel == null) return covered
+            val after = weights(world, conditions.copy(repelLevel = null, repelSteps = null), zones)
+            return if (after == covered) covered else covered.copy(repel = RepelCover(steps, after))
+        }
+
+        /** The weights of [of] under [conditions] as they are (the Repel lasting the whole trip). */
+        private fun weights(world: WorldSource?, conditions: EncounterConditions, zones: Iterable<Int>?): StepWeights {
             val land = HashMap<Int, Int>()
             val surf = HashMap<Int, Int>()
             val walked = HashSet<Int>()
@@ -141,3 +178,9 @@ data class StepWeights(
         fun steps(chance: Double, mode: MovementMode): Int = (chance * ENCOUNTER_FRAMES / framesPerStep(mode)).roundToInt()
     }
 }
+
+/**
+ * A Repel wearing off: it covers the trip's next [steps] steps ([StepWeights.after]), then the weights are [after]
+ * (no Repel). Using another Repel on the way is the agent's decision, not the route's.
+ */
+data class RepelCover(val steps: Int, val after: StepWeights)

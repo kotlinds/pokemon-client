@@ -12,9 +12,10 @@ import dev.kotlinds.pokemonclient.Direction
  *
  * Used when the plain [Pathfinder] finds no route. The search is the routes' [dijkstra] over states (the player's
  * [Heading] and the objects' positions), each object configuration getting its own [Pathfinder]; the rules are the
- * plain routes' ones: the same moves ([Pathfinder.neighbours]), the same cost of a turn ([RouteOptions.turnPenalty]:
- * a push in another direction than the player arrived in is a turn too, the player faces the object first), the same
- * ledge rule ([boundedLedgeRule]: the way back is checked with the objects where the route leaves them) and the same warnings
+ * plain routes' ones: the same search ([repelDijkstra]: a Repel wearing off on the way counted step by step), the
+ * same moves ([Pathfinder.neighbours]), the same cost of a turn ([RouteOptions.turnPenalty]: a push in another
+ * direction than the player arrived in is a turn too, the player faces the object first), the same ledge rule
+ * ([boundedLedgeRule]: the way back is checked with the objects where the route leaves them) and the same warnings
  * ([Pathfinder.describe]). Pushes are expensive so routes push as little as possible, and the search gives up after
  * [maxStates] places (positions × configurations; null: no plan within the bound).
  */
@@ -70,16 +71,17 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
     /** The cheapest plan from [start] to a state where [isDone] holds, under the [boundedLedgeRule]; null when none. */
     private fun search(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, isDone: (State) -> Boolean): Route? {
         val initial = State(Heading(start, null), movableTemplates.map { Movable(it.x, it.y, boulder = it.clearedBy == FieldMoveKind.STRENGTH, fallsInto = it.fallsInto) })
-        fun plan(allowJumps: Boolean): SearchResult<State, *, Edge> = dijkstra(
+        fun plan(allowJumps: Boolean): SearchResult<State, *, Edge> = repelDijkstra(
             start = initial,
+            options = options,
             place = { it.place },
             isGoal = isDone,
             maxPlaces = maxStates,
-            turnCost = { pathfinder(it.movables).turnCostAt(it.node, options) },
-        ) { state, turnCost ->
+            turnCost = { state, now -> pathfinder(state.movables).turnCostAt(state.node, now) },
+        ) { state, now, turnCost ->
             // Every move ends on its edge's tile (a push too: the player stays, the edge is "to" their own tile).
-            moves(state, options, goalTiles, allowJumps).map { (edge, movables) ->
-                SearchMove(State(Heading(edge.to, edge.endDirection), movables), edge.cost + turn(state.heading.direction, edge, turnCost), edge)
+            moves(state, now, goalTiles, allowJumps).map { (edge, movables) ->
+                SearchMove(State(Heading(edge.to, edge.endDirection), movables), edge.cost + turn(state.heading.direction, edge, turnCost), edge, edge.gameSteps)
             }
         }
         // The way back is walked with the objects where the plan leaves them.
