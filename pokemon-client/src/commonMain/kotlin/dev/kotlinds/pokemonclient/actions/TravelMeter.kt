@@ -57,7 +57,7 @@ internal class TileCounter {
     private var last: FieldState? = null
 
     /** The map the player was last seen on, null before any field was read. */
-    val mapName: String? get() = last?.mapName
+    val mapName: String? get() = last?.mapName?.toString()
 
     /** Counts the tiles moved since the previous state with a field; returns how many this one added. */
     fun observe(state: GameState): Int {

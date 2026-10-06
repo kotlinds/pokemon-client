@@ -7,7 +7,10 @@ import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.BattlerState
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MonId
+import dev.kotlinds.pokemonclient.runtime.Recorder
+import dev.kotlinds.pokemonclient.state.GameEvent
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
@@ -72,6 +75,41 @@ sealed interface ChainStop {
         override val code = "OWN_FAINTED"
         override val message get() = "your $name ($mon) fainted: choose what to do next"
     }
+
+    /**
+     * A step named by an option key ([ChainStep.ByKey]) isn't among the options of the screen the chain reached: the
+     * steps left were chosen for another situation.
+     */
+    data class NotOffered(val key: String) : ChainStop {
+        override val code = "NOT_OFFERED"
+        override val message get() = "`$key` isn't an option on this screen: the steps left were chosen for another one, choose again"
+    }
+}
+
+/**
+ * One step of a chain, as the agent gave it. Agents name their steps two ways, and both run through the same
+ * [ChainRunner] (same stop rules, same limits):
+ * - [Planned]: a typed action known when the chain starts (the MCP's `then`: JSON actions);
+ * - [ByKey]: a key picked from a list of options (our own loop's models), resolved on the state the chain has reached
+ *   when its turn comes: the options of the next screen don't exist before it is on screen.
+ */
+sealed interface ChainStep {
+    /** The step's key, as the agent named it (reported in `not_done`). */
+    val key: String
+
+    /** The action this step stands for in [state], or null when it isn't possible there (not offered). */
+    fun on(state: GameState): GameAction?
+
+    /** An action known in advance: the same whatever the state. */
+    data class Planned(val action: GameAction) : ChainStep {
+        override val key: String get() = action.key
+        override fun on(state: GameState): GameAction = action
+    }
+
+    /** An option [key], turned into its action by [resolve] on the state reached (null: not offered there). */
+    class ByKey(override val key: String, private val resolve: (GameState) -> GameAction?) : ChainStep {
+        override fun on(state: GameState): GameAction? = resolve(state)
+    }
 }
 
 /** How a battle ended, as far as the state after it tells ([ChainStop.BattleOver]). */
@@ -106,7 +144,17 @@ enum class BattleEnd(
 }
 
 /** How long a chain may go on: [idle] without any progress in the game, [total] in all whatever the progress. */
-data class ChainLimits(val idle: Duration, val total: Duration)
+data class ChainLimits(val idle: Duration, val total: Duration) {
+    companion object {
+        /**
+         * The limits of an agent's chain, whoever runs it (the MCP server, the app's own loop, the bench): no further
+         * step once nothing has happened in the game for 20 s (it is stuck), or after 90 s in all whatever the progress
+         * (a safety cap). Only checked between steps: one long step (a go_to surfing for minutes) runs to its end, and
+         * its tiles count as progress for the next check.
+         */
+        val AGENT = ChainLimits(idle = 20.seconds, total = 90.seconds)
+    }
+}
 
 /**
  * The battle as a chain found it, to stop the chain when what its steps were chosen for is gone: an opponent replaced
@@ -253,7 +301,7 @@ data class ChainResult(
     val details: List<String>,
     val failed: Pair<GameAction, ActionError>?,
     /** The steps left when the chain stopped early ([stop]) or failed: none of them was started. */
-    val skipped: List<GameAction>,
+    val skipped: List<ChainStep>,
     /** Why the chain stopped early without a failure (null when it ran to its end or a step failed). */
     val stop: ChainStop?,
     /** Battle steps not run because the battle was over by then, while the chain went on with its field steps. */
@@ -273,6 +321,8 @@ data class ChainResult(
  *   step is given back as not done with that reason, not as a failure;
  * - before a step, when the game made no progress for [ChainLimits.idle] ([idle], from the recorder's
  *   `ProgressClock`) or the chain has run [ChainLimits.total] in all: long chains go on while things keep happening.
+ * - before a step named by an option key ([ChainStep.ByKey]) that the screen reached doesn't offer
+ *   ([ChainStop.NotOffered]).
  *
  * Once the battle the chain started in is over, or decided while its last messages are still on screen (the last foe
  * fainting together with the player's Pokémon: a win, not FOE_FAINTED), its battle steps left
@@ -302,10 +352,18 @@ class ChainRunner(
     private val timeSource: TimeSource = TimeSource.Monotonic,
     private val onStep: (index: Int, total: Int, action: GameAction) -> Unit = { _, _, _ -> },
 ) {
-    suspend fun run(requested: List<GameAction>): ChainResult {
+    /** Runs [requested], typed actions known in advance (see [runSteps]). */
+    suspend fun run(requested: List<GameAction>): ChainResult = runSteps(requested.map { ChainStep.Planned(it) })
+
+    /**
+     * Runs [requested]: each step is turned into its action on the state the chain has reached ([ChainStep.on]); a
+     * step not possible there ([ChainStep.ByKey] not offered) stops the chain ([ChainStop.NotOffered]), unless the
+     * battle changed under it (that reason first).
+     */
+    suspend fun runSteps(requested: List<ChainStep>): ChainResult {
         require(requested.isNotEmpty()) { "no action" }
         val start = observe()
-        val actions = ActionChains.coalesce(requested, inBattle = start.battle != null)
+        val steps = coalesce(requested, inBattle = start.battle != null)
         val watch = BattleWatch.of(start)
         val started = timeSource.markNow()
         val performed = mutableListOf<String>()
@@ -313,7 +371,7 @@ class ChainRunner(
         val dropped = mutableListOf<GameAction>()
         var ended: ChainStop.BattleOver? = null
 
-        fun result(failed: Pair<GameAction, ActionError>? = null, skipped: List<GameAction> = emptyList(), stop: ChainStop? = null) =
+        fun result(failed: Pair<GameAction, ActionError>? = null, skipped: List<ChainStep> = emptyList(), stop: ChainStop? = null) =
             ChainResult(performed, details, failed, skipped, stop, dropped.toList(), ended)
 
         /** True when [action] is a battle step and the chain's battle is over in [now]: it is dropped. */
@@ -326,18 +384,31 @@ class ChainRunner(
             return true
         }
 
-        for ((index, action) in actions.withIndex()) {
+        for ((index, step) in steps.withIndex()) {
+            val action: GameAction
             if (index > 0) {
-                val now = observe().let { if (busyBattle(it) && !isRawInput(action)) settle() else it }
-                if (drops(action, now)) continue
-                stopBefore(watch, now, started)?.let { stop -> return result(skipped = actions.drop(index), stop = stop) }
+                var now = observe()
+                var resolved = step.on(now)
+                if (busyBattle(now) && (resolved == null || !isRawInput(resolved))) {
+                    now = settle()
+                    resolved = step.on(now)
+                }
+                if (resolved == null) {
+                    val stop = stopBefore(watch, now, started) ?: ChainStop.NotOffered(step.key)
+                    return result(skipped = steps.drop(index), stop = stop)
+                }
+                if (drops(resolved, now)) continue
+                stopBefore(watch, now, started)?.let { stop -> return result(skipped = steps.drop(index), stop = stop) }
+                action = resolved
+            } else {
+                action = step.on(start) ?: return result(skipped = steps, stop = ChainStop.NotOffered(step.key))
             }
-            onStep(index, actions.size, action)
+            onStep(index, steps.size, action)
             when (val outcome = execute(action, index)) {
                 is ActionOutcome.Done -> {
                     performed += action.key
-                    outcome.detail?.let { details += if (actions.size > 1) "${action.key}: $it" else it }
-                    val left = actions.drop(index + 1)
+                    outcome.detail?.let { details += if (steps.size > 1) "${action.key}: $it" else it }
+                    val left = steps.drop(index + 1)
                     outcome.stopsChain?.takeIf { left.isNotEmpty() }?.let { stop -> return result(skipped = left, stop = stop) }
                 }
                 is ActionOutcome.Failed -> {
@@ -352,13 +423,31 @@ class ChainRunner(
                     // started: like a stop before it, not a failure.
                     if (index > 0 && outcome.error is ActionError.Unavailable) {
                         if (drops(action, after)) continue
-                        watch?.check(after)?.let { stop -> return result(skipped = actions.drop(index), stop = stop) }
+                        watch?.check(after)?.let { stop -> return result(skipped = steps.drop(index), stop = stop) }
                     }
-                    return result(failed = action to outcome.error, skipped = actions.drop(index + 1))
+                    return result(failed = action to outcome.error, skipped = steps.drop(index + 1))
                 }
             }
         }
         return result()
+    }
+
+    /** [steps] with their consecutive planned actions merged ([ActionChains.coalesce]); keyed steps stay as they are. */
+    private fun coalesce(steps: List<ChainStep>, inBattle: Boolean): List<ChainStep> {
+        val merged = mutableListOf<ChainStep>()
+        val planned = mutableListOf<GameAction>()
+        fun flush() {
+            ActionChains.coalesce(planned.toList(), inBattle).forEach { merged += ChainStep.Planned(it) }
+            planned.clear()
+        }
+        for (step in steps) {
+            if (step is ChainStep.Planned) planned += step.action else {
+                flush()
+                merged += step
+            }
+        }
+        flush()
+        return merged
     }
 
     /** The battle still plays out by itself in [state] (a turn, faint messages, the end of the battle). */
@@ -379,5 +468,40 @@ class ChainRunner(
         val quiet = idle()
         if (quiet >= limits.idle) return ChainStop.Idle(quiet.inWholeSeconds)
         return null
+    }
+
+    companion object {
+        /** Steps an agent may give after its action (`then`), whoever runs it: the MCP's `act`, our own loop's models. */
+        const val MAX_THEN = 8
+
+        /**
+         * The chain of an agent's call, wired the same way by every host (the app's sessions, the bench) on the
+         * [recorder] watching every frame: how the game decided the battle since now ([decided]), the IDLE limit on its
+         * progress clock, [limits] ([ChainLimits.AGENT] by default), and each step started counted as progress (the
+         * agent's call is alive) and named ("step 2/3: attack(move:33)") before [onStep] is told.
+         */
+        fun forAgent(
+            recorder: Recorder,
+            observe: suspend () -> GameState,
+            execute: suspend (action: GameAction, index: Int) -> ActionOutcome,
+            settle: suspend () -> GameState = observe,
+            limits: ChainLimits = ChainLimits.AGENT,
+            onStep: (index: Int, total: Int, action: GameAction) -> Unit = { _, _, _ -> },
+        ): ChainRunner {
+            // The recorder sees every frame: how the battle was decided, even when it left the screen during a step.
+            val since = recorder.log.lastSeq
+            return ChainRunner(
+                observe = observe,
+                execute = execute,
+                settle = settle,
+                decided = { recorder.log.since(since).filterIsInstance<GameEvent.BattleDecided>().firstOrNull()?.outcome },
+                limits = limits,
+                idle = { recorder.progress.idle },
+                onStep = { index, total, action ->
+                    recorder.progress.progressed(if (total > 1) "step ${index + 1}/$total: ${action.key}" else action.key)
+                    onStep(index, total, action)
+                },
+            )
+        }
     }
 }

@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.CancelBehavior
 import dev.kotlinds.pokemonclient.state.Cursor
@@ -26,8 +27,8 @@ internal object HgssOptionsScreen : HgssScreenDecoder {
     override fun decode(mem: HgssMemory, state: HgssState): Screen? {
         val om = subApp(mem) ?: return null
         if (mem.s32(om + A.OM_OVY_ID) != OVY_OPTIONS) return null
-        if (mem.s32(om + A.OM_EXEC_STATE) != 2) return Screen.Animation(AnimationKind.TRANSITION)
-        val data = mem.ptr(om + A.OM_DATA) ?: return Screen.Animation(AnimationKind.TRANSITION)
+        if (mem.s32(om + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) return Screen.Animation(AnimationKind.TRANSITION)
+        val data = mem.ptr(om + S.OM_DATA) ?: return Screen.Animation(AnimationKind.TRANSITION)
         val flags = mem.u32(data + FLAGS)
         if (mem.u32(data + EXIT_STATE) != INPUT_EXIT_STATE || flags and 3L != 0L) return Screen.Animation(AnimationKind.TRANSITION)
         val row = ((flags shr 2) and 7L).toInt()
@@ -48,9 +49,9 @@ internal object HgssOptionsScreen : HgssScreenDecoder {
     private fun subApp(mem: HgssMemory): Long? {
         val v = mem.version
         val om = mem.ptr(v.mainAppState + A.MAIN_APP_OVERLAY_MANAGER) ?: return null
-        val init = mem.fn(om + A.OM_INIT)
+        val init = mem.fn(om + S.OM_INIT)
         if (init != v.fnFieldContinueAppInit && init != v.fnFieldNewGameAppInit) return null
-        val fs = mem.ptr(om + A.OM_DATA) ?: mem.ptr(v.fieldSystemPtr) ?: return null
+        val fs = mem.ptr(om + S.OM_DATA) ?: mem.ptr(v.fieldSystemPtr) ?: return null
         return mem.ptr(fs + A.FS_SUB0)?.let { mem.ptr(it + A.FSS0_SUB_APP) }
     }
 

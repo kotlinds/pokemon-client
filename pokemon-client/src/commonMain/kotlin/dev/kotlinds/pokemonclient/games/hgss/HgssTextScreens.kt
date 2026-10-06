@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.AnimationKind
@@ -17,9 +18,10 @@ import dev.kotlinds.pokemonclient.games.hgss.HgssTextAddresses as T
 
 /**
  * Message boxes, sign banners, Pokégear phone calls and the bottom-screen touch menus of field scripts
- * (design/screens/text-banners-phone.md).
+ * (design/screens/text-banners-phone.md): the one decoder of HGSS's field messages ([HgssReader] only tells a script
+ * runs, [GameMode.SCRIPT]). Text pages come from the Gen 4 printer reading ([dev.kotlinds.pokemonclient.games.gen4.Gen4Memory.printedText]).
  *
- * What it fixes compared with the generic mapping of [HgssState]:
+ * What it reads right (the older generic dialogue reading, removed, got these wrong):
  * - the script wait is read on the **innermost** script context: a `CallStd` caller sits in `ScrNative_WaitStd`
  *   (0x02040BCC) while its child does the real wait, which used to surface as `native(0x2040bcc)`;
  * - a sign banner (shown automatically when walking north into a sign, or with A) is [Screen.Overworld] with its
@@ -27,6 +29,8 @@ import dev.kotlinds.pokemonclient.games.hgss.HgssTextAddresses as T
  * - message boxes say whether the text is still printing or waits for A (page break or last page);
  * - Pokégear phone calls show the caller and the call text, in-call questions and the contact list;
  * - touch yes/no and multichoice menus get semantic ids, exact topology (overlay 27 navigation tables) and touch points;
+ *   top-screen yes/no and multichoice menus too;
+ * - the following Pokémon's message (printed outside the script environment);
  * - the fishing minigame and the "can't use that now" message of a registered key item ([HgssFishing]).
  *
  * Every id is language independent (positions, contact ids, menu values); labels are only for display.
@@ -39,18 +43,19 @@ internal object HgssTextScreens : HgssScreenDecoder {
         val fs = mem.ptr(mem.version.fieldSystemPtr) ?: return null
         return when (state.mode) {
             GameMode.APP -> if (state.modeDetail == "pokegear") HgssPhoneScreens.decode(mem, fs) else null
-            GameMode.OVERWORLD, GameMode.FIELD_BUSY, GameMode.SCRIPT, GameMode.DIALOGUE -> field(mem, fs, state)
+            GameMode.OVERWORLD, GameMode.FIELD_BUSY, GameMode.SCRIPT -> field(mem, fs, state)
             else -> null
         }
     }
 
     private fun field(mem: HgssMemory, fs: Long, state: HgssState): Screen? {
         HgssFishing.state(mem)?.let { return fishingScreen(it) }
-        val tasks = HgssFieldTasks.chain(mem, fs)
+        val tasks = mem.fieldTaskStack(fs)
         tasks.firstOrNull { it.function == T.FN_TASK_KEY_ITEM_MESSAGE }?.env?.let { env ->
             return keyItemMessage(mem, env)
         }
-        val env = tasks.firstNotNullOfOrNull { task -> task.env?.takeIf { mem.u32(it + A.SE_CHECK) == A.SCRIPT_ENV_MAGIC } }
+        if (tasks.firstOrNull()?.function == mem.version.fnTaskFollowMonInteract) return followerMessage(mem, fs)
+        val env = tasks.firstNotNullOfOrNull { task -> task.env?.takeIf { mem.u32(it + S.SM_MAGIC) == S.SCRIPT_MANAGER_MAGIC } }
             ?: return null
         return HgssScriptScreens.decode(mem, fs, env, state)
     }
@@ -58,7 +63,22 @@ internal object HgssTextScreens : HgssScreenDecoder {
     /** The message of `Task_PrintRegisteredKeyItemUseMessage` (field_use_item.c:501): A, B or the D-pad close it. */
     private fun keyItemMessage(mem: HgssMemory, env: Long): Screen? {
         val string = mem.ptr(env + T.KEY_ITEM_MSG_STRING) ?: return null
-        val text = HgssTextPrinter.read(mem, string, mem.u16(env + T.KEY_ITEM_MSG_PRINTER)) ?: return null
+        val text = mem.printedText(string, mem.u16(env + T.KEY_ITEM_MSG_PRINTER)) ?: return null
+        return Screen.Dialogue(TextSource.FIELD, null, text.visible, text.awaiting)
+    }
+
+    /**
+     * Talking to the following Pokémon: `Task_FollowMonInteract` (overlay 2) prints its own message, outside the script
+     * environment. Its work (`FieldSystem.unk120`) holds the message String and a state that is
+     * [A.FOLLOW_INTERACT_MESSAGE_SHOWN] while the message box is up (verified live); its printer id isn't kept, so the
+     * printer printing that String is looked up. Null before the box shows (the Pokémon turning, its animation).
+     */
+    private fun followerMessage(mem: HgssMemory, fs: Long): Screen? {
+        val work = mem.ptr(fs + A.FS_FOLLOW_INTERACT) ?: return null
+        if (mem.u8(work + A.FOLLOW_INTERACT_STATE) != A.FOLLOW_INTERACT_MESSAGE_SHOWN) return null
+        // The box is up: its text unreadable is said so (Unknown, waiting for A like the message), never a busy overworld.
+        val text = mem.ptr(work + A.FOLLOW_INTERACT_STRING)?.let { mem.printedText(it, mem.printerIdOf(it)) }
+            ?: return Screen.Unknown(HgssScriptScreens.UNREADABLE_MESSAGE, Awaiting.INPUT)
         return Screen.Dialogue(TextSource.FIELD, null, text.visible, text.awaiting)
     }
 
@@ -71,75 +91,16 @@ internal object HgssTextScreens : HgssScreenDecoder {
     }
 }
 
-/** One field task (`TaskManager`, include/task.h): its function (without the Thumb bit) and environment. */
-internal data class HgssFieldTask(val function: Long, val env: Long?)
-
-internal object HgssFieldTasks {
-    /** The field task stack from the top task (`FieldSystem.taskman`), following `TaskManager.prev`. */
-    fun chain(mem: HgssMemory, fs: Long): List<HgssFieldTask> {
-        val out = mutableListOf<HgssFieldTask>()
-        val seen = HashSet<Long>()
-        var task = mem.ptr(fs + A.FS_TASKMAN)
-        while (task != null && out.size < 16 && seen.add(task)) {
-            out += HgssFieldTask(mem.fn(task + A.TM_FUNC), mem.ptr(task + A.TM_ENV))
-            task = mem.ptr(task + A.TM_PREV)
-        }
-        return out
-    }
-}
-
-/** A text being printed by the global text printers (src/text.c `sTextPrinterTasks`). */
-internal data class HgssPrintedText(
-    /** The whole text (all pages). */
-    val full: String,
-    /** What the box shows now (the lines of the current page printed so far). */
-    val visible: String,
-    /** [Awaiting.TEXT_PRINTING] while characters are printed or scrolled, [Awaiting.INPUT] at a page break or once done. */
-    val awaiting: Awaiting,
-    /** The printer still exists (printing or waiting at a page break); false once the last page is done. */
-    val printerAlive: Boolean,
-)
-
-internal object HgssTextPrinter {
-    /**
-     * Reads the `String` at [string] printed by printer [printerId]. The printer slot is only trusted when its
-     * `currentChar` points inside that String (the slots are reused by every text). Without a live printer the text
-     * is complete and waits for a key.
-     */
-    fun read(mem: HgssMemory, string: Long, printerId: Int): HgssPrintedText? {
-        val full = mem.gameString(string) ?: return null
-        val size = mem.u16(string + A.STR_SIZE).coerceAtMost(2048)
-        val data = string + A.STR_DATA
-        val chars = mem.chars(data, size)
-        val printer = printer(mem, printerId)?.takeIf { p ->
-            val current = mem.u32(p + A.TP_CURRENT_CHAR)
-            current >= data && current <= data + 2L * size
-        }
-        if (printer == null) return HgssPrintedText(full, HgssText.visibleLines(chars, null), Awaiting.INPUT, false)
-        val printed = ((mem.u32(printer + A.TP_CURRENT_CHAR) - data) / 2).toInt()
-        val waiting = mem.u8(printer + A.TP_STATE) in A.TEXT_PRINTER_WAIT_STATES
-        return HgssPrintedText(
-            full, HgssText.visibleLines(chars, printed),
-            if (waiting) Awaiting.INPUT else Awaiting.TEXT_PRINTING, true,
-        )
-    }
-
-    /** The data of printer [id] (`sTextPrinterTasks[id]`), null when the printer is finished. */
-    fun printer(mem: HgssMemory, id: Int): Long? =
-        if (id !in 0 until T.TEXT_PRINTER_COUNT) null
-        else mem.ptr(mem.version.textPrinterTasks + 4L * id)?.let { mem.ptr(it + A.SYSTASK_DATA) }
-}
-
 /** Screens of a running field script: message boxes, sign banners, touch yes/no and multichoice. */
 internal object HgssScriptScreens {
 
     fun decode(mem: HgssMemory, fs: Long, env: Long, state: HgssState): Screen? {
         val v = mem.version
         val context = innermostContext(mem, env)
-        val native = context?.let { if (mem.u8(it + A.SC_MODE) == SC_MODE_NATIVE) mem.fn(it + A.SC_NATIVE) else null }
-        val boxOpen = mem.u8(env + A.SE_MSGBOX_OPEN) != 0
+        val native = context?.let(mem::scriptNative)
+        val boxOpen = mem.u8(env + S.SM_MSG_BOX_OPEN) != 0
         val string = mem.ptr(env + A.SE_STRING_BUFFER_0)
-        val printerId = mem.u8(env + A.SE_TEXT_PRINTER)
+        val printerId = mem.u8(env + S.SM_MESSAGE_ID)
 
         if (native in T.BANNER_WAITS && bannerShown(mem, fs)) {
             // The slide-in is a few frames where no key is read (and a Trainer Tips text isn't loaded yet: the buffer
@@ -148,42 +109,47 @@ internal object HgssScriptScreens {
             val text = string?.let { mem.gameString(it) }?.takeIf { it.isNotBlank() }
             return Screen.Overworld(banner = text, awaiting = Awaiting.INPUT)
         }
-        val message = if (boxOpen && string != null) HgssTextPrinter.read(mem, string, printerId) else null
+        val message = if (boxOpen && string != null) mem.printedText(string, printerId) else null
         val source = if (isSign(mem, env, state)) TextSource.SIGN else TextSource.FIELD
         val speaker = if (source == TextSource.FIELD) speaker(mem, env) else null
-        return when (native) {
+        val screen = when (native) {
             v.fnScrTouchYesNo -> HgssTouchMenus.yesNo(mem, fs, message?.visible)
                 ?: Screen.Dialogue(source, speaker, message?.visible ?: "", Awaiting.ANIMATION)
             v.fnScrTouchMenu -> HgssTouchMenus.multichoice(mem, fs)
                 ?: Screen.Dialogue(source, speaker, message?.visible ?: "", Awaiting.ANIMATION)
             v.fnScrYesNo -> topYesNo(mem, env, message?.visible)
+            v.fnScrMenuWait1, v.fnScrMenuWait2 -> topMultichoice(mem, env)
+                ?: Screen.Dialogue(source, speaker, message?.visible ?: "", Awaiting.ANIMATION)
             // Printer gone while the script still waits for it: it resumes on the next frame.
             v.fnScrWaitTextPrint -> message?.let {
                 Screen.Dialogue(source, speaker, it.visible, if (it.printerAlive) it.awaiting else Awaiting.ANIMATION)
             }
-            v.fnScrWaitABPress, v.fnScrWaitButton, v.fnScrWaitButtonOrDpad, v.fnScrWaitButtonOrDelay ->
+            in buttonWaits(v) ->
                 message?.let { Screen.Dialogue(source, speaker, it.visible, Awaiting.INPUT) }
             // The bottom screen switching between the start-menu icons and the script menu (scrcmd_c.c:4925-4975).
             T.FN_SCR_TOUCH_MENU_HIDE, T.FN_SCR_TOUCH_MENU_SHOW ->
                 message?.let { Screen.Dialogue(source, speaker, it.visible, Awaiting.ANIMATION) }
             else -> message?.let { Screen.Dialogue(source, speaker, it.visible, Awaiting.ANIMATION) }
         }
+        if (screen != null || !boxOpen) return screen
+        // A message box is open but its text couldn't be read: say so (Unknown) rather than leave it to the generic
+        // field mapping (a busy overworld), where a box waiting for A would stall the agent silently. It waits for a
+        // key when the script waits for one.
+        return Screen.Unknown(UNREADABLE_MESSAGE, if (native in buttonWaits(v)) Awaiting.INPUT else Awaiting.ANIMATION)
     }
 
+    /** The script waits that end on a key press (the message box then waits for A). */
+    private fun buttonWaits(v: HgssVersion): Set<Long> = setOf(v.fnScrWaitABPress, v.fnScrWaitButton, v.fnScrWaitButtonOrDpad, v.fnScrWaitButtonOrDelay)
+
+    /** [Screen.Unknown.hint] of a message box whose text couldn't be read. */
+    internal const val UNREADABLE_MESSAGE = "a message box whose text couldn't be read"
+
     /**
-     * The context doing the real wait: the active one with the highest index, skipping callers parked in
-     * `ScrNative_WaitStd` (scrcmd_c.c:367) while their `CallStd` child runs.
+     * The context doing the real wait: the innermost one waiting ([dev.kotlinds.pokemonclient.games.gen4.Gen4Memory.waitingScriptContexts],
+     * a `CallStd` caller in `ScrNative_WaitStd` skipped).
      */
-    fun innermostContext(mem: HgssMemory, env: Long): Long? {
-        // The active count bounds the scan; without it (0 or garbage) all slots are tried (ended contexts are NULL).
-        val count = mem.u8(env + A.SE_ACTIVE_CONTEXTS).takeIf { it in 1..MAX_CONTEXTS } ?: MAX_CONTEXTS
-        return (count - 1 downTo 0).asSequence()
-            .mapNotNull { i -> mem.ptr(env + A.SE_SCRIPT_CONTEXTS + 4L * i) }
-            .firstOrNull { ctx ->
-                val mode = mem.u8(ctx + A.SC_MODE)
-                mode != 0 && !(mode == SC_MODE_NATIVE && mem.fn(ctx + A.SC_NATIVE) == T.FN_SCR_WAIT_STD)
-            }
-    }
+    private fun innermostContext(mem: HgssMemory, env: Long): Long? =
+        mem.waitingScriptContexts(env, mem.version.scriptContexts, T.FN_SCR_WAIT_STD).firstOrNull()
 
     /** `FieldSystem.unk68 + 0x13` bit 7: the sign banner window exists (overlay_01_021F3D38.s ov01_021F3E10). */
     private fun bannerShown(mem: HgssMemory, fs: Long): Boolean =
@@ -206,7 +172,7 @@ internal object HgssScriptScreens {
         val script = mem.u16(obj + A.MO_SCRIPT_ID)
         // A common trainer script, else a trainer its map's own scripts battle (Kimono Girls, Elite Four...).
         val trainer = trainerOfScript(script)
-            ?: mem.s32(obj + A.MO_MAP_ID).takeIf { it >= 0 }?.let { zone -> HgssTrainers.trainerOf(zone, mem.u16(obj + A.MO_ID), script) }
+            ?: mem.s32(obj + A.MO_MAP_ID).takeIf { it >= 0 }?.let { zone -> HgssTrainers.trainerOf(zone, mem.u16(obj + S.MO_LOCAL_ID), script) }
         trainer?.let { HgssData.gameData?.trainerLabel(it)?.let { label -> return label } }
         val sprite = HgssData.spriteName(mem.s32(obj + A.MO_SPRITE_ID))
         // An invisible object (the Cerulean Gym's Machine Part) speaks for no one: its text is narration.
@@ -228,6 +194,28 @@ internal object HgssScriptScreens {
     private const val STD_TRAINER_2 = 5000
     private const val MAX_TRAINERS = 1000
 
+    /**
+     * A top-screen multichoice (`ScrCmd_064`..`067`): the `FieldMenu` at `ScriptEnvironment.unk10`, its options being
+     * the expanded Strings of its items and its cursor its ListMenu2D's. UP / DOWN move (wrapping), A picks, B picks the
+     * last option (cancel). Ids are option positions.
+     */
+    private fun topMultichoice(mem: HgssMemory, env: Long): Screen? {
+        val menu = mem.ptr(env + A.SE_FIELD_MENU) ?: return null
+        val count = mem.u8(menu + A.FMENU_COUNT).takeIf { it in 1..MAX_MENU_ITEMS } ?: return null
+        val entries = (0 until count).map { i ->
+            val label = mem.gameString(mem.ptr(menu + A.FMENU_ITEMS_TOP + i * A.LIST_MENU_ITEM_SIZE))?.replace('\n', ' ') ?: "?"
+            Entry("option:$i", label)
+        }
+        val cursor = mem.ptr(menu + A.FMENU_LIST_MENU)?.let { mem.u8(it + A.LM2D_SELECTED) }?.takeIf { it in 0 until count }
+        return Screen.ListMenu(
+            MenuKind.MULTICHOICE, entries, cursor?.let { Cursor.At(it) } ?: Cursor.Hidden,
+            Topology.vertical(count, wrap = true), CancelBehavior.CONFIRMS_LAST,
+        )
+    }
+
+    /** `ListMenuItem[28]` of a FieldMenu (ov01_021EDAFC). */
+    private const val MAX_MENU_ITEMS = 28
+
     /** The top-screen yes/no (`ScrCmd_YesNo`, ListMenu2D at `ScriptEnvironment.unk24`). B answers NO. */
     private fun topYesNo(mem: HgssMemory, env: Long, question: String?): Screen {
         val cursor = mem.ptr(env + A.SE_LIST_MENU_2D)?.let { mem.u8(it + A.LM2D_SELECTED) }?.takeIf { it in 0..1 }
@@ -237,8 +225,6 @@ internal object HgssScriptScreens {
         )
     }
 
-    private const val SC_MODE_NATIVE = 2
-    private const val MAX_CONTEXTS = 3
 }
 
 /**
@@ -290,9 +276,9 @@ internal object HgssTouchMenus {
     }
 
     private fun work(mem: HgssMemory, fs: Long): Long? {
-        val manager = mem.ptr(fs + A.FS_BOTTOM_SCREEN_TASK)?.let { mem.ptr(it + A.SYSTASK_DATA) } ?: return null
+        val manager = mem.ptr(fs + A.FS_BOTTOM_SCREEN_TASK)?.let { mem.ptr(it + S.SYSTASK_DATA) } ?: return null
         if (mem.u8(manager + A.BSM_APP_ID) != A.BOTTOM_APP_SCRIPT_MENU) return null
-        return mem.ptr(manager + A.BSM_APP_TASK)?.let { mem.ptr(it + A.SYSTASK_DATA) }
+        return mem.ptr(manager + A.BSM_APP_TASK)?.let { mem.ptr(it + S.SYSTASK_DATA) }
     }
 }
 
@@ -304,19 +290,19 @@ internal object HgssPhoneScreens {
 
     fun decode(mem: HgssMemory, fs: Long): Screen? {
         val gear = mem.ptr(fs + A.FS_SUB0)?.let { mem.ptr(it + A.FSS0_SUB_APP) } ?: return null
-        if (mem.fn(gear + A.OM_INIT) != T.FN_POKEGEAR_INIT) return null
+        if (mem.fn(gear + S.OM_INIT) != T.FN_POKEGEAR_INIT) return null
         // Opening (an incoming call opens it by itself): no app inside yet, nothing to press.
-        val gearData = mem.ptr(gear + A.OM_DATA) ?: return Screen.Animation(AnimationKind.TRANSITION)
-        if (mem.s32(gear + A.OM_EXEC_STATE) != 2) return Screen.Animation(AnimationKind.TRANSITION)
+        val gearData = mem.ptr(gear + S.OM_DATA) ?: return Screen.Animation(AnimationKind.TRANSITION)
+        if (mem.s32(gear + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) return Screen.Animation(AnimationKind.TRANSITION)
         val child = mem.ptr(gearData + T.GEAR_CHILD_APP) ?: return Screen.Animation(AnimationKind.TRANSITION)
-        if (mem.u8(gearData + T.GEAR_APP) != T.GEAR_APP_PHONE || mem.fn(child + A.OM_INIT) != T.FN_PHONE_INIT) {
+        if (mem.u8(gearData + T.GEAR_APP) != T.GEAR_APP_PHONE || mem.fn(child + S.OM_INIT) != T.FN_PHONE_INIT) {
             return null
         }
-        if (mem.s32(gear + A.OM_PROC_STATE) != T.GEAR_STATE_RUN_PHONE || mem.s32(child + A.OM_EXEC_STATE) != 2) {
+        if (mem.s32(gear + S.OM_PROC_STATE) != T.GEAR_STATE_RUN_PHONE || mem.s32(child + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) {
             return Screen.Animation(AnimationKind.TRANSITION)
         }
-        val phone = mem.ptr(child + A.OM_DATA) ?: return null
-        return when (mem.s32(child + A.OM_PROC_STATE)) {
+        val phone = mem.ptr(child + S.OM_DATA) ?: return null
+        return when (mem.s32(child + S.OM_PROC_STATE)) {
             T.PHONE_STATE_INPUT_LOOP -> contactList(mem, gearData, phone)
             T.PHONE_STATE_CONTEXT_MENU, T.PHONE_STATE_SORT_MENU ->
                 touchMenu(mem, phone, mem.ptr(phone + T.PHONE_MENU), MenuKind.OTHER)
@@ -454,7 +440,7 @@ internal object HgssPhoneScreens {
     private fun call(mem: HgssMemory, phone: Long, call: Long): Screen {
         val callerId = mem.u8(call + T.CALL_CALLER_ID)
         val speaker = mem.gameString(mem.ptr(call + T.CALL_CONTACT_NAME))?.takeIf { it.isNotBlank() } ?: T.contactName(callerId)
-        val text = mem.ptr(call + T.CALL_TEXT)?.let { HgssTextPrinter.read(mem, it, mem.u8(call + T.CALL_PRINTER)) }
+        val text = mem.ptr(call + T.CALL_TEXT)?.let { mem.printedText(it, mem.u8(call + T.CALL_PRINTER)) }
         fun dialogue(awaiting: Awaiting) = Screen.Dialogue(TextSource.PHONE, speaker, text?.visible ?: "", awaiting)
         return when (val state = mem.s32(call + T.CALL_MAIN_STATE)) {
             T.CALL_TALKING -> {
@@ -483,7 +469,7 @@ internal object HgssPhoneScreens {
 internal object HgssOakIntroScreens {
 
     fun decode(mem: HgssMemory): Screen? {
-        val data = mem.ptr(mem.version.mainAppState + A.MAIN_APP_OVERLAY_MANAGER)?.let { mem.ptr(it + A.OM_DATA) } ?: return null
+        val data = mem.ptr(mem.version.mainAppState + A.MAIN_APP_OVERLAY_MANAGER)?.let { mem.ptr(it + S.OM_DATA) } ?: return null
         val menu = data + T.OAK_MENU
         val state = mem.s32(data + T.OAK_STATE)
         // A confirmed choice blinks for ~20 frames before the intro moves on (the delay byte stays set once the menu
@@ -542,25 +528,19 @@ internal object HgssOakIntroScreens {
      * until the next message; only the page on screen is shown.
      */
     private fun speech(mem: HgssMemory, data: Long): Screen? {
-        val strPtr = mem.ptr(data + A.OAK_STRING)
-        val printer = mem.ptr(mem.version.textPrinterTasks + 4L * mem.u8(data + T.OAK_TEXT_PRINTER))?.let { mem.ptr(it + A.SYSTASK_DATA) }
+        val printerId = mem.u8(data + T.OAK_TEXT_PRINTER)
+        val printer = mem.textPrinter(printerId)
+        val printing = mem.s32(data + T.OAK_PRINT_DIALOG_STATE) == T.OAK_DIALOG_PRINTING
         val awaiting = when {
-            mem.s32(data + T.OAK_PRINT_DIALOG_STATE) == T.OAK_DIALOG_PRINTING ->
-                if (printer != null && mem.u8(printer + A.TP_STATE) in A.TEXT_PRINTER_WAIT_STATES) Awaiting.INPUT else Awaiting.TEXT_PRINTING
+            printing -> if (printer != null && mem.printerWaitsForInput(printer)) Awaiting.INPUT else Awaiting.TEXT_PRINTING
             mem.s32(data + T.OAK_PRINT_DIALOG_STATE) == T.OAK_DIALOG_WAIT_BUTTON -> Awaiting.INPUT
             mem.s32(data + T.OAK_PRINT_FULL_SCREEN_STATE) == T.OAK_FULL_SCREEN_WAIT_BUTTON -> Awaiting.INPUT
             // Every input of the speech is decoded (menus, yes / no, messages): anything else is the professor
             // fading in, a picture moving... nothing to press.
             else -> return Screen.Animation(AnimationKind.TRANSITION)
         }
-        val text = strPtr?.takeIf { mem.gameString(it, allowFreed = true) != null }?.let { str ->
-            val size = mem.u16(str + A.STR_SIZE).coerceAtMost(2048)
-            val chars = mem.chars(str + A.STR_DATA, size)
-            // Printing: the page the printer is on (its current char); printed: the last page.
-            val printed = printer?.takeIf { awaiting != Awaiting.INPUT || mem.s32(data + T.OAK_PRINT_DIALOG_STATE) == T.OAK_DIALOG_PRINTING }
-                ?.let { ((mem.u32(it + A.TP_CURRENT_CHAR) - (str + A.STR_DATA)) / 2).toInt().takeIf { n -> n in 0..size } }
-            HgssText.visibleLines(chars, printed).replace('\n', ' ')
-        }.orEmpty()
+        // Printing: the page the printer is on (its current char); printed: the last page.
+        val text = mem.printedText(mem.ptr(data + A.OAK_STRING), printerId.takeIf { printing }, allowFreed = true)?.visible.orEmpty()
         return Screen.Dialogue(TextSource.INTRO, null, text, awaiting)
     }
 }
@@ -626,10 +606,10 @@ object HgssFishing {
     fun state(mem: HgssMemory): FishingState? {
         if (mem.version != HgssVersion.HEARTGOLD_US) return null
         val fs = mem.ptr(mem.version.fieldSystemPtr) ?: return null
-        val tasks = HgssFieldTasks.chain(mem, fs)
+        val tasks = mem.fieldTaskStack(fs)
         tasks.firstOrNull { it.function == T.FN_TASK_KEY_ITEM_MESSAGE }?.env?.let { env ->
             val string = mem.ptr(env + T.KEY_ITEM_MSG_STRING)
-            val text = string?.let { HgssTextPrinter.read(mem, it, mem.u16(env + T.KEY_ITEM_MSG_PRINTER)) }
+            val text = string?.let { mem.printedText(it, mem.u16(env + T.KEY_ITEM_MSG_PRINTER)) }
             return FishingState.Refused(text?.visible, text?.awaiting ?: Awaiting.ANIMATION)
         }
         val work = mem.mainTaskData(T.FN_FISHING_MINIGAME) ?: return null
@@ -639,7 +619,7 @@ object HgssFishing {
         fun message(): Pair<String?, Awaiting> {
             val string = mem.ptr(work + T.FISH_STRING) ?: return null to Awaiting.ANIMATION
             // The String is filled when the message starts printing: blank before (and right after) that.
-            val text = HgssTextPrinter.read(mem, string, mem.u8(work + T.FISH_PRINTER))?.takeIf { it.full.isNotBlank() }
+            val text = mem.printedText(string, mem.u8(work + T.FISH_PRINTER))?.takeIf { it.full.isNotBlank() }
                 ?: return null to Awaiting.ANIMATION
             return text.visible to text.awaiting
         }
@@ -689,7 +669,6 @@ internal object HgssTextAddresses {
     const val BANNER_SHOWN = 0x80
     /** `FieldMenu.unk97` bit 0: B picks the last option of a multichoice. */
     const val FMENU_FLAGS = 0x97L
-    const val TEXT_PRINTER_COUNT = 8
 
     /** `Task_PrintRegisteredKeyItemUseMessage` (field_use_item.c:501): env {Window; String* @0x10; u16 printer @0x14}. */
     const val FN_TASK_KEY_ITEM_MESSAGE = 0x0206518CL

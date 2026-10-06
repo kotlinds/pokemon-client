@@ -54,7 +54,7 @@ class HgssRockClimbFixtureTest {
         val area = assertNotNull(HgssData.world?.areaOf(field.mapId))
         assertEquals(TileKind.RockClimb(ClimbAxis.NORTH_SOUTH), area.tile(13, 4)?.kind)
         val pathfinder = Pathfinder(area)
-        val start = Node(field.x, field.y, pathfinder.levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))
+        val start = pathfinder.nodeOf(field)
         val found = assertIs<Pathfinder.Result.Found>(pathfinder.route(start, MovePlans.routeOptions(field, MoveOptions(), usable, StepWeights.NONE)) { it.x == 13 && it.y == 14 })
         val climb = assertIs<FieldMoveEdge>(found.route.edges.single())
         assertEquals(FieldMoveKind.ROCK_CLIMB, climb.move)

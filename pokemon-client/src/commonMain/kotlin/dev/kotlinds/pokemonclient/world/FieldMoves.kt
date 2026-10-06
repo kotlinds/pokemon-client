@@ -45,16 +45,26 @@ object FieldMoves {
     fun access(state: GameState, rule: (FieldMoveKind) -> FieldMoveRule?): Map<FieldMoveKind, FieldMoveAccess> =
         FieldMoveKind.entries.associateWith { kind -> access(state, rule(kind)) }
 
+    /**
+     * The access of [state]: what its game read ([GameState.fieldMoves], the one source of the action list and the
+     * walks); a state built without its game (null, tests) is read now with the game's [rule], the same way.
+     */
+    fun of(state: GameState, rule: (FieldMoveKind) -> FieldMoveRule?): Map<FieldMoveKind, FieldMoveAccess> =
+        state.fieldMoves ?: access(state, rule)
+
     /** The access to one field move with [rule] (null: the game doesn't know it). */
     fun access(state: GameState, rule: FieldMoveRule?): FieldMoveAccess {
         rule ?: return FieldMoveAccess.Unknown
-        // The game takes the first Pokémon knowing the move (GetPartySlotWithMove): eggs never count.
-        val mon = state.party.firstOrNull { mon -> !mon.isEgg && mon.moves.any { it.move.id == rule.move } }
-            ?: return FieldMoveAccess.NoPokemon
+        // The game takes the first Pokémon knowing the move (GetPartySlotWithMove).
+        val mon = knowers(state, rule.move).firstOrNull() ?: return FieldMoveAccess.NoPokemon
         val player = state.player ?: return FieldMoveAccess.NoBadge(rule.badge)
         if (!rule.badgeOwned(player)) return FieldMoveAccess.NoBadge(rule.badge)
         return FieldMoveAccess.Usable(mon.slot, mon.displayName)
     }
+
+    /** The Pokémon of the party knowing [move], in party order: eggs never count (the game skips them). */
+    fun knowers(state: GameState, move: MoveId): List<dev.kotlinds.pokemonclient.state.PartyMon> =
+        state.party.filter { mon -> !mon.isEgg && mon.moves.any { it.move.id == move } }
 
     /** The moves of [access] that can be used now. */
     fun usable(access: Map<FieldMoveKind, FieldMoveAccess>): Set<FieldMoveKind> =

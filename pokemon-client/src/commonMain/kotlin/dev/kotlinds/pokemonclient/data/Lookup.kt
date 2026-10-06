@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import dev.kotlinds.pokemonclient.state.normalizeName
 
 /**
  * How much the agent may know beyond what the game shows. It changes what is **shown**, never what is computed.
@@ -176,11 +177,11 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel) {
      * then by edit distance on the normalized spelling), so the agent can retry with a valid id.
      */
     private fun unknown(prefix: String, raw: String, range: IntRange, name: (Int) -> String?): IllegalArgumentException {
-        val wanted = normalize(raw.removePrefix("$prefix:"))
+        val wanted = normalizeName(raw.removePrefix("$prefix:"))
         val close = if (wanted.isEmpty()) emptyList() else range.asSequence()
             .mapNotNull { id -> name(id)?.takeIf { it.isNotBlank() }?.let { id to it } }
             .mapNotNull { (id, label) ->
-                val n = normalize(label).takeIf { it.length >= MIN_NAME_LENGTH } ?: return@mapNotNull null
+                val n = normalizeName(label).takeIf { it.length >= MIN_NAME_LENGTH } ?: return@mapNotNull null
                 val score = if (n.contains(wanted) || wanted.contains(n)) 0 else editDistance(n, wanted)
                 Triple(id, label, score)
             }
@@ -208,20 +209,17 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel) {
     }
 
     private fun findType(raw: String): PokemonType {
-        val value = normalize(raw.removePrefix("type:"))
-        return PokemonType.entries.firstOrNull { normalize(it.label) == value || normalize(it.name) == value }
+        val value = normalizeName(raw.removePrefix("type:"))
+        return PokemonType.entries.firstOrNull { normalizeName(it.label) == value || normalizeName(it.name) == value }
             ?: throw IllegalArgumentException("Unknown type `$raw` (one of ${PokemonType.entries.joinToString { it.label }})")
     }
 
     /** `prefix:<number>`, a bare number, or a name found among [range] with [name]. */
     private fun idOrName(raw: String, prefix: String, range: IntRange, name: (Int) -> String?): Int? {
         raw.removePrefix("$prefix:").toIntOrNull()?.let { return it.takeIf { id -> id in range } }
-        val wanted = normalize(raw)
-        return range.firstOrNull { name(it)?.let(::normalize) == wanted }
+        val wanted = normalizeName(raw)
+        return range.firstOrNull { name(it)?.let(::normalizeName) == wanted }
     }
-
-    private fun normalize(value: String) = value.lowercase()
-        .map { c -> ACCENTS[c] ?: c }.filter { it.isLetterOrDigit() }.joinToString("")
 
     // endregion
 
@@ -230,6 +228,5 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel) {
 
         /** Placeholder names ("???", "-") are never suggested. */
         const val MIN_NAME_LENGTH = 2
-        val ACCENTS = mapOf('é' to 'e', 'è' to 'e', 'ê' to 'e', 'à' to 'a', 'â' to 'a', 'î' to 'i', 'ï' to 'i', 'ô' to 'o', 'ù' to 'u', 'û' to 'u', 'ç' to 'c')
     }
 }

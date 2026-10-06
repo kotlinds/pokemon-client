@@ -2,15 +2,6 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.PokemonGame
-import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.console.ConsolePort
-import dev.kotlinds.pokemonclient.console.Frame
-import dev.kotlinds.pokemonclient.console.InputFrame
-import dev.kotlinds.pokemonclient.console.MemoryRegion
-import dev.kotlinds.pokemonclient.console.Platform
-import dev.kotlinds.pokemonclient.runtime.ActionScope
-import dev.kotlinds.pokemonclient.runtime.InputProbe
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.ExaminableKind
 import dev.kotlinds.pokemonclient.state.FieldExaminable
@@ -47,6 +38,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * [ActionSettings.solvePuzzles] off: walks only walk ([PuzzleSolving.walkOnly]) and a way needing a mechanism fails
@@ -68,7 +60,7 @@ class PuzzleSolvingTest {
     }
 
     private fun field(x: Int, y: Int, puzzle: PuzzleState? = null, objects: List<FieldObject> = emptyList()) =
-        FieldState(1, "test", x, y, 0, Direction.SOUTH, MovementMode.WALK, moving = false, objects = objects, puzzle = puzzle)
+        FieldState(1, MapName(1, map = "test"), x, y, 0, Direction.SOUTH, MovementMode.WALK, moving = false, objects = objects, puzzle = puzzle)
 
     /** A lift at 2,1 between the two halves of a corridor walled in the middle: the only way east. */
     private val liftRoom = area(
@@ -128,7 +120,7 @@ class PuzzleSolvingTest {
     @Test
     fun goToFailsWithPuzzleLeftToAgentAndNeverStepsOnTheLift() {
         val game = PuzzleGame(liftRoom, 0, 1, lift)
-        val off = PlanContext(ActionScope(game.console, game.inputProbe), game, settings = ActionSettings(solvePuzzles = false))
+        val off = game.context(ActionSettings(solvePuzzles = false))
         val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 1, null), off))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.PUZZLE_LEFT_TO_AGENT, error.reason)
@@ -140,12 +132,12 @@ class PuzzleSolvingTest {
     fun hiddenItemsAreTargetsOnlyWhenRevealed() {
         val map = area("....", signs = listOf(Sign(1, 3, 3, 0, 8001, SignKind.HIDDEN_ITEM, 801)))
         val game = PuzzleGame(map, 0, 0, null)
-        val hidden = PlanContext(ActionScope(game.console, game.inputProbe), game, settings = ActionSettings(revealHidden = false))
+        val hidden = game.context(ActionSettings(revealHidden = false))
         assertNull(MovePlans.resolve(hidden, "hidden_item:3", null, null))
         assertNull(MovePlans.resolve(hidden, "sign:3", null, null))
         val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "hidden_item:3"), hidden))
         assertFalse("hidden_item:3" in assertIs<ActionError.InvalidParameter>(failed.error).allowed)
-        val revealed = PlanContext(ActionScope(game.console, game.inputProbe), game)
+        val revealed = game.context()
         assertEquals(3 to 0, MovePlans.resolve(revealed, "hidden_item:3", null, null)?.let { it.x to it.y })
     }
 
@@ -155,67 +147,36 @@ class PuzzleSolvingTest {
         val map = area("....", "....")
         val part = FieldExaminable("examine:8", "Machine Part", ExaminableKind.ITEM, 2, 1)
         val game = PuzzleGame(map, 0, 0, null, listOf(part))
-        val hidden = PlanContext(ActionScope(game.console, game.inputProbe), game, settings = ActionSettings(revealHidden = false))
+        val hidden = game.context(ActionSettings(revealHidden = false))
         assertNull(MovePlans.resolve(hidden, "examine:8", null, null))
         val failed = assertIs<ActionOutcome.Failed>(MovePlans.interact.run(GameAction.Interact("examine:8"), hidden))
         assertFalse("examine:8" in assertIs<ActionError.InvalidParameter>(failed.error).allowed)
-        val revealed = PlanContext(ActionScope(game.console, game.inputProbe), game)
+        val revealed = game.context()
         val target = assertIs<MovePlans.Target>(MovePlans.resolve(revealed, "examine:8", null, null))
         assertEquals(2 to 1, target.x to target.y)
         // Examined from a tile next to it, never from the tile itself.
         assertTrue(target.isGoal!!(Node(2, 0)) && !target.isGoal!!(Node(2, 1)) && !target.isGoal!!(Node(0, 0)))
         // A cue makes it known without a walkthrough.
         val cued = PuzzleGame(map, 0, 0, null, listOf(part.copy(cue = true)))
-        assertEquals(2 to 1, MovePlans.resolve(PlanContext(ActionScope(cued.console, cued.inputProbe), cued, settings = ActionSettings(revealHidden = false)), "examine:8", null, null)?.let { it.x to it.y })
+        assertEquals(2 to 1, MovePlans.resolve(cued.context(ActionSettings(revealHidden = false)), "examine:8", null, null)?.let { it.x to it.y })
         // Its tile is a wall: the walk to 3,1 goes round it by the top row.
         assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(3, 1, null), revealed))
         assertFalse((2 to 1) in game.visited, game.visited.toString())
     }
 }
 
-/** A field where holding a direction moves the player one tile every few frames (walls block), with a [puzzle]. */
-private class PuzzleGame(val area: Area, var x: Int, var y: Int, val puzzle: PuzzleState?, val examinables: List<FieldExaminable> = emptyList()) : PokemonGame {
-    var facing = Direction.SOUTH
-    val visited = mutableListOf(x to y)
-    private var held: Set<Button> = emptySet()
-    private var heldFor = 0
-
+/** A field ([GridGame]) where holding a direction moves the player one tile every few frames (walls block), with a [puzzle]. */
+private class PuzzleGame(val area: Area, x: Int, y: Int, val puzzle: PuzzleState?, val examinables: List<FieldExaminable> = emptyList()) : GridGame(x, y) {
     override val name = "Puzzle"
     override val world = object : WorldSource {
         override fun areaOf(zoneId: Int) = area
     }
-    override val inputProbe = InputProbe { held }
     override fun state(memory: Memory): GameState {
-        val field = FieldState(1, "test", x, y, 0, facing, MovementMode.WALK, moving = false, puzzle = puzzle, examinables = examinables)
+        val field = FieldState(1, MapName(1, map = "test"), x, y, 0, facing, MovementMode.WALK, moving = false, puzzle = puzzle, examinables = examinables)
         return GameState(0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null, field)
     }
 
-    val console = object : ConsolePort {
-        override val platform = Platform.NINTENDO_DS
-        override var frame = 0L
-        override val revision get() = frame
-        override fun step(frames: Int, input: InputFrame) = repeat(frames) {
-            frame++
-            held = input.buttons
-            val direction = mapOf(Button.UP to Direction.NORTH, Button.DOWN to Direction.SOUTH, Button.LEFT to Direction.WEST, Button.RIGHT to Direction.EAST)
-                .entries.firstOrNull { it.key in input.buttons }?.value
-            if (direction == null) {
-                heldFor = 0
-                return@repeat
-            }
-            facing = direction
-            if (++heldFor < 4) return@repeat
-            heldFor = 0
-            if (area.tile(x + direction.dx, y + direction.dy)?.blocked == false) {
-                x += direction.dx
-                y += direction.dy
-                visited += x to y
-            }
-        }
-        override fun memorySize(region: MemoryRegion) = 16
-        override fun read(region: MemoryRegion, offset: Int, length: Int, into: ByteArray) = Unit
-        override fun framebuffer(): Frame? = null
-        override fun saveState() = ByteArray(0)
-        override fun loadState(state: ByteArray) = true
+    override fun step(direction: Direction) {
+        if (area.tile(x + direction.dx, y + direction.dy)?.blocked == false) moveTo(x + direction.dx, y + direction.dy)
     }
 }

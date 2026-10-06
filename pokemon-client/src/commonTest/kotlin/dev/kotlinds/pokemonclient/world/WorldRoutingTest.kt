@@ -14,6 +14,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * Areas drawn in ASCII: '.' floor, '#' wall, '~' water, 's' bridge start, '=' bridge, 'b' bridge over water,
@@ -154,12 +155,12 @@ class WorldRoutingTest {
             override fun areaOf(zoneId: Int) = mapOf(1 to outdoor, 5 to inside)[zoneId]
         }
         val field = FieldState(
-            1, "Town", 3, 1, 0, Direction.NORTH, MovementMode.WALK, false,
+            1, MapName(1, map = "Town"), 3, 1, 0, Direction.NORTH, MovementMode.WALK, false,
             objects = listOf(FieldObject("person:9", "item ball", FieldObjectKind.ITEM_BALL, 0, 1, null)),
             pickedUp = setOf("hidden_item:2"),
         )
         val names = mapOf(5 to "House", 6 to "Cellar", 2 to "Route 1")
-        val view = MapView.render(outdoor, field, { names[it] }, width = 6, height = 2, world = world)
+        val view = MapView.render(outdoor, field, { MapName(it, map = names[it]) }, width = 6, height = 2, world = world)
         val exits = view["exits"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertTrue(exits.any { it.startsWith("warp:0 at 0,0") && "→ House (2,0)" in it }, exits.toString())
         assertTrue(exits.any { it.startsWith("hole:4 at 1,1") && "→ Cellar (7,8)" in it && "one way" in it }, exits.toString())

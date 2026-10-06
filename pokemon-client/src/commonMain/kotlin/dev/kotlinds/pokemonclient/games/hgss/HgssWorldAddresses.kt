@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+
+
 /**
  * Where the static world data of HeartGold / SoulSilver lives in the ROM: the map header table in the ARM9 binary
  * and the NARC archives of the filesystem. Used by [HgssWorldSource].
@@ -46,13 +48,4 @@ object HgssWorldAddresses {
 
     /** Address of `sMapHeaders` for the ROM with [gameCode], or null when that ROM is not supported yet. */
     fun mapHeadersAddress(gameCode: String): Long? = mapHeaders[gameCode]
-}
-
-/** Little-endian reads of ROM data (the DS is little-endian), the Gen 4 ones ([dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes]). */
-internal object HgssRomBytes {
-    fun u8(b: ByteArray, o: Int): Int = dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8(b, o)
-    fun u16(b: ByteArray, o: Int): Int = dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16(b, o)
-    fun s16(b: ByteArray, o: Int): Int = dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.s16(b, o)
-    fun s32(b: ByteArray, o: Int): Int = dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.s32(b, o)
-    fun u32(b: ByteArray, o: Int): Long = dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u32(b, o)
 }

@@ -5,6 +5,7 @@ import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.state.FlyDestination
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.world.Area
+import dev.kotlinds.pokemonclient.world.FieldMoveAccess
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.FieldMoves
 import dev.kotlinds.pokemonclient.world.Node
@@ -50,7 +51,7 @@ class FlyAdvisor(private val game: PokemonGame) {
     private val cache = LinkedHashMap<Key, Suggestion?>()
 
     /**
-     * The fly destination to use for [targetZone], when the party can fly ([canFly]) and flying there then walking
+     * The fly destination to use for [targetZone], when the party can fly (the game's Fly rule) and flying there then walking
      * is much shorter than walking from here (less than half, a flight counting as [FLIGHT_TILES] tiles), or there is
      * no way on foot. The walk from here is searched.
      */
@@ -61,11 +62,13 @@ class FlyAdvisor(private val game: PokemonGame) {
 
     private fun suggest(state: GameState, targetZone: Int, onFoot: Int?, walkKnown: Boolean): Suggestion? {
         val field = state.field ?: return null
-        if (!canFly(state) || field.mapId == targetZone) return null
+        // The party can fly: a Pokémon (not an egg) knows Fly and the badge that allows it is owned (the game's rule).
+        val access = FieldMoves.of(state, game::fieldMoveRule)
+        if (access[FieldMoveKind.FLY] !is FieldMoveAccess.Usable || field.mapId == targetZone) return null
         val world = game.world ?: return null
         val destinations = reachable(state, field.mapId)
         if (destinations.isEmpty()) return null
-        val fieldMoves = FieldMoves.usable(FieldMoves.access(state) { game.fieldMoveRule(it) })
+        val fieldMoves = FieldMoves.usable(access)
         val key = Key(targetZone, field.mapId, destinations.map { it.id }, fieldMoves, onFoot, walkKnown)
         if (key in cache) return cache[key]
         // Distances in tiles, not in expected time: no encounter weights ([StepWeights.NONE]).
@@ -74,7 +77,7 @@ class FlyAdvisor(private val game: PokemonGame) {
         val landing = nearestLanding(router, targetZone, destinations, options)
         val suggestion = landing?.let { (destination, tiles) ->
             val walk = if (walkKnown) onFoot else world.areaOf(field.mapId)?.let { area ->
-                val start = Node(field.x, field.y, Pathfinder(area).levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))
+                val start = Pathfinder(area).nodeOf(field)
                 router.route(field.mapId, start, options) { it.zone == targetZone }?.tiles
             }
             Suggestion(destination, tiles, walk).takeIf { destination.zone != field.mapId && (walk == null || tiles * 2 + FLIGHT_TILES < walk) }
@@ -141,10 +144,5 @@ class FlyAdvisor(private val game: PokemonGame) {
         const val FLIGHT_TILES = 30
 
         private const val MAX_CACHED = 64
-
-        /** True when the party can fly: a Pokémon (not an egg) knows Fly and the badge that allows it is owned. */
-        fun canFly(state: GameState): Boolean =
-            state.party.any { mon -> !mon.isEgg && mon.moves.any { it.move.id.value == CommonActions.MOVE_FLY } } &&
-                state.player?.let { CommonActions.FLY_BADGE_ID in it.badgeIds } == true
     }
 }

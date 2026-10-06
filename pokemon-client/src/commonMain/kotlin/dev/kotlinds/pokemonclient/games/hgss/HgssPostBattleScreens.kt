@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.data.MachineId
 import dev.kotlinds.pokemonclient.console.TouchPoint
@@ -189,7 +190,7 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
     override fun decode(mem: HgssMemory, state: HgssState): Screen? {
         mem.mainTaskData(P.FN_EVOLUTION)?.let { e -> return evolution(mem, e) }
         HgssScreenMemory.fieldSubApp(mem)?.let { app ->
-            when (mem.fn(app + A.OM_INIT)) {
+            when (mem.fn(app + S.OM_INIT)) {
                 mem.version.fnSummaryInit -> return summaryForget(mem, app)
                 mem.version.fnPartyMenuInit -> return tmGrid(mem, state, app)
             }
@@ -239,7 +240,7 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
         val move = mem.u16(gw + P.GW_MOVE_TO_LEARN).takeIf { it in 1 until MAX_MOVE } ?: return null
         val party = mem.ptr(root.bs + A.BS_TRAINER_PARTY)
         val slot = party?.let { levelUpSlot(mem, root, gw, it) }
-        val mon = slot?.let { HgssScreenMemory.mon(mem, party + A.PARTY_MONS + it * A.POKEMON_SIZE) }
+        val mon = slot?.let { HgssScreenMemory.mon(mem, party + S.PARTY_MONS + it * S.POKEMON_SIZE) }
         return MoveOffer(mon?.monId(), mon?.displayName(), Named(MoveId(move), HgssData.moveName(move)))
     }
 
@@ -274,7 +275,7 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
      */
     private fun levelUpPanel(mem: HgssMemory, root: HgssBattleRoot, gw: Long): Screen {
         val party = mem.ptr(root.bs + A.BS_TRAINER_PARTY)
-        val mon = party?.let { p -> levelUpSlot(mem, root, gw, p)?.let { HgssScreenMemory.mon(mem, p + A.PARTY_MONS + it * A.POKEMON_SIZE) } }
+        val mon = party?.let { p -> levelUpSlot(mem, root, gw, p)?.let { HgssScreenMemory.mon(mem, p + S.PARTY_MONS + it * S.POKEMON_SIZE) } }
         val old = mem.ptr(root.ctx + P.BC_PREV_LEVEL_STATS)?.let { p -> (0 until 6).map { mem.s32(p + 4L * it) } }
         val text = mon?.let { m ->
             val now = listOf(m.maxHp, m.atk, m.def, m.spAtk, m.spDef, m.speed)
@@ -294,13 +295,13 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
      */
     private fun levelUpSlot(mem: HgssMemory, root: HgssBattleRoot, gw: Long, party: Long): Int? {
         val start = mem.s32(gw + P.GW_PARTY_SLOT)
-        val count = mem.s32(party + A.PARTY_CUR_COUNT)
+        val count = mem.s32(party + S.PARTY_CUR_COUNT)
         if (start !in 0..5 || count !in 1..6) return null
         val side = (mem.s32(root.ctx + P.BC_BATTLER_ID_FAINTED) shr 1) and 1
         val participants = mem.u32(root.ctx + P.BC_EXP_PARTICIPANTS + 4L * side)
         return (start until count).firstOrNull { slot ->
             participants shr slot and 1L == 1L ||
-                HgssScreenMemory.mon(mem, party + A.PARTY_MONS + slot * A.POKEMON_SIZE)?.heldItem == P.ITEM_EXP_SHARE
+                HgssScreenMemory.mon(mem, party + S.PARTY_MONS + slot * S.POKEMON_SIZE)?.heldItem == P.ITEM_EXP_SHARE
         }
     }
 
@@ -319,7 +320,7 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
         val from = mem.u16(e + P.EVO_FROM)
         val to = mem.u16(e + P.EVO_TO)
         if (evoState == P.EVO_STATE_SUMMARY) {
-            mem.ptr(e + P.EVO_SUMMARY_APP)?.let { app -> if (mem.fn(app + A.OM_INIT) == mem.version.fnSummaryInit) summaryForget(mem, app)?.let { return it } }
+            mem.ptr(e + P.EVO_SUMMARY_APP)?.let { app -> if (mem.fn(app + S.OM_INIT) == mem.version.fnSummaryInit) summaryForget(mem, app)?.let { return it } }
         }
         if ((evoState == P.EVO_STATE_FORGET_PROMPT || evoState == P.EVO_STATE_GIVE_UP_PROMPT) && mem.u8(e + P.EVO_PROMPT_SUBSTATE) == 0) {
             val move = HgssData.moveName(mem.u16(e + P.EVO_MOVE))
@@ -341,7 +342,7 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
         }
         // The scene's messages (sub_020772F8): "What? X is evolving!" waits for A before the morphing starts, then
         // "Congratulations!...", the learn-move texts... A page being printed or waiting for A is a dialogue.
-        val message = mem.ptr(e + P.EVO_STRING)?.let { HgssTextPrinter.read(mem, it, mem.u8(e + P.EVO_PRINTER)) }
+        val message = mem.ptr(e + P.EVO_STRING)?.let { mem.printedText(it, mem.u8(e + P.EVO_PRINTER)) }
         if (message != null && message.printerAlive) {
             return Screen.Dialogue(TextSource.FIELD, speaker = null, text = message.visible, awaiting = message.awaiting)
         }
@@ -365,10 +366,10 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
      * or B = don't learn. Proc state 9: "Forget!" confirmation, A forgets, B goes back.
      */
     private fun summaryForget(mem: HgssMemory, app: Long): Screen? {
-        val args = mem.ptr(app + A.OM_ARGS) ?: return null
-        val work = mem.ptr(app + A.OM_DATA) ?: return null
-        if (mem.s32(app + A.OM_EXEC_STATE) != 2 || mem.u8(args + P.SUM_ARGS_MODE) != P.SUM_MODE_FORGET) return null
-        val proc = mem.s32(app + A.OM_PROC_STATE)
+        val args = mem.ptr(app + S.OM_ARGS) ?: return null
+        val work = mem.ptr(app + S.OM_DATA) ?: return null
+        if (mem.s32(app + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN || mem.u8(args + P.SUM_ARGS_MODE) != P.SUM_MODE_FORGET) return null
+        val proc = mem.s32(app + S.OM_PROC_STATE)
         if (proc != P.SUM_PROC_CHOOSE && proc != P.SUM_PROC_CONFIRM) return Screen.Animation(dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION)
         val newMove = mem.u16(args + P.SUM_ARGS_MOVE)
         val moves = (0 until 4).map { mem.u16(work + P.SUM_MOVES + 2L * it) }
@@ -414,8 +415,8 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
     /** The Pokémon of a summary: `args->party` is a Party (slot `args+0x14`) or, during an evolution, a Pokemon. */
     private fun summaryMon(mem: HgssMemory, args: Long): MonId? {
         val target = mem.ptr(args + P.SUM_ARGS_PARTY) ?: return null
-        val isParty = mem.u32(target + A.PARTY_MAX_COUNT) == 6L && mem.u32(target + A.PARTY_CUR_COUNT) in 1L..6L
-        val ptr = if (isParty) target + A.PARTY_MONS + mem.u8(args + P.SUM_ARGS_SLOT).coerceIn(0, 5) * A.POKEMON_SIZE else target
+        val isParty = mem.u32(target + S.PARTY_MAX_COUNT) == 6L && mem.u32(target + S.PARTY_CUR_COUNT) in 1L..6L
+        val ptr = if (isParty) target + S.PARTY_MONS + mem.u8(args + P.SUM_ARGS_SLOT).coerceIn(0, 5) * S.POKEMON_SIZE else target
         return HgssScreenMemory.mon(mem, ptr)?.monId()
     }
 
@@ -438,8 +439,8 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
      * Verified live on TM01 (Ampharos / Typhlosion / Machoke ABLE, Fearow / Gyarados / Swinub UNABLE).
      */
     private fun tmGrid(mem: HgssMemory, state: HgssState, app: Long): Screen? {
-        if (mem.s32(app + A.OM_PROC_STATE) != P.PM_STATE_USE_TMHM) return null
-        val pm = mem.ptr(app + A.OM_DATA) ?: return null
+        if (mem.s32(app + S.OM_PROC_STATE) != P.PM_STATE_USE_TMHM) return null
+        val pm = mem.ptr(app + S.OM_DATA) ?: return null
         val args = mem.ptr(pm + P.PM_ARGS) ?: return null
         if (mem.u8(args + P.ARGS_CONTEXT) != P.CONTEXT_TM_HM) return null
         if (mem.u32(pm + P.PM_BUSY) != 0L) return Screen.Animation(dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION)

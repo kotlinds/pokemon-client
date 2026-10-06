@@ -1,7 +1,9 @@
 package dev.kotlinds.pokemonclient.libretro.bench
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
 import dev.kotlinds.pokemonclient.view.MapView
-import dev.kotlinds.pokemonclient.games.hgss.HgssWorldSource
+import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldSource
 import dev.kotlinds.pokemonclient.games.hgss.HgssLoadedMap
 import dev.kotlinds.pokemonclient.games.hgss.HgssData
 import dev.kotlinds.NdsRom
@@ -22,11 +24,14 @@ import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.actions.ActionException
 import dev.kotlinds.pokemonclient.actions.ActionMode
 import dev.kotlinds.pokemonclient.actions.ActionRegistry
-import dev.kotlinds.pokemonclient.actions.Navigator
+import dev.kotlinds.pokemonclient.actions.ChainRunner
+import dev.kotlinds.pokemonclient.data.KnowledgeLevel
+import dev.kotlinds.pokemonclient.view.AgentOptions
+import dev.kotlinds.pokemonclient.view.AgentView
 import dev.kotlinds.pokemonclient.runtime.ActionScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.libretro.LibretroConsole
@@ -60,11 +65,21 @@ import kotlinx.io.readByteArray
  *   `flyhint:<map id>`: the fly suggestion for that map from here ([dev.kotlinds.pokemonclient.actions.FlyAdvisor]);
  *   `party`: one line per party Pokémon (id, level, HP, status, moves with PP); `healparty[:<item id>]`: Revive + Full Restore (or that item, unless a status needs curing) where needed (field); `puzzle`: prints the position and the map puzzle (switches, shutters, teleports);
  * - `act:<json>`: executes a typed action through the action registry (e.g. `act:{"type":"choose","entry":"option:6"}`;
- *   a long one prints its progress about every 5 s of game time, like the app's progress notifications);
+ *   a long one prints its progress about every 5 s of game time, like the app's progress notifications), then lets the
+ *   game settle like an agent's step in the app and the MCP ([ActionRegistry.executeAndSettle]: frames only, no button,
+ *   until the game waits for input, for at most `max(120, 1800 − the frames the action used)` frames: a long action
+ *   leaves less time to settle, never less than 120);
+ * - `chain:[<json>, <json>...]`: an action and its `then` steps run like an agent's chain in the app and the MCP
+ *   (`ChainRunner.forAgent`: each step settling like `act`; the chain stops when an opponent changes or faints, one of
+ *   the player's battling Pokémon faints, a `run` fails, a step isn't offered on the screen reached; battle steps are
+ *   dropped once the battle is over; under [dev.kotlinds.pokemonclient.actions.ChainLimits.AGENT]: no further step
+ *   after 20 s without any change in the game, nor after 90 s in all); prints what was performed, not done or dropped;
  *   `actions`: lists the actions available now; `solve:on|off`: whether walks solve movement puzzles by themselves
- *   (ActionSettings.solvePuzzles); `reveal:on|off`: whether actions may use hidden items (ActionSettings.revealHidden);
- *   `hide:on|off`: whether where the ways out lead is hidden (ActionSettings.hideDestinations: `mapview`, `view` and
- *   `go_to` follow it); `view`: the agents' JSON state (StateView, without the map: see `mapview`);
+ *   (AgentOptions.solvePuzzles); `reveal:on|off`: whether the agent has a walkthrough (AgentOptions.knowledge: actions
+ *   may use hidden items, the view shows them, the story goals); `hide:on|off`: whether where the ways out lead is
+ *   hidden (AgentOptions.hideDestinations: `mapview`, `view` and `go_to` follow it); `view`: exactly what an agent
+ *   reads now ([dev.kotlinds.pokemonclient.view.AgentView], like the app: the events since the previous `view` /
+ *   `partyfx`, the state, the battle estimates, the map, the actions);
  * - `log`: prints the events recorded since the previous `log` (texts shown, screen changes, level ups...);
  * - `ram:<name>`: writes the full main RAM; `fixture:<name>`: writes a sparse RAM fixture (only the bytes the
  *   decoders read) for unit tests.
@@ -161,8 +176,20 @@ private class Bench(
     private var lastProgressPrint = Long.MIN_VALUE / 2
     private val registry = ActionRegistry.of()
 
-    /** What `act` lets the recipes do by themselves (`solve:on|off`, `reveal:on|off`, `hide:on|off`), like the app's settings. */
-    private var settings = dev.kotlinds.pokemonclient.actions.ActionSettings()
+    /**
+     * What the agent may know and do (`solve:on|off`, `reveal:on|off`, `hide:on|off`), like the app's settings: the
+     * actions and the view follow the same options. A walkthrough by default (hidden items usable, as the recipes allow
+     * by default).
+     */
+    private var options = AgentOptions(knowledge = KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH)
+
+    /** What an agent reads (`view`, `partyfx`), built like the app's, with the events it hasn't been given yet. */
+    private val agentView = AgentView(game, registry)
+    private val agentEvents = dev.kotlinds.pokemonclient.runtime.EventFeed(recorder.log)
+
+    /** The agent's view now ([AgentView]), with the events since the previous one. */
+    private fun agentView(): kotlinx.serialization.json.JsonObject =
+        agentView.describe(game.state(scope.memory()), agentEvents.take().events, options, AgentView.Detail.STANDARD)
 
     /** Walks back and forth (one tile left, one right) up to [times] times, until the phone rings or the overworld is left. */
     private fun pace(times: Int) {
@@ -197,8 +224,8 @@ private class Bench(
             "hold" -> arg.split(':').let { (b, n) -> scope.step(n.toInt(), InputFrame(b.split('+').map { Button.valueOf(it.uppercase()) }.toSet())); scope.step(2) }
             "raw" -> dev.kotlinds.pokemonclient.games.hgss.HgssReader(scope.memory()).read()?.let { st ->
                 println("  mode=${st.mode} detail=${st.modeDetail} awaiting=${st.awaitingInput} fading=${st.fading}")
-                println("  loc=${st.location?.let { "${it.mapName} ${it.x},${it.z} ${it.facing}" }}")
-                println("  menu=${st.menu} app=${st.app} dialogue=${st.dialogue?.text?.take(120)}")
+                println("  loc=${st.location?.let { "${game.mapName(it.mapId)} ${it.x},${it.z} ${it.facing}" }}")
+                println("  app=${st.app} engagedTrainer=${st.engagedTrainer}")
                 st.surroundings?.bgEvents?.forEach { println("  bg $it") }
                 st.surroundings?.grid?.let { g -> println("  origin ${g.originX},${g.originZ}"); g.rows.forEachIndexed { i, row -> println("  | ${g.originZ + i} $row") } }
                 st.surroundings?.objects?.forEach { println("  obj ${it.label} ${it.x},${it.z} id=${it.id} zone=${it.mapId} sprite=${it.sprite} flag=${it.eventFlag} script=${it.scriptId} hidden=${it.hidden} move=${it.movement}") }
@@ -247,7 +274,7 @@ private class Bench(
             "fixture" -> fixture(arg)
             "world" -> world(arg)
             "mapview" -> game.state(scope.memory()).field?.let { f ->
-                game.world?.areaOf(f.mapId)?.let { area -> MapView.render(area, f, game::zoneName, world = game.world, hideDestinations = settings.hideDestinations) }
+                game.world?.areaOf(f.mapId)?.let { area -> MapView.render(area, f, game::mapName, world = game.world, hideDestinations = options.hideDestinations) }
             }?.forEach { (k, v) -> println("  $k: " + (v as? kotlinx.serialization.json.JsonArray)?.joinToString("\n    ", "\n    ") { it.toString().trim('"') }.orEmpty().ifEmpty { v.toString() }) }
             "area" -> area(arg.split(',').map { it.trim().toInt() })
             "tiles" -> arg.split(',').map { it.trim().toInt() }.let { (x0, x1, y) ->
@@ -274,19 +301,19 @@ private class Bench(
                     options.firstOrNull { it.startsWith("heal:") }?.removePrefix("heal:")?.split('+')?.map { it.toInt() } ?: listOf(FULL_RESTORE),
                 )
             }
-            "rawmon" -> HgssReader(scope.memory(), HgssVersion.HEARTGOLD_US).partyRaw().forEachIndexed { i, b ->
+            "rawmon" -> HgssReader(scope.memory(), romVersion).partyRaw().forEachIndexed { i, b ->
                 println("  slot $i: " + b.joinToString("") { "%02x".fmt(it) })
             }
-            "box" -> HgssReader(scope.memory(), HgssVersion.HEARTGOLD_US).boxRaw(arg.toInt()).forEachIndexed { i, b ->
-                dev.kotlinds.pokemonclient.games.hgss.HgssPokemon.decode(b)?.let { m ->
-                    println("  $i: mon:%08x.%08x species ${m.species} ${dev.kotlinds.pokemonclient.games.hgss.HgssData.speciesName(m.species)} exp ${m.exp}".fmt(m.personality, m.otId))
+            "box" -> HgssReader(scope.memory(), romVersion).boxRaw(arg.toInt()).forEachIndexed { i, b ->
+                Gen4Pokemon.decode(b)?.let { m ->
+                    println("  $i: mon:%08x.%08x species ${m.species} ${HgssData.speciesName(m.species)} exp ${m.exp}".fmt(m.personality, m.otId))
                 }
             }
             "events" -> recorder.log.since(0).filterNot { it is dev.kotlinds.pokemonclient.state.GameEvent.ScreenChanged }.forEach { println("  $it") }
             "watch" -> { watching = arg != "off"; lastWatch = null }
             "steps" -> steps(Button.valueOf(arg.substringBefore('x').uppercase()), arg.substringAfter('x', "1").toInt())
-            "where" -> HgssReader(scope.memory(), HgssVersion.HEARTGOLD_US).read()?.let { st ->
-                println("  ${st.mode} ${st.modeDetail} at ${st.location?.x},${st.location?.z} facing ${st.location?.facing} map ${st.location?.mapName}")
+            "where" -> HgssReader(scope.memory(), romVersion).read()?.let { st ->
+                println("  ${st.mode} ${st.modeDetail} at ${st.location?.x},${st.location?.z} facing ${st.location?.facing} map ${st.location?.let { game.mapName(it.mapId) }}")
                 st.surroundings?.bgEvents?.forEach { println("    bg $it") }
                 st.surroundings?.grid?.let { g -> g.rows.forEachIndexed { i, r -> println("    ${g.originZ + i}\t$r") }; println("    x0=${g.originX}") }
             }
@@ -296,38 +323,28 @@ private class Bench(
             "walk" -> walk(arg.split(',').map { Button.valueOf(it.trim().uppercase()) })
             "cur" -> println(describe(game.state(scope.memory()).screen).lineSequence().first())
             "act" -> {
-                val action = registry.parse(Json.parseToJsonElement(arg).jsonObject, ActionMode.ASSISTED).getOrElse { error ->
+                val action = registry.parse(Json.parseToJsonElement(arg).jsonObject, options.mode).getOrElse { error ->
                     // Refused like the agent would see it, and the script goes on.
                     println("  refused: " + ((error as? ActionException)?.error?.let { "${it.code} ${it.message}" } ?: error.toString()))
                     return
                 }
                 val startFrame = console.frame
-                val outcome = registry.execute(action, scope, game, settings)
-                val actFrames = console.frame - startFrame
-                // Like the app (GameSession.SETTLE_FRAMES): the game settles after every action.
-                Navigator(scope, game).settle(maxFrames = 1800)
-                println("  $outcome ($actFrames frames)")
+                // Like the app: the game settles after every action.
+                val outcome = registry.executeAndSettle(action, scope, game, options.actionSettings)
+                println("  $outcome (${console.frame - startFrame} frames, settled)")
                 println("  " + game.state(scope.memory()).screen)
             }
-            // `chain:[{json}, {json}...]`: an action and its `then` steps run like the app's GameSession (ChainRunner: stops
-            // when the battle changes under it), each step settling like `act`.
+            // `chain:[{json}, {json}...]`: an action and its `then` steps run exactly like the app's (ChainRunner.forAgent: the
+            // same stop rules and limits), each step settling like `act`.
             "chain" -> {
                 val steps = Json.parseToJsonElement(arg) as kotlinx.serialization.json.JsonArray
-                val actions = steps.map { registry.parse(it.jsonObject, ActionMode.ASSISTED).getOrThrow() }
-                // Like the app: the battle's outcome as the recorder saw it frame by frame during the chain.
-                val since = recorder.log.lastSeq
+                val actions = steps.map { registry.parse(it.jsonObject, options.mode).getOrThrow() }
                 val result = kotlinx.coroutines.runBlocking {
-                    dev.kotlinds.pokemonclient.actions.ChainRunner(
+                    ChainRunner.forAgent(
+                        recorder,
                         observe = { game.state(scope.memory()) },
-                        execute = { action, _ ->
-                            registry.execute(action, scope, game, settings).also { Navigator(scope, game).settle(maxFrames = 1800) }
-                        },
-                        // Like the app: a battle still playing out between two steps settles before it is checked.
-                        settle = { Navigator(scope, game).settle(maxFrames = 1800) },
-                        decided = {
-                            recorder.log.since(since).filterIsInstance<dev.kotlinds.pokemonclient.state.GameEvent.BattleDecided>().firstOrNull()?.outcome
-                        },
-                        idle = { recorder.progress.idle },
+                        execute = { action, _ -> registry.executeAndSettle(action, scope, game, options.actionSettings) },
+                        settle = { ActionRegistry.settleBetweenSteps(scope, game) },
                     ).run(actions)
                 }
                 println("  performed ${result.performed} details ${result.details}")
@@ -336,17 +353,19 @@ private class Bench(
                 if (result.dropped.isNotEmpty()) println("  dropped ${result.dropped.map { it.key }} code=${result.droppedBecause?.code}")
                 println("  " + game.state(scope.memory()).screen)
             }
-            // `partyfx`: the battle's effectiveness lines (the active Pokémon, then the switch candidates), like get_state.
+            // `partyfx`: the battle's estimates exactly as an agent reads them ([AgentView]: effectiveness, switch candidates,
+            // what is known of the opponents, catch chance), after the battlers.
             "partyfx" -> {
-                val state = game.state(scope.memory())
-                val battle = state.battle
-                val data = game.data
-                if (battle == null || data == null) println("  no battle / no game data") else {
+                val battle = game.state(scope.memory()).battle
+                if (battle == null || game.data == null) println("  no battle / no game data") else {
                     // The game's decision, known before the battle leaves the screen (BattleState.outcome).
                     println("  outcome ${battle.outcome ?: "undecided"} message ${battle.message?.replace('\n', ' ')}")
                     battle.battlers.forEach { println("  ${it.ref.wire} ${it.species.name} L${it.level} ${it.hp}/${it.maxHp} volatile=${it.volatile}") }
-                    dev.kotlinds.pokemonclient.data.Matchups.estimate(battle, data).forEach { println("  effectiveness ${it.move} → ${it.target.wire}: ${it.label}") }
-                    dev.kotlinds.pokemonclient.data.Matchups.party(battle, state.party, data).forEach { println("  party_effectiveness ${it.line(battle.isDouble)}") }
+                    val view = agentView()
+                    listOf("effectiveness", "party_effectiveness", "opponents_known").forEach { key ->
+                        (view[key] as? kotlinx.serialization.json.JsonArray)?.forEach { println("  $key ${it.toString().trim('"')}") }
+                    }
+                    view["catch"]?.let { println("  catch $it") }
                 }
             }
             "trip" -> trip(arg.substringBefore(':'), arg.substringAfter(':'))
@@ -354,13 +373,11 @@ private class Bench(
                 recorder.log.since(logCursor).forEach { println("  $it") }
                 logCursor = recorder.log.lastSeq
             }
-            "solve" -> settings = settings.copy(solvePuzzles = arg != "off")
-            "reveal" -> settings = settings.copy(revealHidden = arg != "off")
-            "hide" -> settings = settings.copy(hideDestinations = arg != "off")
-            "view" -> game.state(scope.memory()).let { state ->
-                println("  " + dev.kotlinds.pokemonclient.view.StateView.state(state, hideDestinations = settings.hideDestinations))
-            }
-            "actions" -> registry.available(game.state(scope.memory()), ActionMode.ASSISTED).forEach { println("  $it") }
+            "solve" -> options = options.copy(solvePuzzles = arg != "off")
+            "reveal" -> options = options.copy(knowledge = if (arg != "off") KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH else KnowledgeLevel.POKEDEX)
+            "hide" -> options = options.copy(hideDestinations = arg != "off")
+            "view" -> agentView().forEach { (k, v) -> println("  $k: $v") }
+            "actions" -> registry.available(game.state(scope.memory()), options.mode).forEach { println("  $it") }
             "pausemusic" -> pauseMusic.check(arg)
             "pausemusicstats" -> pauseMusic.stats(arg)
             "pausemusicload" -> pauseMusic.load(arg)
@@ -420,11 +437,13 @@ private class Bench(
 
     private fun watchParty() {
         val memory = scope.memory()
-        val raw = HgssReader(memory, HgssVersion.HEARTGOLD_US).read() ?: return
+        // The raw HGSS party next to the common state: HGSS only (another game has nothing to compare with).
+        val version = hgssVersion ?: return
+        val raw = HgssReader(memory, version).read() ?: return
         val state = game.state(memory)
         val rawLine = raw.party.joinToString(" | ") { "${it.slot}:${it.speciesName} L${it.level} ${it.hp}/${it.maxHp} x${it.exp} ${it.status} m=${it.moves.joinToString("/") { m -> "${m.id}:${m.pp}" }}${if (it.checksumOk) "" else " CS!"}${if (it.plausible) "" else " IMPL"}" }
         val shown = state.party.joinToString(" | ") { "${it.slot}:${it.species.name} L${it.level} ${it.hp}/${it.maxHp} m=${it.moves.joinToString("/") { m -> "${m.move.id.value}:${m.pp}" }}" }
-        val line = "${brief(state.screen)}\n    raw  $rawLine\n    show $shown" + state.warnings.joinToString("") { "\n    warn ${it.detail}" }
+        val line = "${describe(state.screen, oneLine = true)}\n    raw  $rawLine\n    show $shown" + state.warnings.joinToString("") { "\n    warn ${it.detail}" }
         if (line != lastWatch) println("  [${console.frame}] $line")
         lastWatch = line
         saveTornFixture(memory)
@@ -434,7 +453,7 @@ private class Bench(
             if (console.frame in from..to) fixture("${spec.substringAfter(':', "frame")}_f${console.frame}")
         }
         if (environmentVariable("BENCH_WATCH_HEX") == "1") {
-            val bytes = HgssReader(memory, HgssVersion.HEARTGOLD_US).partyRaw().map { b -> b.joinToString("") { "%02x".fmt(it) } }
+            val bytes = HgssReader(memory, version).partyRaw().map { b -> b.joinToString("") { "%02x".fmt(it) } }
             bytes.forEachIndexed { i, h -> if (lastHex.getOrNull(i) != h) println("    hex $i: $h") }
             lastHex = bytes
         }
@@ -447,14 +466,14 @@ private class Bench(
 
     /**
      * True when the plain reading the flags announce is wrong: the game is rewriting the Pokémon (blocks or party data
-     * caught encrypted / decrypted / torn, see HgssPokemon.decode).
+     * caught encrypted / decrypted / torn, see Gen4Pokemon.decode).
      */
     private fun midRewrite(raw: ByteArray): Boolean {
-        val mon = dev.kotlinds.pokemonclient.games.hgss.HgssPokemon
-        val flags = mon.u16(raw, 4)
-        val checksum = mon.u16(raw, 6)
+        val mon = Gen4Pokemon
+        val flags = Gen4RomBytes.u16(raw, 4)
+        val checksum = Gen4RomBytes.u16(raw, 6)
         val box = raw.copyOfRange(8, 0x88).also { if (flags and 2 == 0) mon.crypt(it, 0, it.size, checksum.toLong()) }
-        val boxOk = (0 until 0x40).sumOf { mon.u16(box, 2 * it) } and 0xFFFF == checksum
+        val boxOk = (0 until 0x40).sumOf { Gen4RomBytes.u16(box, 2 * it) } and 0xFFFF == checksum
         val naive = mon.decode(raw) { true } ?: return false
         return !boxOk || !dev.kotlinds.pokemonclient.games.hgss.HgssMonCheck.isPlausible(naive)
     }
@@ -462,7 +481,7 @@ private class Bench(
     private fun saveTornFixture(memory: Memory) {
         val prefix = environmentVariable("BENCH_WATCH_FIXTURE") ?: return
         if (tornFixtures >= 6) return
-        val torn = HgssReader(memory, HgssVersion.HEARTGOLD_US).partyRaw().withIndex().filter { midRewrite(it.value) }.map { it.index }
+        val torn = HgssReader(memory, romVersion).partyRaw().withIndex().filter { midRewrite(it.value) }.map { it.index }
             .filter { slot -> environmentVariable("BENCH_WATCH_FIXTURE_SLOT")?.let { it.toInt() == slot } ?: true }
         if (torn.isEmpty()) return
         val name = "${prefix}_${tornFixtures++}_f${console.frame}_slot${torn.joinToString("-")}"
@@ -648,10 +667,10 @@ private class Bench(
 
     private fun describe(): String {
         val memory = scope.memory()
-        val fishing = (game as? HgssGame)?.let { HgssFishing.state(HgssMemory(memory, HgssVersion.HEARTGOLD_US)) }
+        val fishing = hgssVersion?.let { HgssFishing.state(HgssMemory(memory, it)) }
         val state = game.state(memory)
         val position = state.field?.let { " at ${it.x},${it.y}${if (it.moving) " moving" else ""} ${it.movement.name.lowercase()}" } ?: ""
-        return brief(state.screen) + position + (fishing?.let { " fishing=$it" } ?: "")
+        return describe(state.screen, oneLine = true) + position + (fishing?.let { " fishing=$it" } ?: "")
     }
 
     /**
@@ -662,9 +681,9 @@ private class Bench(
         var last: String? = null
         repeat(frames) {
             val memory = scope.memory()
-            val state = HgssFishing.state(HgssMemory(memory, HgssVersion.HEARTGOLD_US))
+            val state = HgssFishing.state(HgssMemory(memory, romVersion))
             val line = "$state"
-            if (line != last) println("  [${console.frame}] fishing=$line screen=${brief(game.state(memory).screen)}")
+            if (line != last) println("  [${console.frame}] fishing=$line screen=${describe(game.state(memory).screen, oneLine = true)}")
             last = line
             scope.step(1, if (state is FishingState.Bite) InputFrame.of(Button.A) else InputFrame.NONE)
         }
@@ -680,12 +699,6 @@ private class Bench(
             scope.stepUntil(40) { position()?.third == false }
         }
         println("  at ${position()}")
-    }
-
-    private fun brief(screen: Screen): String = when (screen) {
-        is Screen.Selectable -> "${screen::class.simpleName}(${(screen as? Screen.ListMenu)?.kind ?: ""} cursor=${screen.cursor} " +
-            "cancel=${screen.cancel} entries=${screen.entries.joinToString { e -> "${e.id}|${e.label.replace('\n', ' ')}" + (if (!e.selectable) "|x" else "") + (e.touch?.let { "@${it.x},${it.y}" } ?: "") }})"
-        else -> screen.toString().replace('\n', ' ')
     }
 
     /**
@@ -709,14 +722,20 @@ private class Bench(
         println("  walk: $ok/${buttons.size} OK")
     }
 
-    /** Compact view of a screen: kind, cursor, entries and, for selectable screens, the D-pad moves of each entry. */
-    private fun describe(screen: Screen): String = buildString {
-        append("  ${screen::class.simpleName}")
+    /**
+     * The one description of a screen the bench prints: its kind and, for a selectable screen, what it is about (list
+     * kind, bag pocket, party purpose, question...), the cursor, the cancel entry and every entry (id, label, `x` when
+     * not selectable, touch point) with the D-pad moves of the topology. [oneLine]: the entries on the same line (for
+     * traces, one line per change).
+     */
+    private fun describe(screen: Screen, oneLine: Boolean = false): String = buildString {
+        append(if (oneLine) "" else "  ").append(screen::class.simpleName)
         if (screen !is Screen.Selectable) {
-            append(" $screen")
+            append(" ").append(screen.toString().replace('\n', ' '))
             return@buildString
         }
         when (screen) {
+            is Screen.ListMenu -> append(" kind=${screen.kind}")
             is Screen.Bag -> append(" pocket=${screen.pocket} page=${screen.page}/${screen.pages}")
             is Screen.PartyGrid -> append(" purpose=${screen.purpose}")
             is Screen.ContextMenu -> append(" owner=${screen.owner}")
@@ -727,9 +746,11 @@ private class Bench(
         val buttons = listOf(Button.UP, Button.DOWN, Button.LEFT, Button.RIGHT, Button.L, Button.R)
         screen.entries.forEachIndexed { i, e ->
             val moves = buttons.mapNotNull { b -> screen.topology.next(i, b)?.let { "${b.name[0]}${if (b == Button.L || b == Button.R) "b" else ""}$it" } }
-            append("\n    $i ${e.id} \"${e.label}\"${if (!e.selectable) " (x)" else ""}${e.touch?.let { " touch=${it.x},${it.y}" } ?: ""} ${moves.joinToString(" ")}")
+            append(if (oneLine) " | " else "\n    ")
+            append("$i ${e.id} \"${e.label.replace('\n', ' ')}\"${if (!e.selectable) " (x)" else ""}${e.touch?.let { " touch=${it.x},${it.y}" } ?: ""} ${moves.joinToString(" ")}")
         }
     }
+
     /** Presses A from power-on until the player can walk (title screen, main menu CONTINUE, recap). */
     private fun boot(maxFrames: Int) {
         scope.step(120)
@@ -761,7 +782,7 @@ private class Bench(
         var stuck = 0
         fun execute(json: String): dev.kotlinds.pokemonclient.actions.ActionOutcome? {
             val action = registry.parse(Json.parseToJsonElement(json).jsonObject, ActionMode.ASSISTED).getOrNull() ?: return null
-            return registry.execute(action, scope, game, settings).also { Navigator(scope, game).settle(maxFrames = 1800) }
+            return registry.executeAndSettle(action, scope, game, options.actionSettings)
         }
         repeat(MAX_TRIP_ACTIONS) {
             val state = game.state(scope.memory())
@@ -771,7 +792,7 @@ private class Bench(
             val screen = state.screen
             when {
                 screen is Screen.Overworld && battle == null && screen.incomingCall == null -> {
-                    val outcome = registry.execute(goTo, scope, game, settings).also { Navigator(scope, game).settle(maxFrames = 1800) }
+                    val outcome = registry.executeAndSettle(goTo, scope, game, options.actionSettings)
                     if (outcome is dev.kotlinds.pokemonclient.actions.ActionOutcome.Done) {
                         println("  trip done: ${console.frame - start} frames, $wild wild battle(s), $trainers trainer battle(s) (${outcome.detail ?: ""})")
                         return
@@ -850,8 +871,18 @@ private class Bench(
     }
 
     private val romImage: NdsRom by lazy { NdsRom.parse(Files.readBytes(romPath)) }
-    private val romVersion: HgssVersion by lazy { HgssVersion.forGameCode(romImage.gameCode) ?: error("unsupported ROM ${romImage.gameCode}") }
-    private val world: HgssWorldSource by lazy { HgssWorldSource(romImage, romVersion) }
+    /** The HeartGold / SoulSilver build of the ROM (detected from its game code), null for another game. */
+    private val hgssVersion: HgssVersion? by lazy { HgssVersion.forGameCode(romImage.gameCode) }
+
+    /** The HGSS build, for the commands that read HGSS RAM or ROM structures; fails clearly on another game. */
+    private val romVersion: HgssVersion
+        get() = hgssVersion ?: error("this bench command reads HeartGold / SoulSilver structures, not ${game.name} (${romImage.gameCode})")
+    /**
+     * The game's own world (the common Gen 4 decoder: headers, matrices, land data, events), for `world`; another
+     * engine fails clearly.
+     */
+    private val world: Gen4WorldSource<*>
+        get() = game.world as? Gen4WorldSource<*> ?: error("`world` checks the Gen 4 world decoder: ${game.name} has no Gen 4 world (no ROM?)")
 
     /** Checks the ROM world decoder against the map loaded in RAM (every tile of every loaded block, zone events). */
     private fun world(name: String) {
@@ -881,7 +912,7 @@ private class Bench(
         }
         val px = terrain.playerX!!
         val pz = terrain.playerZ!!
-        println("  zone $zone ${HgssData.mapName(zone)} matrix ${matrix.id} blocks ${terrain.loadedBlocks} compared $compared tiles, $mismatches mismatches")
+        println("  zone $zone ${game.mapName(zone)} matrix ${matrix.id} blocks ${terrain.loadedBlocks} compared $compared tiles, $mismatches mismatches")
         println("  player ($px,$pz) height ${terrain.playerHeight} tile ${area.tile(px, pz)} zoneAt ${area.zoneAt(px, pz)} altitude ${matrix.altitudeAt(px / 32, pz / 32)}")
         val live = terrain.events()
         val rom = world.events(zone)

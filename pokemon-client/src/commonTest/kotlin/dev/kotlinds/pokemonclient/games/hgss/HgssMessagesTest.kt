@@ -1,5 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4MessageFile
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Charmap
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -22,14 +25,14 @@ class HgssMessagesTest {
             }
         }.toMap()
         if (expected.isEmpty()) return // resource removed: nothing left to compare
-        assertEquals(expected, HgssCharmap.table)
+        assertEquals(expected, Gen4Charmap.table)
     }
 
     @Test
     fun `decrypts lines`() {
-        val reverse = HgssCharmap.table.entries.filter { it.value.length == 1 }.associate { it.value[0] to it.key }
+        val reverse = Gen4Charmap.table.entries.filter { it.value.length == 1 }.associate { it.value[0] to it.key }
         val lines = listOf("Bulbasaur", "Poké Ball", "")
-        val file = HgssMessageFile(encrypt(0x1234, lines.map { l -> l.map { reverse.getValue(it) } + HgssText.EOS }))
+        val file = Gen4MessageFile(encrypt(0x1234, lines.map { l -> l.map { reverse.getValue(it) } + Gen4Text.EOS }))
         assertEquals(3, file.count)
         assertEquals(lines, file.lines())
         assertNull(file.line(3))
@@ -44,8 +47,8 @@ class HgssMessagesTest {
         for (c in codes + 0x1FF) { bits = bits or (c.toLong() shl n); n += 9 }
         // 15 bits per u16 (String_Cat_HandleTrainerName, src/pm_string.c), the top bit unused.
         val packed = (0 until (n + 14) / 15).map { ((bits shr (it * 15)) and 0x7FFF).toInt() }
-        val file = HgssMessageFile(encrypt(7, listOf(listOf(HgssMessageFile.COMPRESSED) + packed)))
-        assertEquals(codes.joinToString("") { HgssCharmap.table.getValue(it) }, file.line(0))
+        val file = Gen4MessageFile(encrypt(7, listOf(listOf(Gen4MessageFile.COMPRESSED) + packed)))
+        assertEquals(codes.joinToString("") { Gen4Charmap.table.getValue(it) }, file.line(0))
     }
 
     @Test
@@ -54,9 +57,9 @@ class HgssMessagesTest {
         var bits = 0L
         var n = 0
         for (c in codes + 0x1FF) { bits = bits or (c.toLong() shl n); n += 9 }
-        val packed = listOf(HgssText.TRAINER_NAME_CODE) + (0 until (n + 14) / 15).map { ((bits shr (it * 15)) and 0x7FFF).toInt() }
+        val packed = listOf(Gen4Text.TRAINER_NAME_CODE) + (0 until (n + 14) / 15).map { ((bits shr (it * 15)) and 0x7FFF).toInt() }
         val name = (packed + List(8 - packed.size) { 0 }).toIntArray()
-        assertEquals(codes.joinToString("") { HgssCharmap.table.getValue(it) }, HgssText.decode(name))
+        assertEquals(codes.joinToString("") { Gen4Charmap.table.getValue(it) }, Gen4Text.decode(name))
     }
 
     /** Builds a message file with the game's encryption (inverse of src/msgdata.c Decrypt1 / Decrypt2). */

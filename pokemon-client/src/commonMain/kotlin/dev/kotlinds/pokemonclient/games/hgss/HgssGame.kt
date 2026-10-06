@@ -30,20 +30,19 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
 
     override fun scriptFlag(memory: Memory, id: Int): Boolean? = HgssReader(memory, version).flag(id)
 
-    override fun zoneName(id: Int): String? = HgssData.mapName(id)
+    /**
+     * The place shown in game and the map's own name: "New Bark Town (New Bark Player House 2F)", read from this game's
+     * ROM ([HgssWorldSource.mapName]); from the bundled decomp tables without a ROM ([HgssData.bundledMapName]).
+     */
+    override fun mapName(id: Int): dev.kotlinds.pokemonclient.state.MapName = world?.mapName(id) ?: HgssData.bundledMapName(id)
 
-    override val inputProbe = HgssInputProbe(version)
-
-    override fun fieldMoveRule(move: dev.kotlinds.pokemonclient.world.FieldMoveKind) = HgssFieldMoves.rule(move)
+    override val fieldMoveBadges = HgssFieldMoves.BADGES
 
     /**
      * The registered item buttons of the field's bottom-screen menu (overlay 27, hitbox table `ov27_0225CF68`, entries
      * 8 and 9: x 203-255, y 8-39 and 46-77), which set `FieldSystem.lastTouchMenuInput` to 9 / 10: the first / second
      * registered item (src/field/field_control.c).
      */
-    /** ITEM_BICYCLE (include/constants/items.h). */
-    override val bicycleItem: Int get() = ITEM_BICYCLE
-
     override fun registeredItemTouch(slot: Int): dev.kotlinds.pokemonclient.console.TouchPoint? = when (slot) {
         0 -> dev.kotlinds.pokemonclient.console.TouchPoint(229, 23)
         1 -> dev.kotlinds.pokemonclient.console.TouchPoint(229, 61)
@@ -55,7 +54,10 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
     /** PC boxes, options, trainers, shop catalogs and Fly permission ([HgssServices]). */
     private val services = HgssServices()
 
-    override fun state(memory: Memory): GameState {
+    override fun state(memory: Memory): GameState = withFieldMoves(read(memory))
+
+    /** The state read from RAM, enriched with the ROM's maps. */
+    private fun read(memory: Memory): GameState {
         val reader = HgssReader(memory, version)
         val state = reader.read() ?: HgssState(frame = 0, mode = GameMode.UNKNOWN, modeDetail = "unreadable RAM")
         val hgssMemory = HgssMemory(memory, version)
@@ -74,9 +76,5 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
         val examinables = HgssExaminables.of(state.surroundings?.objects.orEmpty(), field.mapId, world ?: HgssData.world, reader::flag)
         if (puzzle == null && pickedUp.isEmpty() && triggers.isEmpty() && examinables.isEmpty()) return mapped
         return mapped.copy(field = field.copy(puzzle = puzzle, pickedUp = pickedUp, activeTriggers = triggers, examinables = examinables))
-    }
-
-    private companion object {
-        const val ITEM_BICYCLE = 450
     }
 }

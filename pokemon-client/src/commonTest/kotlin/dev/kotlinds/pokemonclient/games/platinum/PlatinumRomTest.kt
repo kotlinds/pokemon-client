@@ -3,10 +3,14 @@ package dev.kotlinds.pokemonclient.games.platinum
 import dev.kotlinds.pokemonclient.PokemonGames
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.view.MapView
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.SignKind
 import dev.kotlinds.pokemonclient.world.TileKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /** Platinum with its ROM (skipped without `PLATINUM_ROM`): detection, text banks, the maps of the player's house. */
@@ -41,6 +45,49 @@ class PlatinumRomTest {
         assertEquals("Twinleaf Town", world.locationName(414))
     }
 
+    /** A5: the same name model as HGSS ([dev.kotlinds.pokemonclient.state.MapName]): the place from the ROM, then the map's own name. */
+    @Test
+    fun `map names are the place then the map, without the id`() {
+        val game = PlatinumRom.requireGame()
+        assertEquals("Twinleaf Town (Twinleaf Town Player House 2F)", game.mapName(415).toString())
+        assertEquals("Twinleaf Town", game.mapName(411).toString())
+        val bedroom = game.state(PlatinumFixtures.load("pt_bedroom")).field!!
+        assertEquals(game.mapName(415), bedroom.mapName)
+        assertEquals("Twinleaf Town (Twinleaf Town Player House 2F)", game.world!!.areaOf(415)!!.name)
+    }
+
+    /**
+     * B1: Platinum's world is decoded by the Gen 4 decoder like HGSS's: field move obstacles (by Platinum's sprite
+     * ids), hidden items (flag = script - 8000 + 730, Script_GetHiddenItemFlag), the decoded areas kept.
+     */
+    @Test
+    fun `obstacles and hidden items from the ROM`() {
+        val world = PlatinumRom.requireGame().world!!
+        // Eterna City (zone 65): the small trees west of the city.
+        val eterna = world.areaOf(65)!!
+        assertEquals(FieldMoveKind.CUT, eterna.people.single { it.zone == 65 && it.x == 304 && it.y == 521 }.obstacle)
+        // Mt. Coronet 1F north room 1 (zone 218): cracked rocks, boulders and a hidden item.
+        val coronet = world.areaOf(218)!!
+        assertEquals(FieldMoveKind.ROCK_SMASH, coronet.people.single { it.x == 24 && it.y == 9 }.obstacle)
+        assertEquals(FieldMoveKind.STRENGTH, coronet.people.single { it.x == 29 && it.y == 30 }.obstacle)
+        val hidden = coronet.signs.single { it.x == 14 && it.y == 9 }
+        assertEquals(SignKind.HIDDEN_ITEM, hidden.kind)
+        assertEquals(8065 - 8000 + 730, hidden.flag)
+        assertSame(coronet, world.areaOf(218), "decoded once")
+    }
+
+    /** A7: Platinum's field move rules (Fly needs the Cobble Badge, id 2; no Whirlpool), the Gen 4 move ids. */
+    @Test
+    fun `field move rules are Platinum's`() {
+        val game = PlatinumGame(PlatinumVersion.PLATINUM_US)
+        val fly = game.fieldMoveRule(FieldMoveKind.FLY)!!
+        assertEquals(19, fly.move.value)
+        assertEquals("Cobble" to 2, fly.badge to fly.badgeId)
+        assertNull(game.fieldMoveRule(FieldMoveKind.WHIRLPOOL))
+        // Without a ROM, the maps keep their own names.
+        assertEquals("Twinleaf Town Player House 2F", game.mapName(415).toString())
+    }
+
     @Test
     fun `bedroom tiles and stairs from the ROM`() {
         val game = PlatinumRom.requireGame()
@@ -63,7 +110,7 @@ class PlatinumRomTest {
         val game = PlatinumRom.requireGame()
         val state = game.state(PlatinumFixtures.load("pt_bedroom"))
         val field = state.field!!
-        val view = MapView.render(game.world!!.areaOf(field.mapId)!!, field, game::zoneName, world = game.world)
+        val view = MapView.render(game.world!!.areaOf(field.mapId)!!, field, game::mapName, world = game.world)
         val exits = view["exits"].toString()
         assertTrue("warp:0 at 8,4" in exits && "press east" in exits, exits)
     }

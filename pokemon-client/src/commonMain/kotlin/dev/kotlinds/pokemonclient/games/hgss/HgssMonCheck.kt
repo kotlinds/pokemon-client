@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
 import dev.kotlinds.pokemonclient.data.BaseStats
 import dev.kotlinds.pokemonclient.data.ExpCurves
 import dev.kotlinds.pokemonclient.data.SpeciesInfo
@@ -7,7 +9,7 @@ import dev.kotlinds.pokemonclient.state.SpeciesId
 
 /**
  * Plausibility of a decoded Pokémon: a reading taken while the game rewrites the structure (see
- * [HgssPokemon.decode]) must never be shown, cached or turned into events.
+ * [Gen4Pokemon.decode]) must never be shown, cached or turned into events.
  *
  * The box blocks have a checksum; the party data (status, level, HP, stats) has none, so it is checked against the
  * box: the level against the experience (growth rate) and the stats against the base stats, IVs, EVs and nature
@@ -47,7 +49,7 @@ object HgssMonCheck {
         /**
          * Moves no Pokémon can have: an id above the last move, a move after an empty slot, the same move twice, or more
          * PP than the move's maximum (a reading caught mid-rewrite whose checksum matched by accident, see
-         * [HgssPokemon.decode]: "learned MOVE_57918, forgot Strength").
+         * [Gen4Pokemon.decode]: "learned MOVE_57918, forgot Strength").
          */
         data class BadMoves(val moves: List<Int>, val pp: List<Int>) : Problem {
             override val detail get() = "moves ${moves.joinToString("/")} pp ${pp.joinToString("/")}"
@@ -72,10 +74,10 @@ object HgssMonCheck {
     private const val SHEDINJA = 292
 
     /** True when [mon] can be shown as is. */
-    fun isPlausible(mon: HgssPokemon.Decoded): Boolean = problems(mon).isEmpty()
+    fun isPlausible(mon: Gen4Pokemon.Decoded): Boolean = problems(mon).isEmpty()
 
     /** Everything wrong with [mon] (empty when it is plausible). */
-    fun problems(mon: HgssPokemon.Decoded): List<Problem> = buildList {
+    fun problems(mon: Gen4Pokemon.Decoded): List<Problem> = buildList {
         if (!mon.checksumOk) add(Problem.ChecksumMismatch)
         val species = mon.species
         if (species !in 1..MAX_SPECIES) {
@@ -104,13 +106,13 @@ object HgssMonCheck {
      * The moves of [mon] when no Pokémon can know them (see [Problem.BadMoves]): ids in 1..[MAX_MOVE], packed from the
      * first slot (a Pokémon always knows at least one move), all different, PP within the maximum with the PP Ups.
      */
-    private fun movesProblem(mon: HgssPokemon.Decoded): Problem.BadMoves? {
+    private fun movesProblem(mon: Gen4Pokemon.Decoded): Problem.BadMoves? {
         val moves = (0 until 4).map { mon.move(it) }
         val pp = (0 until 4).map { mon.movePp(it) }
         val known = moves.takeWhile { it != 0 }
         val ok = known.isNotEmpty() && moves.drop(known.size).all { it == 0 } && known.all { it in 1..MAX_MOVE } &&
             known.toSet().size == known.size &&
-            known.indices.all { i -> HgssData.moveData[known[i]] == null || pp[i] <= HgssPokemon.maxPp(known[i], mon.movePpUps(i)) }
+            known.indices.all { i -> HgssData.moveData[known[i]] == null || pp[i] <= HgssData.maxPp(known[i], mon.movePpUps(i)) }
         return if (ok) null else Problem.BadMoves(moves, pp)
     }
 
@@ -126,10 +128,10 @@ object HgssMonCheck {
      * moment before it recalculates the stats), with the EVs of now or fewer (stats are only recalculated on level
      * ups and a few items, not when EVs are gained).
      */
-    private fun statProblems(mon: HgssPokemon.Decoded, info: SpeciesInfo): List<Problem> {
+    private fun statProblems(mon: Gen4Pokemon.Decoded, info: SpeciesInfo): List<Problem> {
         val base = info.baseStats
         val ivs = IntArray(6) { ((mon.ivWord shr (5 * it)) and 0x1F).toInt() }
-        val evs = IntArray(6) { HgssPokemon.u8(mon.blockA, 0x10 + it) }
+        val evs = IntArray(6) { Gen4RomBytes.u8(mon.blockA, 0x10 + it) }
         val nature = (mon.personality % 25).toInt()
         val level = mon.level
         val low = (level - 1).coerceAtLeast(1)

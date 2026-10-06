@@ -9,11 +9,12 @@ import dev.kotlinds.pokemonclient.world.RouteFailure
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /** A route failing on a map with a mechanism the planner doesn't model says so, instead of blaming walls. */
 class UnmodeledMechanismHintTest {
 
-    private fun field(puzzle: PuzzleState?) = FieldState(141, "gym", 13, 87, 0, Direction.NORTH, MovementMode.WALK, moving = false, puzzle = puzzle)
+    private fun field(puzzle: PuzzleState?) = FieldState(141, MapName(141, map = "gym"), 13, 87, 0, Direction.NORTH, MovementMode.WALK, moving = false, puzzle = puzzle)
 
     @Test
     fun anUnreachableTargetOnAMapWithAnUnmodeledMechanismNamesIt() {

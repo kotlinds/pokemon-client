@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.AnimationKind
@@ -62,12 +63,12 @@ internal object HgssFlyMapScreens : HgssScreenDecoder {
         if (state.mode != GameMode.APP || state.modeDetail != APP_TOWN_MAP) return null
         val fs = mem.ptr(mem.version.fieldSystemPtr) ?: return null
         val app = mem.ptr(fs + A.FS_SUB0)?.let { mem.ptr(it + A.FSS0_SUB_APP) } ?: return null
-        if (mem.fn(app + A.OM_INIT) != F.FN_FLY_MAP_INIT) return null
-        val map = mem.ptr(app + A.OM_DATA) ?: return null
+        if (mem.fn(app + S.OM_INIT) != F.FN_FLY_MAP_INIT) return null
+        val map = mem.ptr(app + S.OM_DATA) ?: return null
         // The same app shows the Pokémon Center wall map (type TOWN_MAP): only the fly mode is a choice.
         if (mem.u8(map + F.MAP_TYPE) != F.TYPE_FLY) return null
-        if (mem.s32(app + A.OM_EXEC_STATE) != OM_EXEC_MAIN) return Screen.Animation(AnimationKind.TRANSITION)
-        return when (mem.s32(app + A.OM_PROC_STATE)) {
+        if (mem.s32(app + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) return Screen.Animation(AnimationKind.TRANSITION)
+        return when (mem.s32(app + S.OM_PROC_STATE)) {
             F.STATE_HANDLE_INPUT -> flyMap(mem, map)
             F.STATE_FLY_CONTEXT_MENU -> confirmation(mem, map) ?: Screen.Animation(AnimationKind.TRANSITION)
             else -> Screen.Animation(AnimationKind.TRANSITION)
@@ -138,7 +139,7 @@ internal object HgssFlyMapScreens : HgssScreenDecoder {
         }
         val entries = points.mapIndexed { i, p ->
             Entry(
-                p.id, HgssData.mapLocation(p.nameMap) ?: HgssData.mapName(p.nameMap),
+                p.id, HgssData.mapName(p.nameMap).place,
                 selectable = view.visited(p) && view.inRegion(p),
                 touch = touchTiles[i]?.let { (x, y) -> view.touchOf(x, y) },
             )
@@ -201,7 +202,6 @@ internal object HgssFlyMapScreens : HgssScreenDecoder {
 
     private const val APP_TOWN_MAP = "town_map"
     private const val ID_CANCEL = "option:cancel"
-    private const val OM_EXEC_MAIN = 2
 }
 
 /** Addresses and constants of the Fly map (HeartGold US, include/application/pokegear/map/pokegear_map_internal.h). */

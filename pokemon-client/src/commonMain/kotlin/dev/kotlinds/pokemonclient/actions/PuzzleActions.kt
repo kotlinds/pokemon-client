@@ -1,11 +1,12 @@
 package dev.kotlinds.pokemonclient.actions
 
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.world.FieldMoves
+
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.world.FieldMoveAccess
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
-import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Pathfinder
 import dev.kotlinds.pokemonclient.world.PushEdge
 import dev.kotlinds.pokemonclient.world.PushPlanner
@@ -66,13 +67,13 @@ internal object PushPlans {
             val boulder = field.objects.firstOrNull { it.id == action.boulder }
                 ?: return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "${action.boulder} isn't on this floor"))
             val area = context.game.world?.areaOf(field.mapId)
-                ?: return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "no map data for ${field.mapName}"))
+                ?: return noMap(field)
             val access = FieldMoveWalk.access(context, state)
             strengthMissing(access[FieldMoveKind.STRENGTH])?.let { return ActionOutcome.Failed(it) }
-            val options = MovePlans.routeOptions(field, MoveOptions(), FieldMoveWalk.usable(access), MovePlans.stepWeights(context, state, MoveOptions()))
+            val options = MovePlans.routeOptions(field, MoveOptions(), FieldMoves.usable(access), MovePlans.stepWeights(context, state, MoveOptions()))
             // The puzzle's live state (shutters, people) as walks see it, every mechanism allowed: this is the agent's act.
             val overlay = MovePlans.overlay(context, field, emptySet(), solve = true)
-            val start = Node(field.x, field.y, Pathfinder(area, overlay).levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))
+            val start = Pathfinder(area, overlay).nodeOf(field)
             val route = PushPlanner(area, overlay).pushInto(start, options, boulder.x to boulder.y)
                 ?: return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH,
                     "no way found to push ${action.boulder} (at ${boulder.x},${boulder.y}) into its hole at ${hole.hole.x},${hole.hole.y} from ${field.x},${field.y}" +
@@ -104,6 +105,7 @@ internal object PushPlans {
                     val read = context.navigator.advanceUntil(FALL_MESSAGE_PRESSES) { it.battle != null || it.screen is Screen.Overworld }
                     if (read !is Step.Done || read.value.screen !is Screen.Overworld) return interrupted(context.state(), done)
                 }
+                is MovePlans.StepResult.Failed -> return ActionOutcome.Failed(pushed.error).withDone(done)
                 MovePlans.StepResult.Refused -> return ActionOutcome.Failed(ActionError.Timeout(
                     "the boulder at ${edge.objectFrom.first},${edge.objectFrom.second} didn't move when pushed ${edge.direction.name.lowercase()} from ${standAt.x},${standAt.y}",
                 )).withDone(done)

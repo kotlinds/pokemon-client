@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.world.EncounterConditions
 
@@ -28,7 +29,7 @@ data class HgssEncounterTable(
         /** Decodes one member of the encounter NARC, or null when it is too short. */
         fun parse(bytes: ByteArray): HgssEncounterTable? {
             if (bytes.size < SIZE) return null
-            fun u8(o: Int) = HgssRomBytes.u8(bytes, o)
+            fun u8(o: Int) = Gen4RomBytes.u8(bytes, o)
             return HgssEncounterTable(
                 landRate = u8(0),
                 surfRate = u8(1),

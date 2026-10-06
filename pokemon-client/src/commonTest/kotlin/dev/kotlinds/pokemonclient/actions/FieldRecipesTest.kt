@@ -260,6 +260,8 @@ class FieldRecipesTest {
         opened: MutableList<String> = mutableListOf(),
     ): ScriptedUi {
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2, moves = listOf(move(19, "Fly")))))
+        // HGSS's rules: Fly is move 19 (the flyer is found by the game's rule, never by the move's name).
+        ui.game.fieldMoveRules = hgssFieldMoves
         ui.field = field(5, 5, Direction.SOUTH, mapId = 89)
         var landing: Long? = null
         var landingMap = 0

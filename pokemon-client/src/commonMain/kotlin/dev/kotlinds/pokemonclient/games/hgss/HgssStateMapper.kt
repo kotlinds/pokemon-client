@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.data.ExpCurves
@@ -49,7 +50,7 @@ import dev.kotlinds.pokemonclient.state.PartyMon as CommonPartyMon
  * Turns the detailed HGSS reading ([HgssState]) into the common [GameState] model.
  *
  * Stateful on purpose: it remembers the last valid reading of each Pokémon (by [MonId]), so a party structure read
- * while the game rewrites it (see [HgssPokemon.decode]) is replaced by the last valid reading of that same Pokémon
+ * while the game rewrites it (see [Gen4Pokemon.decode]) is replaced by the last valid reading of that same Pokémon
  * instead of showing garbage like "Lv90, HP 20295/31940". Readings that fail [HgssMonCheck] are never shown nor
  * remembered.
  */
@@ -131,7 +132,7 @@ class HgssStateMapper {
                     p.name, p.money, p.badges, p.trainerId, p.playTime?.let { (h, m, s) -> PlayTime(h, m, s) }, badgeIds = p.badgeIds,
                     flyDestinations = p.flyPoints.mapNotNull { HgssFlyMapAddresses.FLYPOINTS.getOrNull(it) }.map { point ->
                         FlyDestination(
-                            point.id, point.warpMap, HgssData.mapLocation(point.nameMap) ?: HgssData.mapName(point.nameMap),
+                            point.id, point.warpMap, HgssData.mapName(point.nameMap).place,
                             fromAnyRegion = point.warpMap in HgssFlyMapAddresses.ALWAYS_FLYABLE,
                             regionHub = point.warpMap == HgssFlyMapAddresses.MAP_INDIGO_PLATEAU,
                         )
@@ -146,7 +147,7 @@ class HgssStateMapper {
             field = state.location?.takeIf { state.mode in FIELD_MODES }?.let { l ->
                 FieldState(
                     mapId = l.mapId,
-                    mapName = l.locationName?.let { town -> "$town (${l.mapName})" } ?: l.mapName,
+                    mapName = HgssData.mapName(l.mapId),
                     x = l.x,
                     y = l.z,
                     height = l.height,
@@ -157,8 +158,8 @@ class HgssStateMapper {
                         else -> MovementMode.WALK
                     },
                     moving = l.moving,
-                    trainerEncounter = state.dialogue?.engagedTrainer != null,
-                    engagedTrainerId = state.dialogue?.engagedTrainer,
+                    trainerEncounter = state.engagedTrainer != null,
+                    engagedTrainerId = state.engagedTrainer,
                     objects = state.surroundings?.objects.orEmpty().filterNot { it.hidden || HgssObjectIds.isProp(it, l.mapId) }.map { o ->
                         FieldObject(
                             id = HgssObjectIds.idOf(o, l.mapId),
@@ -235,20 +236,14 @@ class HgssStateMapper {
         // may look like it waits for input: it doesn't.
         if (state.fading) return Screen.Animation(AnimationKind.TRANSITION)
         val awaiting = if (state.awaitingInput) Awaiting.INPUT else Awaiting.ANIMATION
-        state.menu?.takeIf { it.options.isNotEmpty() }?.let { return scriptMenu(it) }
         state.battle?.let { b -> battleScreen(b, party)?.let { return it } }
         return when (state.mode) {
             // The start menu stays drawn while an entry runs (the SAVE question prints under it): only its
             // HANDLE_INPUT state waits for a choice.
             GameMode.START_MENU -> state.startMenu?.let { if (it.waiting) startMenu(it) else Screen.Animation(AnimationKind.TRANSITION) }
                 ?: Screen.Unknown("start menu", awaiting)
-            GameMode.DIALOGUE -> state.dialogue?.let { d ->
-                val text = d.visibleText ?: d.text
-                if (text != null && d.messageBoxOpen) {
-                    Screen.Dialogue(TextSource.FIELD, speaker = null, text = text, awaiting = if (d.printing) Awaiting.TEXT_PRINTING else awaiting)
-                } else null
-            } ?: Screen.Unknown("script", awaiting)
             GameMode.OVERWORLD -> Screen.Overworld(awaiting = awaiting)
+            // A script's message boxes and menus have their decoder (HgssTextScreens): reached for a cutscene.
             GameMode.FIELD_BUSY, GameMode.SCRIPT -> Screen.Overworld(awaiting = Awaiting.ANIMATION)
             GameMode.BATTLE -> state.battle?.message?.let {
                 Screen.Dialogue(TextSource.BATTLE, null, it, Awaiting.ANIMATION)
@@ -263,17 +258,6 @@ class HgssStateMapper {
             GameMode.MAIN_MENU -> Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
             GameMode.NEW_GAME_INTRO -> Screen.Intro(IntroStage.NEW_GAME_INTRO, awaiting)
             GameMode.UNKNOWN -> Screen.Unknown(state.modeDetail, awaiting)
-        }
-    }
-
-    private fun scriptMenu(m: MenuInfo): Screen.Selectable {
-        val cursor = m.cursor?.let { Cursor.At(it) } ?: Cursor.Hidden
-        val topology = if (m.columns > 1) Topology.grid(m.options.size, m.columns) else Topology.vertical(m.options.size, wrap = true)
-        return if (m.kind == "yes_no") {
-            // Script yes/no menus always list YES then NO (whatever the language).
-            Screen.YesNo(null, m.options.mapIndexed { i, o -> Entry(if (i == 0) "option:yes" else "option:no", o) }, cursor, topology)
-        } else {
-            Screen.ListMenu(MenuKind.MULTICHOICE, m.options.mapIndexed { i, o -> option(i, o) }, cursor, topology, CancelBehavior.CONFIRMS_LAST)
         }
     }
 
@@ -496,7 +480,7 @@ class HgssStateMapper {
         /** A level-up panel cell: a number, maybe signed ("26", "+ 3"), whatever the language. */
         val PANEL_NUMBER = Regex("\\s*[+-]?\\s*[0-9]+\\s*")
 
-        val FIELD_MODES = setOf(GameMode.OVERWORLD, GameMode.FIELD_BUSY, GameMode.SCRIPT, GameMode.DIALOGUE, GameMode.START_MENU)
+        val FIELD_MODES = setOf(GameMode.OVERWORLD, GameMode.FIELD_BUSY, GameMode.SCRIPT, GameMode.START_MENU)
 
         val STAGE_NAMES = mapOf(
             "atk" to BattleStat.ATTACK, "def" to BattleStat.DEFENSE, "speed" to BattleStat.SPEED,

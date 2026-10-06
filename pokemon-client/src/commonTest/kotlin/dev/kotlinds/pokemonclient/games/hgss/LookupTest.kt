@@ -84,23 +84,24 @@ class MatchupsTest {
     }
 }
 
-/** Place names and map types read from the ROM equal the decomp's tables, for every map (skipped without `POKEMON_ROM`). */
+/**
+ * Place names and map types read from the ROM equal the decomp's tables, for every map (skipped without `POKEMON_ROM`).
+ * The place names come from the world source's own ROM (its header and text), with no game data installed globally.
+ */
 class HgssMapNamesTest {
     @Test
     fun everyMapHasTheSamePlaceNameAndTypeAsTheDecomp() {
         val world = HgssWorldRom.require()
-        val data = HgssWorldRom.requireData()
         val expectedLocations = HgssData.lines("map_locations.txt")
         val expectedTypes = HgssData.lines("map_types.txt")
-        HgssData.useGameData(data)
         HgssData.useWorld(world)
         try {
             for (zone in expectedLocations.indices) {
-                kotlin.test.assertEquals(expectedLocations[zone].ifEmpty { null }, HgssData.mapLocation(zone), "location of zone $zone")
+                kotlin.test.assertEquals(expectedLocations[zone].ifEmpty { null }, world.mapName(zone).location, "location of zone $zone")
+                kotlin.test.assertEquals(expectedLocations[zone].ifEmpty { null }, HgssData.bundledMapName(zone).location, "bundled location of zone $zone")
                 kotlin.test.assertEquals(expectedTypes[zone].ifEmpty { null }, HgssData.mapType(zone), "type of zone $zone")
             }
         } finally {
-            HgssData.useGameData(null)
             HgssData.useWorld(null)
         }
     }

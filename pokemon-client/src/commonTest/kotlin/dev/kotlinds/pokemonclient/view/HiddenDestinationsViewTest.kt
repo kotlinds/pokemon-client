@@ -16,12 +16,14 @@ import dev.kotlinds.pokemonclient.world.TriggerWarp
 import dev.kotlinds.pokemonclient.world.Warp
 import dev.kotlinds.pokemonclient.world.WorldSource
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * Destinations hidden (`ActionSettings.hideDestinations`): the map view lists every way out of the map with its place
@@ -51,11 +53,11 @@ class HiddenDestinationsViewTest {
     private val names = mapOf(7 to "Town", 8 to "Route 8", 9 to "Secret House", 10 to "Cellar")
 
     private val field = FieldState(
-        mapId = 7, mapName = "Town", x = 1, y = 1, height = 0, facing = Direction.NORTH, movement = MovementMode.WALK, moving = false,
+        mapId = 7, mapName = MapName(7, map = "Town"), x = 1, y = 1, height = 0, facing = Direction.NORTH, movement = MovementMode.WALK, moving = false,
         objects = listOf(FieldObject("person:4", "old man", FieldObjectKind.PERSON, 2, 1, Direction.SOUTH)),
     )
 
-    private fun exits(hide: Boolean) = MapView.render(area, field, names::get, width = 5, height = 3, world = world, hideDestinations = hide)
+    private fun exits(hide: Boolean) = MapView.render(area, field, { MapName(it, map = names[it]) }, width = 5, height = 3, world = world, hideDestinations = hide)
 
     @Test
     fun hiddenExitsLeadToUnknownAndNameNoOtherMap() {
@@ -88,5 +90,14 @@ class HiddenDestinationsViewTest {
         assertEquals(StateView.DESTINATIONS_HIDDEN, StateView.state(state, hideDestinations = true)["destinations"]?.jsonPrimitive?.content)
         assertTrue("keep your own notes" in StateView.DESTINATIONS_HIDDEN && "read signs and listen to people" in StateView.DESTINATIONS_HIDDEN)
         assertNull(StateView.state(state)["destinations"])
+    }
+
+    @Test
+    fun theMapYouAreOnIsStillNamedWhenDestinationsAreHidden() {
+        // Arriving somewhere is seen like in the game (its name): only where the exits lead is hidden.
+        val state = GameState(0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null, field)
+        val position = StateView.state(state, hideDestinations = true)["position"]!!.jsonObject
+        assertEquals(field.mapName.toString(), position["map"]!!.jsonPrimitive.content)
+        assertEquals("map", position.keys.first())
     }
 }

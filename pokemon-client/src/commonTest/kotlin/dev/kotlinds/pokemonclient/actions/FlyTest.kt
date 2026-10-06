@@ -28,6 +28,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * A10: what `fly` says when it can't take the player where asked: another region (Johto ↔ Kanto), a town not visited,
@@ -63,8 +64,9 @@ class FlyTest {
 
     /** A game standing in [zone] at ([x], [y]), on [screen]. */
     private fun game(zone: Int, x: Int, y: Int, screen: Screen = Screen.Overworld(null, Awaiting.INPUT)): Pair<PokemonGame, PlanContext> {
-        val field = FieldState(zone, "zone $zone", x, y, 0, Direction.NORTH, MovementMode.WALK, false, flyAllowed = zone != 1)
+        val field = FieldState(zone, MapName(zone, map = "zone $zone"), x, y, 0, Direction.NORTH, MovementMode.WALK, false, flyAllowed = zone != 1)
         val fake = FakeGame(screen) { GameState(0, it, PlayerInfo("ACE", 0, listOf("Storm"), 1, badgeIds = setOf(4)), listOf(flyer), null, null, field) }
+            .apply { fieldMoveRules = hgssFieldMoves }
         val game = object : PokemonGame by fake {
             override val world = object : WorldSource {
                 override fun areaOf(zoneId: Int) = when (zoneId) { 1 -> house; 2 -> violet; else -> null }
@@ -72,7 +74,7 @@ class FlyTest {
                 override fun flyAllowed(zoneId: Int) = zoneId != 1
                 override fun regionOf(zoneId: Int) = if (zoneId == 5) kanto else johto
             }
-            override fun zoneName(id: Int) = when (id) { 1 -> "House"; 2 -> "Violet"; 5 -> "Pallet"; else -> null }
+            override fun mapName(id: Int) = MapName(id, map = when (id) { 1 -> "House"; 2 -> "Violet"; 5 -> "Pallet"; else -> null })
         }
         return game to PlanContext(fake.scope(), game)
     }

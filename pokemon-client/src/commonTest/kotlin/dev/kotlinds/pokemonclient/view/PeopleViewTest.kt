@@ -9,26 +9,38 @@ import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.world.Area
 import dev.kotlinds.pokemonclient.world.TileInfo
 import dev.kotlinds.pokemonclient.world.TileKind
+import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.Screen
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /** What the agent sees of the people of the map (PER-08 facing and roles, PER-09 people off screen) and its height. */
 class PeopleViewTest {
 
     private val area = Area(1, "test", 0, 0, 40, 40, Array(1600) { TileInfo(false, TileKind.Floor, listOf(0)) })
 
-    private fun field(objects: List<FieldObject>) = FieldState(7, "Route", 5, 5, 6, Direction.NORTH, MovementMode.WALK, false, objects)
+    private fun field(objects: List<FieldObject>) = FieldState(7, MapName(7, map = "Route"), 5, 5, 6, Direction.NORTH, MovementMode.WALK, false, objects)
 
     @Test
     fun peopleOnScreenShowWhereTheyLook() {
         val trainer = FieldObject("person:2", "Youngster Joey (trainer, not beaten, sees 4 tiles ahead)", FieldObjectKind.PERSON, 7, 5, Direction.WEST)
         val view = MapView.render(area, field(listOf(trainer)))
         assertEquals("person:2 Youngster Joey (trainer, not beaten, sees 4 tiles ahead) at 7,5 (2 east) facing west", view["people"]!!.jsonArray.single().jsonPrimitive.content)
-        assertTrue(view["position"]!!.jsonPrimitive.content.endsWith("height 6"), view["position"].toString())
+        // The height (bridges, walkways, platforms: the same x, y on two levels) is in the state's one position, with the
+        // map's name first; the map view doesn't repeat it.
+        assertNull(view["position"])
+        val position = StateView.state(GameState(0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null, field(listOf(trainer))))["position"]!!.jsonObject
+        assertEquals(listOf("map", "x", "y", "facing", "movement", "height"), position.keys.toList())
+        assertEquals("Route", position["map"]!!.jsonPrimitive.content)
+        assertEquals(6, position["height"]!!.jsonPrimitive.int)
     }
 
     @Test

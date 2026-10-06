@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.PlayTime
 import kotlin.test.Test
@@ -19,7 +20,7 @@ class HgssBattleReadTest {
 
     @Test
     fun compressedStringsUnpackNineBitsFromFifteen() {
-        assertEquals("Will", HgssText.decode(intArrayOf(0xF100, 0x1B41, 0x0A85, 0x7FEA, 0xFFFF, 0, 0, 0)))
+        assertEquals("Will", Gen4Text.decode(intArrayOf(0xF100, 0x1B41, 0x0A85, 0x7FEA, 0xFFFF, 0, 0, 0)))
     }
 
     @Test

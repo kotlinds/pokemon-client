@@ -36,6 +36,15 @@ data class GameState(
     val options: GameOptions? = null,
     /** What the start menu offers yet (the story unlocks it bit by bit), null when unknown. */
     val startMenu: Set<StartMenuFeature>? = null,
+    /**
+     * The field moves of the game ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]) as the party and the badges
+     * allow them now ([dev.kotlinds.pokemonclient.world.FieldMoves.access]): what the action list needs (Fly) without
+     * the game at hand, and what the walks use. Every game fills it in its `state()` (every kind present, those it
+     * doesn't have as `Unknown`). Null: not read, a state built without its game (tests): the actions then read it
+     * with the game's rules ([dev.kotlinds.pokemonclient.world.FieldMoves.of]) rather than taking "no field move",
+     * which would silently hide Fly and drop Surf from the routes.
+     */
+    val fieldMoves: Map<dev.kotlinds.pokemonclient.world.FieldMoveKind, dev.kotlinds.pokemonclient.world.FieldMoveAccess>? = null,
 )
 
 /** Start menu entries the story unlocks. */
@@ -139,7 +148,8 @@ data class BagItem(val item: Named<ItemId>, val quantity: Int)
 /** Where the player is in the world. */
 data class FieldState(
     val mapId: Int,
-    val mapName: String,
+    /** The map's name ([dev.kotlinds.pokemonclient.PokemonGame.mapName] of [mapId]): what views and messages show. */
+    val mapName: MapName,
     val x: Int,
     val y: Int,
     /** Height of the player (map units), to tell bridges and upper floors apart. */

@@ -27,10 +27,4 @@ object PokemonGames {
 
     /** The game of the ROM file contents [bytes], or null when unreadable or not supported. */
     fun detect(bytes: ByteArray): PokemonGame? = runCatching { NdsRom.parse(bytes) }.getOrNull()?.let(::detect)
-
-    /**
-     * The 4-letter game code of an NDS ROM (read with kotlinds), e.g. "IPKE": I = DS game, PK = Pokémon HeartGold,
-     * E = USA. Null when unreadable.
-     */
-    fun ndsGameCode(bytes: ByteArray): String? = runCatching { NdsRom.parse(bytes).gameCode }.getOrNull()
 }

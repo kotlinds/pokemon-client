@@ -31,6 +31,7 @@ import dev.kotlinds.pokemonclient.world.Area
 import dev.kotlinds.pokemonclient.world.TileInfo
 import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.WorldSource
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * A scripted game for menu recipes: the cursor of any [Screen.Selectable] follows the D-pad along its topology, X
@@ -156,6 +157,6 @@ internal class ScriptedUi(
         }
 
         fun field(x: Int, y: Int, facing: Direction, objects: List<FieldObject> = emptyList(), mapId: Int = 1, movement: MovementMode = MovementMode.WALK) =
-            FieldState(mapId, "map $mapId", x, y, 0, facing, movement, moving = false, objects = objects)
+            FieldState(mapId, MapName(mapId, map = "map $mapId"), x, y, 0, facing, movement, moving = false, objects = objects)
     }
 }

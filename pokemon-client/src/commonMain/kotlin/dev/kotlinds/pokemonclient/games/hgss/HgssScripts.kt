@@ -1,8 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.s32
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u16
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u32
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.s32
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u32
 import dev.kotlinds.pokemonclient.world.FlagCondition
 
 /**

@@ -2,6 +2,7 @@ package dev.kotlinds.pokemonclient
 
 import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.runtime.InputProbe
 
 /**
@@ -27,8 +28,12 @@ interface PokemonGame {
     /** The game's data (species, moves, items, types...) read from the ROM, or null when not available. */
     val data: dev.kotlinds.pokemonclient.data.GameData? get() = null
 
-    /** The name of map (zone) [id], for display, or null when unknown. */
-    fun zoneName(id: Int): String? = null
+    /**
+     * The name of map (zone) [id]: the one name the state, `go_to`, the map view and the errors use, in every game
+     * ([MapName]: the place shown in game and the map's own name). Never null: what this game doesn't know stays
+     * null in it and it shows `map:<id>`.
+     */
+    fun mapName(id: Int): MapName = MapName(id)
 
     /**
      * The value of the game's script variable [id] (what map triggers and events check), or null when this game

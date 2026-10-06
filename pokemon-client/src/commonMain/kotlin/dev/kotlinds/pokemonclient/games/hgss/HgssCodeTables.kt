@@ -4,8 +4,8 @@ import dev.kotlinds.pokemonclient.data.Effectiveness
 import dev.kotlinds.pokemonclient.data.MachineId
 import dev.kotlinds.pokemonclient.data.PokemonType
 import dev.kotlinds.pokemonclient.data.TypeChart
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u16
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u8
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
 
 /**
  * The game data tables compiled into the code (ARM9 binary and overlays) rather than stored as files.

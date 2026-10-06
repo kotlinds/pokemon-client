@@ -2,15 +2,6 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.PokemonGame
-import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.console.ConsolePort
-import dev.kotlinds.pokemonclient.console.Frame
-import dev.kotlinds.pokemonclient.console.InputFrame
-import dev.kotlinds.pokemonclient.console.MemoryRegion
-import dev.kotlinds.pokemonclient.console.Platform
-import dev.kotlinds.pokemonclient.runtime.ActionScope
-import dev.kotlinds.pokemonclient.runtime.InputProbe
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.FieldState
@@ -30,10 +21,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * A simulated dungeon of several floors (one area per zone, or one area shared by outdoor zones), like the real
- * game: holding a direction for [STEP_FRAMES] frames moves the player one tile; stepping on a door or a hole, or
+ * game ([GridGame]): holding a direction for [GridGame.STEP_FRAMES] frames moves the player one tile; stepping on a door or a hole, or
  * pressing the exit direction on a ladder, moves the player to the other floor only after a transition of
  * [transitionFrames] frames (a fade), during which the player doesn't move; stepping on an active scene trigger opens
  * a dialogue.
@@ -41,21 +33,20 @@ import kotlin.test.assertTrue
 private class FloorsGame(
     val areas: Map<Int, Area>,
     var zone: Int,
-    var x: Int,
-    var y: Int,
+    x: Int,
+    y: Int,
     val transitionFrames: Int = 60,
     val people: Map<Int, List<FieldObject>> = emptyMap(),
     /** A scene that pushes the player back one tile west (no message), like the S.S. Aqua's B1F guard. */
     val pushBack: Boolean = false,
-) : PokemonGame {
-    var facing = Direction.SOUTH
+    /** The maps' names ("Floor N" by default). */
+    val names: (Int) -> MapName = { MapName(it, map = "Floor $it") },
+) : GridGame(x, y) {
     var scene = false
 
     /** Frames left of the push-back scene (the player can't move meanwhile); how many times it ran. */
     private var busy = 0
     var pushes = 0
-    private var heldFor = 0
-    private var held: Set<Button> = emptySet()
     private var pending: Triple<Int, Int, Int>? = null
     private var pendingIn = 0
     val zonesVisited = mutableListOf(zone)
@@ -65,11 +56,10 @@ private class FloorsGame(
         override fun areaOf(zoneId: Int) = areas[zoneId]
         override val zoneCount get() = maxOf(10, areas.keys.max() + 1)
     }
-    override fun zoneName(id: Int) = "Floor $id"
+    override fun mapName(id: Int) = names(id)
     override fun scriptVariable(memory: Memory, id: Int) = 0
-    override val inputProbe = InputProbe { held }
     override fun state(memory: Memory): GameState {
-        val field = FieldState(zone, "Floor $zone", x, y, 0, facing, MovementMode.WALK, moving = false, objects = people[zone].orEmpty())
+        val field = FieldState(zone, names(zone), x, y, 0, facing, MovementMode.WALK, moving = false, objects = people[zone].orEmpty())
         val screen = if (scene) Screen.Dialogue(TextSource.FIELD, null, "A scene!", Awaiting.INPUT)
         else Screen.Overworld(null, if (busy > 0) Awaiting.ANIMATION else Awaiting.INPUT)
         return GameState(0, screen, null, emptyList(), null, null, field)
@@ -87,66 +77,44 @@ private class FloorsGame(
         pendingIn = transitionFrames
     }
 
-    val console = object : ConsolePort {
-        override val platform = Platform.NINTENDO_DS
-        override var frame = 0L
-        override val revision get() = frame
-        override fun step(frames: Int, input: InputFrame) = repeat(frames) {
-            frame++
-            held = input.buttons
-            pending?.let { (z, tx, ty) ->
-                if (--pendingIn <= 0) {
-                    zone = z; x = tx; y = ty; pending = null
-                    zonesVisited += z
-                }
-                return@repeat
+    override fun busy(): Boolean {
+        pending?.let { (z, tx, ty) ->
+            if (--pendingIn <= 0) {
+                zone = z; x = tx; y = ty; pending = null
+                zonesVisited += z
             }
-            if (busy > 0) {
-                if (--busy == 0) x -= 1
-                return@repeat
-            }
-            val direction = DIRECTIONS.entries.firstOrNull { it.key in input.buttons }?.value
-            if (direction == null || scene) {
-                heldFor = 0
-                return@repeat
-            }
-            facing = direction
-            if (++heldFor < STEP_FRAMES) return@repeat
-            heldFor = 0
-            val here = area()
-            // A ladder / exit mat: pressing its direction takes it.
-            here.warps.firstOrNull { it.zone == zone && it.x == x && it.y == y && it.exitDirection == direction }?.let {
-                arrive(it.targetZone, it.targetWarp)
-                return@repeat
-            }
-            val nx = x + direction.dx
-            val ny = y + direction.dy
-            val tile = here.tile(nx, ny) ?: return@repeat
-            val free = (!tile.blocked || tile.kind == TileKind.Door) && people[zone].orEmpty().none { it.x == nx && it.y == ny }
-            if (!free) return@repeat
-            x = nx
-            y = ny
-            here.warps.firstOrNull { it.zone == zone && it.x == x && it.y == y && it.exitDirection == null }?.let { arrive(it.targetZone, it.targetWarp) }
-            here.triggerWarps.firstOrNull { it.zone == zone && it.x == x && it.y == y }?.let { schedule(it.targetZone, it.toX, it.toY) }
-            if (here.triggers.any { it.zone == zone && it.x == x && it.y == y } && here.triggerWarps.none { it.x == x && it.y == y }) {
-                if (pushBack) { busy = PUSH_FRAMES; pushes++ } else scene = true
-            }
-            here.zoneAt(x, y)?.let { if (it != zone) { zone = it; zonesVisited += it } }
+            return true
         }
-        override fun memorySize(region: MemoryRegion) = 16
-        override fun read(region: MemoryRegion, offset: Int, length: Int, into: ByteArray) = Unit
-        override fun framebuffer(): Frame? = null
-        override fun saveState() = ByteArray(0)
-        override fun loadState(state: ByteArray) = true
+        if (busy > 0) {
+            if (--busy == 0) x -= 1
+            return true
+        }
+        return scene
     }
 
-    fun context(onProgress: (dev.kotlinds.pokemonclient.runtime.ActionProgress) -> Unit = {}) =
-        PlanContext(ActionScope(console, inputProbe, onProgress = onProgress), this)
+    override fun step(direction: Direction) {
+        val here = area()
+        // A ladder / exit mat: pressing its direction takes it.
+        here.warps.firstOrNull { it.zone == zone && it.x == x && it.y == y && it.exitDirection == direction }?.let {
+            arrive(it.targetZone, it.targetWarp)
+            return
+        }
+        val nx = x + direction.dx
+        val ny = y + direction.dy
+        val tile = here.tile(nx, ny) ?: return
+        val free = (!tile.blocked || tile.kind == TileKind.Door) && people[zone].orEmpty().none { it.x == nx && it.y == ny }
+        if (!free) return
+        moveTo(nx, ny)
+        here.warps.firstOrNull { it.zone == zone && it.x == x && it.y == y && it.exitDirection == null }?.let { arrive(it.targetZone, it.targetWarp) }
+        here.triggerWarps.firstOrNull { it.zone == zone && it.x == x && it.y == y }?.let { schedule(it.targetZone, it.toX, it.toY) }
+        if (here.triggers.any { it.zone == zone && it.x == x && it.y == y } && here.triggerWarps.none { it.x == x && it.y == y }) {
+            if (pushBack) { busy = PUSH_FRAMES; pushes++ } else scene = true
+        }
+        here.zoneAt(x, y)?.let { if (it != zone) { zone = it; zonesVisited += it } }
+    }
 
     companion object {
-        const val STEP_FRAMES = 4
         const val PUSH_FRAMES = 40
-        val DIRECTIONS = mapOf(Button.UP to Direction.NORTH, Button.DOWN to Direction.SOUTH, Button.LEFT to Direction.WEST, Button.RIGHT to Direction.EAST)
     }
 }
 
@@ -181,19 +149,19 @@ class WorldTravelTest {
      * Floor 1: the start (0,0) is walled off from the goal (4,0); a ladder at (0,2) leads up to floor 2, which comes
      * back down by a hole at (4,1) landing at (4,1) on floor 1, next to the goal.
      */
-    private fun dungeon(transition: Int = 60) = FloorsGame(
+    private fun dungeon(transition: Int = 60, names: (Int) -> MapName = { MapName(it, map = "Floor $it") }) = FloorsGame(
         mapOf(
             1 to floor(1, listOf(".#...", ".#...", ".#..."), warps = listOf(Warp(1, 0, 0, 2, 2, 0, Direction.SOUTH))),
             2 to floor(2, listOf(".....", "....."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, Direction.NORTH)), holes = listOf(TriggerWarp(2, 0, 4, 1, 1, 4, 1)), triggers = listOf(Trigger(2, 0, 4, 1, 1, 1, 1, 0x4000, 0))),
         ),
-        zone = 1, x = 0, y = 0, transitionFrames = transition,
+        zone = 1, x = 0, y = 0, transitionFrames = transition, names = names,
     )
 
     @Test
     fun aLongGoToReportsTheTilesWalkedOfThePlannedRouteAndTheCurrentMap() {
         val game = dungeon()
         val reports = mutableListOf<dev.kotlinds.pokemonclient.runtime.ActionProgress>()
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context { reports += it }))
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context(onProgress = { reports += it })))
         // Planned from the start (nothing walked yet), with a total.
         val first = reports.first()
         assertEquals(0, first.done)
@@ -239,6 +207,20 @@ class WorldTravelTest {
         val game = dungeon()
         assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 2"), game.context()))
         assertEquals(2, game.zone)
+    }
+
+    /**
+     * A5 / A6: a map is found by every name the state shows for it ([MapName]): its own name, its display form, its
+     * place's name — the place as the game shows it (French: "Célestia"), accents or not ([dev.kotlinds.pokemonclient.state.normalizeName]).
+     */
+    @Test
+    fun goToAMapByAnyOfItsShownNamesAccentsIgnored() {
+        val names = { id: Int -> if (id == 2) MapName(2, location = "Célestia", map = "Celestic Town") else MapName(id, map = "Floor $id") }
+        for (asked in listOf("Celestia", "célestia", "CELESTIA", "Célestia (Celestic Town)", "Celestic Town", "Celestic", "map:2")) {
+            val game = dungeon(names = names)
+            assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, asked), game.context()), asked)
+            assertEquals(2, game.zone, asked)
+        }
     }
 
     @Test
@@ -370,9 +352,9 @@ class WorldTravelTest {
 
     @Test
     fun aTownCanBeNamedWithOrWithoutTown() {
-        assertTrue(WorldTravel.sameMapName("New Bark", "New Bark Town"))
-        assertTrue(WorldTravel.sameMapName("Goldenrod City", "goldenrod"))
-        assertFalse(WorldTravel.sameMapName("Route 3", "Route 30"))
+        assertTrue(MapName.sameMapName("New Bark", "New Bark Town"))
+        assertTrue(MapName.sameMapName("Goldenrod City", "goldenrod"))
+        assertFalse(MapName.sameMapName("Route 3", "Route 30"))
     }
 }
 
@@ -383,7 +365,7 @@ class WorldTravelTest {
  */
 class HiddenDestinationsTravelTest {
 
-    private fun hidden(game: FloorsGame) = PlanContext(ActionScope(game.console, game.inputProbe), game, settings = ActionSettings(hideDestinations = true))
+    private fun hidden(game: FloorsGame) = game.context(ActionSettings(hideDestinations = true))
 
     /** Floor 1's start (0,0) is walled off from (4,0); a ladder at (0,2) leads to floor 2, whose hole falls next to it. */
     private fun dungeon() = FloorsGame(
@@ -441,6 +423,34 @@ class HiddenDestinationsTravelTest {
         assertEquals(UnavailableReason.NO_PATH, here.reason)
         assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(0, 1, null, map = "map:1"), hidden(game)))
         assertEquals(Triple(1, 0, 1), Triple(game.zone, game.x, game.y))
+    }
+
+    /**
+     * A town and its buildings share the place's name ("Violet City"): asked from the gym, it names the town outside
+     * (another map, refused as hidden), not the gym; asked in the town itself, it is the current map.
+     */
+    @Test
+    fun thePlaceNameFromABuildingIsTheTownOutsideNotHere() {
+        val outdoor = floor(1, listOf("......", "......"), zones = listOf("111222", "111222"))
+        val gym = floor(3, listOf("...", "..."))
+        val names = mapOf(1 to MapName(1, "Violet City", "Violet City"), 2 to MapName(2, "Route 32", "Route 32"), 3 to MapName(3, "Violet City", "Violet Gym"))
+        val areas = mapOf(1 to outdoor, 2 to outdoor, 3 to gym)
+        val inGym = FloorsGame(areas, zone = 3, x = 1, y = 1, names = { names[it] ?: MapName(it) })
+        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "Violet City"), hidden(inGym)))
+        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(0, 0, null, map = "Violet City"), hidden(inGym)))
+        // The gym's own name and display form are this map.
+        for (here in listOf("Violet Gym", "Violet City (Violet Gym)")) {
+            val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, here), hidden(inGym))).error)
+            assertEquals(UnavailableReason.NO_PATH, error.reason, here)
+        }
+        val inTown = FloorsGame(areas, zone = 1, x = 0, y = 0, names = { names[it] ?: MapName(it) })
+        val already = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Violet City"), hidden(inTown))).error)
+        assertEquals(UnavailableReason.NO_PATH, already.reason)
+        assertEquals(listOf(3), inGym.zonesVisited)
+        // Destinations shown: a name in an earlier version's display form ("Route 32 (Route 32)") still leads there.
+        val shown = FloorsGame(areas, zone = 1, x = 0, y = 0, names = { names[it] ?: MapName(it) })
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Route 32 (Route 32)"), shown.context()))
+        assertEquals(2, shown.zone)
     }
 
     @Test

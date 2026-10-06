@@ -607,6 +607,18 @@ class SoundResyncTest {
         assertTrue(main.loads.isEmpty(), "nothing loaded")
     }
 
+    /** What the app does when [ResyncRefusal.MainRamChangedDuringPause]: the paused state loaded back and checked. */
+    @Test
+    fun restoresThePausedStateAfterTheMainRamChangedDuringThePause() {
+        val paused = fixture("ds_cherry_p")
+        val ram = SavestateSoundSplicer.DESMUME.locate(paused).mainRam
+        val main = FakeConsole(SavestateSoundSplicer.DESMUME, paused.copyOf().also { it[ram.offset + 99]++ })
+        assertTrue(resync(SavestateSoundSplicer.DESMUME).restorePaused(main, paused))
+        assertContentEquals(paused, main.state)
+        val corrupting = FakeConsole(SavestateSoundSplicer.DESMUME, paused.copyOf()) { loaded -> loaded[ram.offset + 7]++ }
+        assertTrue(!resync(SavestateSoundSplicer.DESMUME).restorePaused(corrupting, paused), "the RAM still differs after loading")
+    }
+
     @Test
     fun loadsThePausedStateBackWhenTheCoreRejectsTheSplice() {
         val paused = fixture("ds_cherry_p")

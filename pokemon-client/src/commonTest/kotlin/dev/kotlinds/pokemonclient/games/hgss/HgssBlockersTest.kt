@@ -16,7 +16,7 @@ class HgssBlockersTest {
     private fun state(mapId: Int, objects: List<MapObjectInfo> = emptyList(), triggers: List<TriggerInfo> = emptyList(), grid: LocalGrid? = null, story: StoryInfo = StoryInfo()) =
         HgssState(
             frame = 0, mode = GameMode.OVERWORLD, story = story,
-            location = LocationInfo(mapId, "map", null, 0, 0, 0, "south", false, "WALKING"),
+            location = LocationInfo(mapId, 0, 0, 0, "south", false, "WALKING"),
             surroundings = Surroundings(objects = objects, triggers = triggers, grid = grid),
         )
 

@@ -33,12 +33,11 @@ internal object FieldMoveWalk {
         data class Failed(val error: ActionError) : Use
     }
 
-    /** The field moves the party can use now, by the game's rules ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]). */
-    fun access(context: PlanContext, state: GameState): Map<FieldMoveKind, FieldMoveAccess> =
-        FieldMoves.access(state) { context.game.fieldMoveRule(it) }
-
-    /** The field moves of [access] a route may use by itself. */
-    fun usable(access: Map<FieldMoveKind, FieldMoveAccess>): Set<FieldMoveKind> = FieldMoves.usable(access)
+    /**
+     * The field moves the party can use now ([GameState.fieldMoves], read by the game with its rules:
+     * [dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]).
+     */
+    fun access(context: PlanContext, state: GameState): Map<FieldMoveKind, FieldMoveAccess> = FieldMoves.of(state, context.game::fieldMoveRule)
 
     /**
      * Uses [edge]'s field move: faces its direction, A, YES, waits until the player can walk again; for Cut and Rock
@@ -61,6 +60,7 @@ internal object FieldMoveWalk {
             is MovePlans.StepResult.Moved -> Use.Done(step.field)
             is MovePlans.StepResult.Stopped -> Use.Stopped(step.state)
             MovePlans.StepResult.Refused -> Use.Failed(ActionError.Timeout("used ${edge.move.label()} but ${edge.to.x},${edge.to.y} is still blocked"))
+            is MovePlans.StepResult.Failed -> Use.Failed(step.error)
         }
     }
 
@@ -82,7 +82,8 @@ internal object FieldMoveWalk {
      * Walks into the boulder of [edge] (Strength active): the boulder slides one tile while the player stays where they
      * are (HGSS: an animation, the player never moves; holding on afterwards would walk into the freed tile). The
      * direction is held until the boulder leaves its tile (or the player moves), then let go, and the game is left to
-     * end the animation (a boulder dropping through its hole too). [MovePlans.StepResult.Refused] when nothing moved.
+     * end the animation (a boulder dropping through its hole too). [MovePlans.StepResult.Refused] when nothing moved;
+     * [MovePlans.StepResult.Failed] when the player never turned to the boulder (the verification rule).
      * An ice block ([PushEdge.needsStrength] false) is pushed by the slide itself: a plain step.
      */
     fun push(context: PlanContext, edge: PushEdge, options: MoveOptions): MovePlans.StepResult {
@@ -90,14 +91,13 @@ internal object FieldMoveWalk {
         // The last step may have started something (a wild encounter's intro): only push from a free player.
         val ready = context.navigator.settle()
         if (ready.screen !is Screen.Overworld || ready.battle != null) return MovePlans.StepResult.Stopped(ready)
-        // Face the boulder first: a press while facing elsewhere only turns the player.
-        repeat(MAX_TURN_TRIES) {
-            val field = context.state().field ?: return MovePlans.StepResult.Stopped(context.state())
-            if (field.facing == edge.direction) return@repeat
-            context.scope.tap(edge.direction.button)
-            context.scope.step(TURN_FRAMES)
+        // Face the boulder first, verified (a press while facing elsewhere only turns the player): a turn the game
+        // ignores three times is the typed error, never a push held blindly.
+        val start = when (val faced = FieldControl.face(context, edge.direction, "push the boulder")) {
+            is FieldControl.Facing.Faced -> faced.field
+            is FieldControl.Facing.Stopped -> return MovePlans.StepResult.Stopped(faced.state)
+            is FieldControl.Facing.Failed -> return MovePlans.StepResult.Failed(faced.error)
         }
-        val start = context.state().field ?: return MovePlans.StepResult.Stopped(context.state())
         val (bx, by) = edge.objectFrom
         var frames = 0
         var started = false
@@ -106,7 +106,7 @@ internal object FieldMoveWalk {
             frames++
             val state = context.state()
             val field = state.field ?: return MovePlans.StepResult.Stopped(state)
-            if (state.battle != null || state.screen is Screen.Dialogue || state.screen is Screen.Selectable) return MovePlans.StepResult.Stopped(state)
+            if (FieldControl.takenOver(state, FieldControl.Motion.TRANSITION)) return MovePlans.StepResult.Stopped(state)
             started = field.objects.none { it.x == bx && it.y == by } || field.x != start.x || field.y != start.y
         }
         if (!started) {
@@ -124,19 +124,12 @@ internal object FieldMoveWalk {
      * already active) is read to its end and counts as done.
      */
     private fun ask(context: PlanContext, direction: Direction, move: FieldMoveKind, questionOptional: Boolean = false): Use {
-        repeat(MAX_TURN_TRIES) {
-            val field = context.state().field ?: return Use.Stopped(context.state())
-            if (field.facing == direction) return@repeat
-            context.scope.tap(direction.button)
-            context.scope.step(TURN_FRAMES)
+        val field = when (val faced = FieldControl.face(context, direction, "use ${move.label()}")) {
+            is FieldControl.Facing.Faced -> faced.field
+            is FieldControl.Facing.Stopped -> return Use.Stopped(faced.state)
+            is FieldControl.Facing.Failed -> return Use.Failed(faced.error)
         }
-        val ready = context.navigator.settle()
-        val field = ready.field ?: return Use.Stopped(ready)
-        if (ready.screen !is Screen.Overworld) return Use.Stopped(ready)
-        if (field.facing != direction) {
-            return Use.Failed(ActionError.VerificationFailed("face ${direction.name.lowercase()} to use ${move.label()}", direction.name.lowercase(), field.facing?.name?.lowercase() ?: "unknown", MAX_TURN_TRIES))
-        }
-        val before = ready.screen
+        val before = context.state().screen
         context.scope.tap(Button.A)
         context.navigator.awaitChange(before)
         val question = context.navigator.advanceUntil(QUESTION_PRESSES) { it.screen is Screen.YesNo || it.screen is Screen.Overworld || it.battle != null }
@@ -179,6 +172,8 @@ internal object FieldMoveWalk {
             FieldMoveKind.WHIRLPOOL -> "a whirlpool blocks the way at ${failure.x},${failure.y}"
             FieldMoveKind.WATERFALL -> "a waterfall is on the way at ${failure.x},${failure.y}"
             FieldMoveKind.ROCK_CLIMB -> "a rocky wall is on the way at ${failure.x},${failure.y}"
+            // Routes never plan a flight (Fly opens no way on a map): kept for a complete answer.
+            FieldMoveKind.FLY -> "the way needs a flight from ${failure.x},${failure.y}"
         }
         val from = failure.from
         val where = if (from != null && failure.facing != null) " (use it from ${from.x},${from.y} facing ${failure.facing.name.lowercase()})" else ""
@@ -202,21 +197,11 @@ internal object FieldMoveWalk {
         FieldMoveKind.WHIRLPOOL -> "Whirlpool"
         FieldMoveKind.WATERFALL -> "Waterfall"
         FieldMoveKind.ROCK_CLIMB -> "Rock Climb"
+        FieldMoveKind.FLY -> "Fly"
     }
-
-    private val Direction.button
-        get() = when (this) {
-            Direction.NORTH -> Button.UP
-            Direction.SOUTH -> Button.DOWN
-            Direction.WEST -> Button.LEFT
-            Direction.EAST -> Button.RIGHT
-        }
-
-    private const val TURN_FRAMES = 8
 
     /** Longest hold into a boulder before its push starts (a turn first, then the push: about 30 frames). */
     private const val PUSH_START_FRAMES = 64
-    private const val MAX_TURN_TRIES = 3
 
     /** Messages before the question ("The water is dyed a deep blue..."): a few pages at most. */
     private const val QUESTION_PRESSES = 6

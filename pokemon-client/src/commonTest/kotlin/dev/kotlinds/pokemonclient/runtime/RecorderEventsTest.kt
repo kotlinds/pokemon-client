@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.runtime
 
+import dev.kotlinds.pokemonclient.ZeroMemory
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.state.Awaiting
@@ -52,12 +53,7 @@ class RecorderEventsTest {
             override val inputProbe = InputProbe { emptySet() }
         }
         val recorder = Recorder(game, every = 1, evolvesInto = evolvesInto)
-        val memory = object : Memory {
-            override fun read8(addr: Long) = 0
-            override fun read16(addr: Long) = 0
-            override fun read32(addr: Long) = 0L
-            override fun readBytes(addr: Long, size: Int) = ByteArray(size)
-        }
+        val memory = ZeroMemory
         states.forEachIndexed { frame, state ->
             current = state
             recorder.onFrame(frame.toLong(), { memory })

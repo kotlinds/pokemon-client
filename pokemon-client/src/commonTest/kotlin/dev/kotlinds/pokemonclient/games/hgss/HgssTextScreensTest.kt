@@ -1,6 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.console.Button
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.Awaiting
@@ -59,6 +61,91 @@ class HgssTextScreensTest {
         val screen = assertIs<Screen.Dialogue>(screen("text_nurse_last"))
         assertEquals(Awaiting.INPUT, screen.awaiting)
         assertEquals("Please, come back again any time!", screen.text)
+    }
+
+    /**
+     * An open message box whose text can't be read (here its String pointer cleared) is said so, [Screen.Unknown]
+     * waiting for A like the script does, never a busy overworld that would stall the agent silently.
+     */
+    @Test
+    fun anOpenMessageBoxWhoseTextCannotBeReadIsUnknownWaitingForA() {
+        val memory = HgssFixtures.load("text_nurse_last")
+        val mem = HgssMemory(memory, version)
+        val fs = assertNotNull(mem.ptr(version.fieldSystemPtr))
+        val env = assertNotNull(mem.fieldTaskStack(fs).firstNotNullOfOrNull { task ->
+            task.env?.takeIf { mem.u32(it + Gen4Structs.SM_MAGIC) == Gen4Structs.SCRIPT_MANAGER_MAGIC }
+        })
+        val unreadable = object : Memory by memory {
+            override fun read32(addr: Long) = if (addr == env + HgssAddresses.SE_STRING_BUFFER_0) 0L else memory.read32(addr)
+        }
+        val screen = assertIs<Screen.Unknown>(HgssGame(version).state(unreadable).screen)
+        assertEquals(Awaiting.INPUT, screen.awaiting)
+        assertEquals(HgssScriptScreens.UNREADABLE_MESSAGE, screen.hint)
+    }
+
+    /** [base] with some bytes written over it (little-endian writers at bus addresses). */
+    private class Patched(private val base: Memory) : Memory {
+        private val bytes = HashMap<Long, Int>()
+        fun u8(addr: Long, value: Int) { bytes[addr] = value and 0xFF }
+        fun u16(addr: Long, value: Int) { u8(addr, value); u8(addr + 1, value shr 8) }
+        fun u32(addr: Long, value: Long) { u16(addr, value.toInt()); u16(addr + 2, (value shr 16).toInt()) }
+        override fun read8(addr: Long) = bytes[addr] ?: base.read8(addr)
+        override fun read16(addr: Long) = read8(addr) or (read8(addr + 1) shl 8)
+        override fun read32(addr: Long) = (read16(addr).toLong() or (read16(addr + 2).toLong() shl 16)) and 0xFFFFFFFFL
+        override fun readBytes(addr: Long, size: Int) = ByteArray(size) { read8(addr + it).toByte() }
+
+        /** A game `String` of [text] at [addr]. */
+        fun string(addr: Long, text: String) {
+            val reverse = dev.kotlinds.pokemonclient.games.gen4.Gen4Charmap.table.entries.filter { it.value.length == 1 }.associate { it.value[0] to it.key }
+            u16(addr + Gen4Structs.STR_MAXSIZE, text.length)
+            u16(addr + Gen4Structs.STR_SIZE, text.length)
+            u32(addr + Gen4Structs.STR_MAGIC, Gen4Structs.STRING_MAGIC)
+            text.forEachIndexed { i, c -> u16(addr + Gen4Structs.STR_DATA + 2L * i, reverse.getValue(c)) }
+        }
+    }
+
+    /**
+     * A top-screen multichoice (`ScrCmd_064`..`067`, the script waiting in its menu wait): the options are its
+     * FieldMenu's Strings by position, the cursor its ListMenu2D's, B picks the last one. No capture has one: the nurse's
+     * message fixture is turned into one (its waiting context set to the menu wait, a FieldMenu written in free RAM).
+     */
+    @Test
+    fun topScreenMultichoiceIsReadFromItsFieldMenu() {
+        val base = HgssFixtures.load("text_nurse_last")
+        val mem = HgssMemory(base, version)
+        val fs = assertNotNull(mem.ptr(version.fieldSystemPtr))
+        val env = assertNotNull(mem.fieldTaskStack(fs).firstNotNullOfOrNull { task ->
+            task.env?.takeIf { mem.u32(it + Gen4Structs.SM_MAGIC) == Gen4Structs.SCRIPT_MANAGER_MAGIC }
+        })
+        val waiting = mem.waitingScriptContexts(env, version.scriptContexts, HgssTextAddresses.FN_SCR_WAIT_STD).first()
+        val ram = Patched(base)
+        ram.u32(waiting + Gen4Structs.SC_NATIVE, version.fnScrMenuWait1 or 1)
+        val menu = 0x023E0000L
+        val list = 0x023E1000L
+        ram.u32(env + HgssAddresses.SE_FIELD_MENU, menu)
+        ram.u8(menu + HgssAddresses.FMENU_COUNT, 3)
+        listOf("RED", "BLUE", "CANCEL").forEachIndexed { i, label ->
+            val string = 0x023E2000L + 0x100L * i
+            ram.string(string, label)
+            ram.u32(menu + HgssAddresses.FMENU_ITEMS_TOP + i * HgssAddresses.LIST_MENU_ITEM_SIZE, string)
+        }
+        ram.u32(menu + HgssAddresses.FMENU_LIST_MENU, list)
+        ram.u8(list + HgssAddresses.LM2D_SELECTED, 1)
+        val screen = assertIs<Screen.ListMenu>(HgssGame(version).state(ram).screen)
+        assertEquals(MenuKind.MULTICHOICE, screen.kind)
+        assertEquals(listOf("option:0", "option:1", "option:2"), screen.ids())
+        assertEquals(listOf("RED", "BLUE", "CANCEL"), screen.entries.map { it.label })
+        assertEquals(Cursor.At(1), screen.cursor)
+        assertEquals(CancelBehavior.CONFIRMS_LAST, screen.cancel)
+    }
+
+    /** The following Pokémon's message (printed outside the script environment) is a field dialogue. */
+    @Test
+    fun theFollowersMessageIsAFieldDialogue() {
+        val screen = assertIs<Screen.Dialogue>(screen("fol1"))
+        assertEquals(TextSource.FIELD, screen.source)
+        assertEquals(Awaiting.TEXT_PRINTING, screen.awaiting)
+        assertTrue(screen.text.startsWith("CYNDAQUIL"), screen.text)
     }
 
     @Test

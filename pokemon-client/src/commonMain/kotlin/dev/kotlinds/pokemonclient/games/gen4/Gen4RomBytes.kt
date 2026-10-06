@@ -2,8 +2,11 @@ package dev.kotlinds.pokemonclient.games.gen4
 
 import dev.kotlinds.BlzCodec
 
-/** Little-endian reads of ROM files (NARC members, the ARM9 binary), shared by the Gen 4 ROM decoders. */
-internal object Gen4RomBytes {
+/**
+ * Little-endian reads of byte arrays (the DS is little-endian): ROM files (NARC members, the ARM9 binary) and structures
+ * copied out of RAM (a Pokémon, the save's gym puzzle slot), shared by every Gen 4 decoder.
+ */
+object Gen4RomBytes {
     fun u8(b: ByteArray, o: Int): Int = b[o].toInt() and 0xFF
     fun u16(b: ByteArray, o: Int): Int = u8(b, o) or (u8(b, o + 1) shl 8)
     fun s16(b: ByteArray, o: Int): Int = u16(b, o).toShort().toInt()

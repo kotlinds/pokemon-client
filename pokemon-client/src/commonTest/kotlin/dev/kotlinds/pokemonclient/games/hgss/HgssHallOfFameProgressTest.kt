@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.sameAs
@@ -40,7 +41,7 @@ class HgssHallOfFameProgressTest {
         ram.put32(version.fieldSystemPtr, fs)
         ram.put32(fs + HgssAddresses.FS_SUB0, sub0)
         ram.put32(sub0 + HgssAddresses.FSS0_SUB_APP, app)
-        ram.put32(app + HgssAddresses.OM_DATA, data)
+        ram.put32(app + S.OM_DATA, data)
         ram.put32(data + 0x13048L, count.toLong())
         ram.put32(data + 0x1304CL, scene.toLong())
         ram.put16(data + 0x13056L, mon)

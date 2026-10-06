@@ -1,16 +1,20 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.world.FieldMoves
+
 import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.state.ContinueReason
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.state.Entry
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.MapName
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
 
 /** Recipes of field actions reached from the start menu (save...). */
 internal object FieldPlans {
@@ -185,8 +189,9 @@ internal object FieldPlans {
      * knowing Fly is tried only if the game doesn't offer it.
      */
     private fun openFlyMap(context: PlanContext): Step<GameState> {
-        val flyers = context.state().party.filter { mon -> !mon.isEgg && mon.moves.any { it.move.id.value == CommonActions.MOVE_FLY } }
-            .sortedBy { it.fainted }
+        // The game's Fly move (its rule), never a move name.
+        val fly = context.game.fieldMoveRule(FieldMoveKind.FLY)?.move
+        val flyers = fly?.let { FieldMoves.knowers(context.state(), it) }.orEmpty().sortedBy { it.fainted }
         if (flyers.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly"))
         return PartyBagPlans.openParty(context).andThen { state ->
             if (state.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", state.screen.kind))
@@ -198,8 +203,7 @@ internal object FieldPlans {
                     return@andThen context.navigator.choose(Screen.ContextMenu::class, "FLY") { it.id == "fieldmove:fly" }
                 }
                 // Not offered: back to the party, then the next one.
-                context.scope.tap(Button.B)
-                context.navigator.awaitChange(menu ?: context.state().screen)
+                context.navigator.press(Button.B, menu ?: context.state().screen, maxFrames = 120)
             }
             Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "The game doesn't offer FLY for ${flyers.joinToString { it.displayName }}", "heal them first"))
         }.andThen { awaitFlyMap(context) }
@@ -210,24 +214,15 @@ internal object FieldPlans {
      * party again): NOT_FLYABLE_HERE.
      */
     private fun awaitFlyMap(context: PlanContext): Step<GameState> {
+        // A message on the way is the game's refusal: read it, then the party is back instead of the map.
         var refused = false
-        repeat(FLY_WAITS) {
-            val state = context.navigator.settle()
-            when (state.screen) {
-                is Screen.FlyMap -> return Step.Done(state)
-                is Screen.Dialogue, is Screen.PressToContinue -> {
-                    refused = true
-                    context.scope.tap(Button.A)
-                    context.navigator.awaitChange(state.screen, maxFrames = 60)
-                }
-                is Screen.Animation -> context.scope.step(10)
-                else -> return Step.Failed(
-                    if (refused) ActionError.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "The game refused Fly here", "go outdoors")
-                    else ActionError.UnexpectedScreen("the fly map", state.screen.kind),
-                )
-            }
+        val opened = context.navigator.advanceUntil(FLY_WAITS, waitOn = { it is Screen.Animation }, onMessage = { refused = true }) { it.screen is Screen.FlyMap }
+        return when {
+            opened is Step.Done -> opened
+            (opened as Step.Failed).error is ActionError.Timeout -> Step.Failed(ActionError.Timeout("the fly map didn't open"))
+            refused -> Step.Failed(ActionError.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "The game refused Fly here", "go outdoors"))
+            else -> Step.Failed(ActionError.UnexpectedScreen("the fly map", context.state().screen.kind))
         }
-        return Step.Failed(ActionError.Timeout("the fly map didn't open"))
     }
 
     /**
@@ -267,8 +262,8 @@ internal object FieldPlans {
         // `fly:<id>`, the town's label, or its map's name with or without "Town" / "City" ("Cerulean" = "Cerulean City").
         fun names(e: Entry): Boolean {
             val id = e.id.removePrefix("fly:").toIntOrNull() ?: return false
-            return matchesRef(destination, "fly", id, e.label) || WorldTravel.sameMapName(e.label, destination) ||
-                context.game.zoneName(id)?.let { WorldTravel.sameMapName(it, destination) } == true
+            return matchesRef(destination, "fly", id, e.label) || MapName.sameMapName(e.label, destination) ||
+                context.game.mapName(id).let { it.isNamed(destination) || it.placeIs(destination) }
         }
         val map = start.screen as? Screen.FlyMap ?: return Step.Failed(ActionError.UnexpectedScreen("the fly map", start.screen.kind))
         val asked = map.entries.firstOrNull { e -> e.id == destination || (e.id.startsWith("fly:") && names(e)) }

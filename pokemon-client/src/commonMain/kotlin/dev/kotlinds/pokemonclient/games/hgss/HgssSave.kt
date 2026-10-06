@@ -1,5 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import dev.kotlinds.pokemonclient.data.GrowthRate
 import dev.kotlinds.pokemonclient.state.BattleStyle
 import dev.kotlinds.pokemonclient.state.BoxMon
@@ -149,12 +152,12 @@ internal class HgssBoxReader {
         val storage = save.pcStorage() ?: return null
         // One copy of the whole storage (boxes, current box, names): far cheaper than thousands of small reads.
         val raw = mem.bytes(storage, STORAGE_READ_SIZE) ?: return null
-        val current = HgssRomBytes.s32(raw, PCS_CURRENT_BOX.toInt())
+        val current = Gen4RomBytes.s32(raw, PCS_CURRENT_BOX.toInt())
         if (current !in 0 until K.BOX_COUNT) return null
         val boxes = (0 until K.BOX_COUNT).map { box ->
             val mons = (0 until K.BOX_SLOTS).mapNotNull { slot ->
                 val offset = (box * K.PCS_BOX_STRIDE + slot * K.BOX_MON_SIZE).toInt()
-                val key = SlotKey(HgssRomBytes.u32(raw, offset), HgssRomBytes.u32(raw, offset + 4))
+                val key = SlotKey(Gen4RomBytes.u32(raw, offset), Gen4RomBytes.u32(raw, offset + 4))
                 val index = box * K.BOX_SLOTS + slot
                 val cached = cache[index]
                 if (cached != null && cached.first == key) return@mapNotNull cached.second
@@ -164,7 +167,7 @@ internal class HgssBoxReader {
                 mon
             }
             val names = (K.PCS_BOX_NAMES + box * K.PCS_BOX_NAME_CHARS * 2L).toInt()
-            val name = HgssText.decode(IntArray(K.PCS_BOX_NAME_CHARS) { HgssRomBytes.u16(raw, names + 2 * it) })
+            val name = Gen4Text.decode(IntArray(K.PCS_BOX_NAME_CHARS) { Gen4RomBytes.u16(raw, names + 2 * it) })
                 .takeIf { it.isNotBlank() } ?: "BOX ${box + 1}"
             PcBoxContents(box, name, mons, K.BOX_SLOTS)
         }
@@ -172,10 +175,10 @@ internal class HgssBoxReader {
     }
 
     private fun decode(raw: ByteArray, box: Int, slot: Int): BoxMon? {
-        val mon = HgssPokemon.decode(raw) ?: return null
+        val mon = Gen4Pokemon.decode(raw) ?: return null
         if (!mon.checksumOk || mon.species == 0 || mon.species > PartyMon.MAX_SPECIES) return null
         val speciesName = HgssData.speciesName(mon.species)
-        val nickname = if (mon.isEgg) null else HgssText.decode(mon.nicknameChars).takeIf { it.isNotEmpty() && it != speciesName }
+        val nickname = if (mon.isEgg) null else Gen4Text.decode(mon.nicknameChars).takeIf { it.isNotEmpty() && it != speciesName }
         return BoxMon(
             id = MonId(mon.personality, mon.otId),
             box = box,

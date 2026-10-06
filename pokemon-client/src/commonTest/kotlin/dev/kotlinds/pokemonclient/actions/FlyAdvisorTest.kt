@@ -10,6 +10,7 @@ import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.PlayerInfo
 import dev.kotlinds.pokemonclient.world.Area
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.Region
 import dev.kotlinds.pokemonclient.world.TileInfo
 import dev.kotlinds.pokemonclient.world.TileKind
@@ -20,6 +21,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * Fly suggestions ([FlyAdvisor]) on an overworld strip of five maps, west to east: the player's town (map 1, x 0-19),
@@ -49,15 +51,18 @@ class FlyAdvisorTest {
     private val near = FlyDestination("fly:4", NEAR_TOWN, "Near Town")
     private val far = FlyDestination("fly:5", FAR_TOWN, "Far Town")
 
-    private fun state(destinations: List<FlyDestination>, x: Int = 0, badges: Set<Int> = setOf(CommonActions.FLY_BADGE_ID), knowsFly: Boolean = true) = GameState(
+    /** HGSS's Fly rule (the move, the Storm Badge by id). */
+    private val fly = hgssFieldMoves(FieldMoveKind.FLY)!!
+
+    private fun state(destinations: List<FlyDestination>, x: Int = 0, badges: Set<Int> = setOf(fly.badgeId!!), knowsFly: Boolean = true) = GameState(
         0, OVERWORLD,
         PlayerInfo("ACE", 0, emptyList(), 1, badgeIds = badges, flyDestinations = destinations),
-        listOf(mon(1, moves = if (knowsFly) listOf(move(CommonActions.MOVE_FLY, "Fly")) else emptyList())),
+        listOf(mon(1, moves = if (knowsFly) listOf(move(fly.move.value, "Fly")) else emptyList())),
         null, null,
-        FieldState(zones[x], "map ${zones[x]}", x, 0, 0, Direction.EAST, MovementMode.WALK, moving = false),
+        FieldState(zones[x], MapName(zones[x], map = "map ${zones[x]}"), x, 0, 0, Direction.EAST, MovementMode.WALK, moving = false),
     )
 
-    private fun advisor(regions: Map<Int, Int> = emptyMap()) = FlyAdvisor(FakeGame(OVERWORLD).apply { world = world(regions) })
+    private fun advisor(regions: Map<Int, Int> = emptyMap()) = FlyAdvisor(FakeGame(OVERWORLD).apply { world = world(regions); fieldMoveRules = hgssFieldMoves })
 
     @Test
     fun theDestinationLandingNextToAFarPlaceIsSuggested() {

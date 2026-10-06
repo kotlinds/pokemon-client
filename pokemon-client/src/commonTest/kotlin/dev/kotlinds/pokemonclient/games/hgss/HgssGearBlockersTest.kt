@@ -1,6 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.Memory
+import dev.kotlinds.pokemonclient.ZeroMemory
 import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.BlockerCause
 import dev.kotlinds.pokemonclient.state.RadioStation
@@ -19,7 +19,7 @@ class HgssGearBlockersTest {
 
     private fun route11(story: StoryInfo = StoryInfo()) = HgssState(
         frame = 0, mode = GameMode.OVERWORLD, story = story,
-        location = LocationInfo(ROUTE_11, "map", null, 0, 0, 0, "south", false, "WALKING"),
+        location = LocationInfo(ROUTE_11, 0, 0, 0, "south", false, "WALKING"),
         surroundings = Surroundings(objects = listOf(person(4, 10, 10, ROUTE_11))),
     )
 
@@ -33,12 +33,7 @@ class HgssGearBlockersTest {
         assertTrue(HgssBlockers.of(route11(StoryInfo(flags = setOf(HgssStoryTable.Flags.SNORLAX_BEATEN)))).isEmpty())
     }
 
-    private val noRam = HgssMemory(object : Memory {
-        override fun read8(addr: Long) = 0
-        override fun read16(addr: Long) = 0
-        override fun read32(addr: Long) = 0L
-        override fun readBytes(addr: Long, size: Int) = ByteArray(size)
-    }, HgssVersion.HEARTGOLD_US)
+    private val noRam = HgssMemory(ZeroMemory, HgssVersion.HEARTGOLD_US)
 
     /** The credits as they roll and "The End" are read from their app ([HgssGameClearFixtureTest]); unreadable, a transition. */
     @Test

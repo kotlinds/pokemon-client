@@ -2,7 +2,6 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.state.Entry
 import dev.kotlinds.pokemonclient.state.Screen
-import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Pathfinder
 import dev.kotlinds.pokemonclient.world.WorldRouter
 
@@ -28,12 +27,12 @@ internal object FlyHints {
         if (world.flyAllowed(field.mapId) == null) return null
         val overlay = MovePlans.overlay(context, field, emptySet())
         val router = WorldRouter(world) { _, a -> if (a === area) overlay else WorldRouter.staticOverlay(a) }
-        val start = Node(field.x, field.y, Pathfinder(area).levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))
+        val start = Pathfinder(area).nodeOf(field)
         val route = router.route(field.mapId, start, WorldTravel.worldRouteOptions(context, field, MoveOptions(acceptOneWay = true))) { place ->
             place.zone?.let { world.flyAllowed(it) } == true
         } ?: return null
         val zone = route.end.zone ?: return null
-        val name = context.game.zoneName(zone) ?: "map:$zone"
+        val name = context.game.mapName(zone).toString()
         val via = route.links.firstOrNull()?.let { ", via ${it.id}" } ?: ""
         return "the nearest place where Fly works: $name$via (go_to \"$name\")"
     }
@@ -47,11 +46,11 @@ internal object FlyHints {
         val world = context.game.world ?: return null
         val here = world.regionOf(startMap) ?: return null
         val zone = destination.removePrefix("fly:").toIntOrNull()?.takeIf { destination.startsWith("fly:") }
-            ?: (0 until world.zoneCount).firstOrNull { id -> context.game.zoneName(id)?.let { WorldTravel.sameMapName(it, destination) } == true }
+            ?: (0 until world.zoneCount).firstOrNull { id -> context.game.mapName(id).let { it.isNamed(destination) || it.placeIs(destination) } }
             ?: return null
         val there = world.regionOf(zone) ?: return null
         if (there.id == here.id) return null
-        return regionError(context.game.zoneName(zone) ?: destination, here.name, there.name)
+        return regionError(context.game.mapName(zone).place, here.name, there.name)
     }
 
     /**

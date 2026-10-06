@@ -319,10 +319,7 @@ enum class MoveTarget {
     USER_OR_ALLY,
 
     /** One foe in front (Me First). */
-    FRONT;
-
-    /** True when the move hits several battlers at once (its power is reduced in doubles, it may hit the ally). */
-    val isSpread: Boolean get() = this == ALL_FOES || this == ALL_OTHERS
+    FRONT,
 }
 
 /** Data of one item. */
@@ -358,9 +355,15 @@ class TypeChart(
     fun effectiveness(attacking: PokemonType, defending: PokemonType): Effectiveness =
         matrix[attacking to defending] ?: Effectiveness.NORMAL
 
-    /** Combined multiplier of [attacking] against a Pokémon of types [defending] (product over its types). */
-    fun multiplier(attacking: PokemonType, defending: List<PokemonType>): Double =
-        defending.distinct().fold(1.0) { acc, t -> acc * effectiveness(attacking, t).multiplier }
+    /**
+     * Combined multiplier of [attacking] against a Pokémon of types [defending] (product over its types). [identified]:
+     * the target is identified (Foresight / Odor Sleuth) or the attacker has Scrappy, so the game skips the
+     * [ignoredByForesight] pairs: Normal and Fighting hit Ghost normally.
+     */
+    fun multiplier(attacking: PokemonType, defending: List<PokemonType>, identified: Boolean = false): Double =
+        defending.distinct().fold(1.0) { acc, t ->
+            acc * if (identified && (attacking to t) in ignoredByForesight) 1.0 else effectiveness(attacking, t).multiplier
+        }
 
     /** The pairs that are not [Effectiveness.NORMAL]. */
     val matchups: Map<Pair<PokemonType, PokemonType>, Effectiveness> get() = matrix

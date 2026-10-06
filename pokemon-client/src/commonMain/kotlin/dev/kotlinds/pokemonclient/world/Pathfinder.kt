@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.world
 
 import dev.kotlinds.pokemonclient.Direction
+import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.MovementMode
 
 /** A position in an [Area]: tile coordinates plus the height level (index into [TileInfo.heights], 0 when flat). */
@@ -50,7 +51,7 @@ sealed interface Edge {
             get() {
                 val last = tiles.last()
                 val before = tiles.getOrNull(tiles.size - 2) ?: return direction
-                return Direction.entries.firstOrNull { before.x + it.dx == last.x && before.y + it.dy == last.y } ?: direction
+                return Direction.step(before.x, before.y, last.x, last.y) ?: direction
             }
     }
 
@@ -222,6 +223,50 @@ data class Route(val edges: List<Edge>, val warnings: List<RouteWarning>) {
     val end: Node? get() = edges.lastOrNull()?.to
 }
 
+/**
+ * How a player's height ([FieldState.height], and the heights of [dev.kotlinds.pokemonclient.state.PuzzleState]) maps
+ * to the BDHC heights of [TileInfo.heights]: one field height unit is 8 BDHC units, on every Gen 4 game.
+ */
+const val FIELD_HEIGHT_UNITS = 8
+
+/** What [ledgeRule] chose. */
+internal sealed interface LedgeChoice {
+    /** Walk [edges]; [oneWay] when they jump ledges with no way back ([RouteWarning.OneWay]). */
+    data class Take(val edges: List<Edge>, val oneWay: Boolean) : LedgeChoice
+
+    /** Only a way with no way back exists, and [RouteOptions.acceptOneWay] is false ([RouteFailure.OnlyOneWay]). */
+    data object OnlyOneWay : LedgeChoice
+}
+
+/**
+ * The ledge rule of the planners within one area ([Pathfinder], [PushPlanner], [PlatformPlanner]), applied to the
+ * cheapest route [found] with ledges allowed. ([WorldRouter], across maps, keeps the plain rule: ledges only with
+ * [RouteOptions.acceptOneWay]; a way back across maps isn't searched.) One way means no way back, not "jumps a ledge": a ledge is just a shortcut while the
+ * start can be reached again from the end ([wayBack], by another way: Route 29's ledges towards New Bark). Only a route
+ * with no way back needs [RouteOptions.acceptOneWay] (the way from Blackthorn down to Route 45); without it, the way
+ * without ledges ([withoutJumps]) when one exists, else [LedgeChoice.OnlyOneWay].
+ */
+internal fun ledgeRule(found: List<Edge>, options: RouteOptions, wayBack: () -> Boolean, withoutJumps: () -> List<Edge>?): LedgeChoice {
+    val oneWay = found.any { it is Edge.Jump } && !wayBack()
+    if (!oneWay || options.acceptOneWay) return LedgeChoice.Take(found, oneWay)
+    return withoutJumps()?.let { LedgeChoice.Take(it, oneWay = false) } ?: LedgeChoice.OnlyOneWay
+}
+
+/**
+ * The [ledgeRule] over a bounded search ([PushPlanner], [PlatformPlanner]): [plan] with ledges first. "Over the bound"
+ * isn't "no plan": ledges open more places, so the search with them can reach its bound
+ * ([SearchResult.OverBound]) where the one without them (fewer places) still finds a plan; that plan is then taken
+ * (no jump: no way back to check). Only an exhausted search ([SearchResult.Exhausted]: no plan at all, even with
+ * ledges) gives up at once. [wayBack]: true when the start can be walked back to from the end state of a plan. Null
+ * when no plan exists within the bound.
+ */
+internal fun <S> boundedLedgeRule(options: RouteOptions, plan: (allowJumps: Boolean) -> SearchResult<S, *, Edge>, wayBack: (end: S) -> Boolean): LedgeChoice? =
+    when (val withJumps = plan(true)) {
+        is SearchResult.Found -> ledgeRule(withJumps.path.labels, options, { wayBack(withJumps.path.end) }) { plan(false).found?.labels }
+        SearchResult.OverBound -> plan(false).found?.let { LedgeChoice.Take(it.labels, oneWay = false) }
+        is SearchResult.Exhausted -> null
+    }
+
 /** Things worth knowing about a route. */
 sealed interface RouteWarning {
     data class CrossesTallGrass(val tiles: Int) : RouteWarning
@@ -326,6 +371,12 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         return heights.indices.minBy { kotlin.math.abs(heights[it] - height) }
     }
 
+    /**
+     * Where the player of [field] stands, as the start (or end) of a route: their tile, at the level closest to their
+     * height ([FieldState.height], in [FIELD_HEIGHT_UNITS]).
+     */
+    fun nodeOf(field: FieldState): Node = Node(field.x, field.y, levelAt(field.x, field.y, field.height * FIELD_HEIGHT_UNITS))
+
     /** Cheapest route from [start] to any node satisfying [isGoal] (goal tiles may be warps or triggers). */
     fun route(start: Node, options: RouteOptions = RouteOptions(), goalTiles: Set<Pair<Int, Int>> = emptySet(), isGoal: (Node) -> Boolean): Result {
         if (tile(start.x, start.y) == null) return Result.Failed(RouteFailure.StartUnknown)
@@ -334,21 +385,19 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         val found = search(start, options, goalTiles, isGoal, allowJumps = true)
             ?: search(start, options, goalTiles, isGoal, allowJumps = true, allowTriggers = true).also { triggers = true }
             ?: return Result.Failed(blockedBy(start, options, goalTiles, isGoal))
-        val jumps = found.any { it is Edge.Jump }
-        // One way = no way back, not "jumps a ledge": a ledge is just a shortcut while the start can be reached again
-        // from the end (by another way: Route 29's ledges towards New Bark). Only a route with no way back needs
-        // [RouteOptions.acceptOneWay] (the way from Blackthorn down to Route 45).
-        val oneWay = jumps && !hasWayBack(found.last().to, start, options, triggers)
-        if (oneWay && !options.acceptOneWay) {
-            // Prefer a route without ledges when one exists; otherwise refuse with the reason.
-            val flat = search(start, options, goalTiles, isGoal, allowJumps = false, allowTriggers = triggers)
-            return if (flat != null) Result.Found(route(flat, options)) else Result.Failed(RouteFailure.OnlyOneWay)
+        return when (val ledges = ledgeRule(found, options, wayBack = { hasWayBack(found.last().to, start, options, triggers) }) {
+            search(start, options, goalTiles, isGoal, allowJumps = false, allowTriggers = triggers)
+        }) {
+            is LedgeChoice.Take -> Result.Found(describe(ledges.edges, ledges.oneWay))
+            LedgeChoice.OnlyOneWay -> Result.Failed(RouteFailure.OnlyOneWay)
         }
-        return Result.Found(route(found, options, oneWay))
     }
 
-    /** True when [start] can be walked back to from [end] (ledges allowed: any way back will do). */
-    private fun hasWayBack(end: Node, start: Node, options: RouteOptions, triggers: Boolean): Boolean =
+    /**
+     * True when [start] can be walked back to from [end] (ledges allowed: any way back will do), through active
+     * triggers with [triggers].
+     */
+    internal fun hasWayBack(end: Node, start: Node, options: RouteOptions, triggers: Boolean = false): Boolean =
         search(end, options, setOf(start.x to start.y), { it.x == start.x && it.y == start.y }, allowJumps = true, allowTriggers = triggers) != null
 
     /** The outcome of [route]. */
@@ -369,7 +418,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
             for (node in edge.tiles) {
                 val tile = tile(node.x, node.y)
                 val move = tile?.let { gate(it, node.x, node.y, options) }
-                if (move != null) return RouteFailure.NeedsFieldMove(move, node.x, node.y, before, directionBetween(before, node) ?: edge.direction)
+                if (move != null) return RouteFailure.NeedsFieldMove(move, node.x, node.y, before, Direction.step(before.x, before.y, node.x, node.y) ?: edge.direction)
                 before = node
             }
             from = edge.to
@@ -400,7 +449,12 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         return null
     }
 
-    private fun route(edges: List<Edge>, options: RouteOptions, oneWay: Boolean = false): Route {
+    /**
+     * [edges] as a [Route], with what the agent should know about it (the same for every planner: [PushPlanner] and
+     * [PlatformPlanner] describe their routes here too): the tall grass and trainers' sight it crosses, no way back
+     * ([oneWay], see [ledgeRule]), the scene a trigger on the way starts.
+     */
+    internal fun describe(edges: List<Edge>, oneWay: Boolean = false): Route {
         val crossed = edges.flatMap { it.tiles }
         val warnings = buildList {
             val grass = crossed.count { tile(it.x, it.y)?.kind == TileKind.TallGrass }
@@ -415,7 +469,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     /**
      * What a change of direction on [node] costs: [RouteOptions.turnPenalty], plus, with [soft] costs, an encounter
      * check where wild Pokémon appear (the game rolls one when the player turns in place there, like after a step:
-     * [StepWeights]). The same whatever the directions, so the cut of [turnDominated] holds with it.
+     * [StepWeights]). The same whatever the directions, so the cut of [dijkstra] holds with it.
      */
     fun turnCostAt(node: Node, options: RouteOptions, soft: Boolean = true): Int {
         val penalty = options.turnPenalty
@@ -425,15 +479,11 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     }
 
     /**
-     * The cheapest route from [start] to a node where [isGoal] holds (Dijkstra), counting [RouteOptions.turnPenalty]
+     * The cheapest route from [start] to a node where [isGoal] holds ([dijkstra]), counting [RouteOptions.turnPenalty]
      * for every change of direction between two moves ([turnCostAt]).
      *
      * The turn makes the cost of a move depend on the previous one, so the search runs over [Heading]s (a node and the
-     * direction the player arrived in), up to four per tile. Most of them are cut: a heading reached for at least one
-     * turn more than the cheapest heading of the same node can't lead anywhere cheaper (from the cheapest one, any
-     * move costs at most one turn more), so it isn't explored ([turnDominated]). With no turn cost this is the plain
-     * Dijkstra over nodes. No A* heuristic: ledges (2 tiles for 1) and teleports make the distance to the goal
-     * overestimate the cost, and the searches are small enough without one.
+     * direction the player arrived in), up to four per tile, most of them cut by the search (see [dijkstra]).
      */
     private fun search(
         start: Node,
@@ -445,69 +495,29 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         allowTriggers: Boolean = false,
         ignorePeople: Boolean = false,
         ignoreBarriers: Boolean = false,
-    ): List<Edge>? {
-        // Also while looking for what blocks a route: between ways crossing the same obstacles, the straighter one
+    ): List<Edge>? = dijkstra(
+        start = Heading(start, null),
+        place = { it.node },
+        isGoal = { isGoal(it.node) },
+        // Field moves and people are only crossed to tell what blocks: soft costs don't matter there. The turns count
+        // also while looking for what blocks a route: between ways crossing the same obstacles, the straighter one
         // tells where to stand (the tile in front of a boulder, a person).
-        val first = Heading(start, null)
-        val dist = HashMap<Heading, Int>()
-        val previous = HashMap<Heading, Pair<Heading, Edge>>()
-        val settled = HashMap<Node, Int>()
-        val queue = PriorityQueue<Pair<Heading, Int>> { a, b -> a.second - b.second }
-        dist[first] = 0
-        queue.add(first to 0)
-        while (queue.isNotEmpty()) {
-            val (heading, d) = queue.poll()
-            if (d > (dist[heading] ?: Int.MAX_VALUE)) continue
-            val node = heading.node
-            // Field moves and people are only crossed to tell what blocks: soft costs don't matter there.
-            val turnCost = turnCostAt(node, options, soft = !relaxed && !ignorePeople && !ignoreBarriers)
-            if (turnDominated(settled, node, d, turnCost)) continue
-            if (node != start && isGoal(node)) return path(previous, first, heading)
-            for (edge in neighbours(node, options, goalTiles, allowJumps, relaxed, allowTriggers, ignorePeople, ignoreBarriers)) {
-                val next = d + edge.cost + turn(heading.direction, edge, turnCost)
-                val to = Heading(edge.to, edge.endDirection)
-                if (next < (dist[to] ?: Int.MAX_VALUE)) {
-                    dist[to] = next
-                    previous[to] = heading to edge
-                    queue.add(to to next)
-                }
-            }
+        turnCost = { turnCostAt(it.node, options, soft = !relaxed && !ignorePeople && !ignoreBarriers) },
+    ) { heading, turnCost ->
+        neighbours(heading.node, options, goalTiles, allowJumps, relaxed, allowTriggers, ignorePeople, ignoreBarriers).map { edge ->
+            SearchMove(Heading(edge.to, edge.endDirection), edge.cost + turn(heading.direction, edge, turnCost), edge)
         }
-        return null
-    }
+    }.found?.labels
 
     /**
-     * Every node reachable from [start] within [maxCost] (Dijkstra without a goal), with its cost. Ledges are only
+     * Every node reachable from [start] within [maxCost] ([dijkstra] without a goal), with its cost. Ledges are only
      * jumped when [RouteOptions.acceptOneWay] is set.
      */
     fun reachable(start: Node, options: RouteOptions = RouteOptions(), maxCost: Int = DEFAULT_REACH): Map<Node, Int> {
-        val dist = HashMap<Node, Int>()
-        val queue = PriorityQueue<Pair<Node, Int>> { a, b -> a.second - b.second }
-        dist[start] = 0
-        queue.add(start to 0)
-        while (queue.isNotEmpty()) {
-            val (node, d) = queue.poll()
-            if (d > (dist[node] ?: Int.MAX_VALUE)) continue
-            for (edge in neighbours(node, options, allowJumps = options.acceptOneWay)) {
-                val next = d + edge.cost
-                if (next <= maxCost && next < (dist[edge.to] ?: Int.MAX_VALUE)) {
-                    dist[edge.to] = next
-                    queue.add(edge.to to next)
-                }
-            }
+        val result = dijkstra(start = start, place = { it }, maxCost = maxCost) { node, _ ->
+            neighbours(node, options, allowJumps = options.acceptOneWay).map { SearchMove(it.to, it.cost, it) }
         }
-        return dist
-    }
-
-    private fun path(previous: Map<Heading, Pair<Heading, Edge>>, start: Heading, end: Heading): List<Edge> {
-        val edges = ArrayDeque<Edge>()
-        var at = end
-        while (at != start) {
-            val (from, edge) = previous.getValue(at)
-            edges.addFirst(edge)
-            at = from
-        }
-        return edges.toList()
+        return (result as? SearchResult.Exhausted)?.costs.orEmpty()
     }
 
     /**
@@ -586,17 +596,10 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         }
     }
 
-    private fun reverse(dir: Direction) = when (dir) {
-        Direction.NORTH -> Direction.SOUTH
-        Direction.SOUTH -> Direction.NORTH
-        Direction.WEST -> Direction.EAST
-        Direction.EAST -> Direction.WEST
-    }
-
     /** True when a railing on [from] or [to] stops a move going [dir] between them (sub_02060DEC). */
     private fun railingBlocks(from: TileInfo, to: TileInfo, dir: Direction): Boolean =
         (from.kind as? TileKind.Railing)?.blockedSides?.contains(dir) == true ||
-            (to.kind as? TileKind.Railing)?.blockedSides?.contains(reverse(dir)) == true
+            (to.kind as? TileKind.Railing)?.blockedSides?.contains(dir.opposite) == true
 
     /**
      * Simulates the forced move after entering [entry] (an ice or spinner tile) going [direction], with the game's
@@ -782,10 +785,6 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         return FieldMoveEdge(to, dir, FieldMoveKind.ROCK_CLIMB, tiles + to, tiles.size + 1 + FIELD_MOVE_USE_COST)
     }
 
-    /** Direction of one step from [a] to the adjacent [b], or null when they aren't adjacent. */
-    private fun directionBetween(a: Node, b: Node): Direction? =
-        Direction.entries.firstOrNull { a.x + it.dx == b.x && a.y + it.dy == b.y }
-
     /** Stepping onto the source of [teleport] at ([x], [y]): an [Edge.Teleport], when the tile can be entered. */
     private fun teleport(teleport: TeleportLink, tile: TileInfo, x: Int, y: Int, dir: Direction, hereHeight: Int?, options: RouteOptions): Edge? {
         if (tile.blocked || (x to y) in occupied || (x to y) in overlay.blockedTiles) return null
@@ -888,67 +887,6 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
 
         /** In the search for the field move a failed route needs: one field move outweighs any walk. */
         const val FIELD_MOVE_COST = 100_000
-    }
-}
-
-/**
- * A state of a turn-aware search: the player on [node], having arrived moving in [direction] (null at the start of
- * the route, or when unknown: after a teleport, a warp). See [RouteOptions.turnCost].
- */
-internal data class Heading(val node: Node, val direction: Direction?)
-
-/** What [edge] costs on top of its own cost when the player arrived moving in [direction]: [turnCost] for a turn. */
-internal fun turn(direction: Direction?, edge: Edge, turnCost: Int): Int =
-    if (turnCost > 0 && direction != null && edge.direction != direction) turnCost else 0
-
-/**
- * True when [node], reached for [cost], needn't be explored: another heading of it was already explored for at least
- * [turnCost] less (the cheapest one is explored first, and from it every move costs at most one turn more, so nothing
- * is cheaper from this one). Records [cost] as the node's cheapest otherwise. With no turn cost, every node is
- * explored once, like a plain Dijkstra.
- */
-internal fun turnDominated(settled: MutableMap<Node, Int>, node: Node, cost: Int, turnCost: Int): Boolean {
-    val best = settled[node] ?: run {
-        settled[node] = cost
-        return false
-    }
-    return cost >= best + turnCost
-}
-
-/** A minimal binary-heap priority queue (commonMain has no java.util.PriorityQueue). */
-internal class PriorityQueue<T>(private val comparator: Comparator<T>) {
-    private val heap = ArrayList<T>()
-    fun isNotEmpty() = heap.isNotEmpty()
-
-    fun add(value: T) {
-        heap.add(value)
-        var i = heap.size - 1
-        while (i > 0) {
-            val parent = (i - 1) / 2
-            if (comparator.compare(heap[i], heap[parent]) >= 0) break
-            heap[i] = heap[parent].also { heap[parent] = heap[i] }
-            i = parent
-        }
-    }
-
-    fun poll(): T {
-        val top = heap[0]
-        val last = heap.removeAt(heap.size - 1)
-        if (heap.isNotEmpty()) {
-            heap[0] = last
-            var i = 0
-            while (true) {
-                val l = 2 * i + 1
-                val r = l + 1
-                var smallest = i
-                if (l < heap.size && comparator.compare(heap[l], heap[smallest]) < 0) smallest = l
-                if (r < heap.size && comparator.compare(heap[r], heap[smallest]) < 0) smallest = r
-                if (smallest == i) break
-                heap[i] = heap[smallest].also { heap[smallest] = heap[i] }
-                i = smallest
-            }
-        }
-        return top
     }
 }
 

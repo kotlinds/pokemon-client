@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.PokegearRadio
 import dev.kotlinds.pokemonclient.state.RadioBand
@@ -105,10 +106,10 @@ internal object HgssRadio {
      */
     fun radioApp(mem: HgssMemory, gear: Long, gearData: Long): Pair<Long, Boolean>? {
         val child = mem.ptr(gearData + HgssTextAddresses.GEAR_CHILD_APP) ?: return null
-        if (mem.fn(child + A.OM_INIT) != FN_RADIO_INIT) return null
-        val data = mem.ptr(child + A.OM_DATA) ?: return null
-        val ready = mem.s32(gear + A.OM_PROC_STATE) == GEAR_STATE_RUN_RADIO && mem.s32(child + A.OM_EXEC_STATE) == 2 &&
-            mem.s32(child + A.OM_PROC_STATE) == RADIO_STATE_INPUT_LOOP
+        if (mem.fn(child + S.OM_INIT) != FN_RADIO_INIT) return null
+        val data = mem.ptr(child + S.OM_DATA) ?: return null
+        val ready = mem.s32(gear + S.OM_PROC_STATE) == GEAR_STATE_RUN_RADIO && mem.s32(child + S.OM_EXEC_STATE) == S.OM_EXEC_MAIN &&
+            mem.s32(child + S.OM_PROC_STATE) == RADIO_STATE_INPUT_LOOP
         return data to ready
     }
 

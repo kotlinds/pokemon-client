@@ -63,7 +63,7 @@ class PlatinumIntroFixtureTest {
     @Test
     fun `professor's message is an intro dialogue waiting at its page break`() {
         val s = state("pt_rowan_dialogue")
-        assertEquals(Screen.Dialogue(TextSource.INTRO, null, "Hello there! It’s so very nice to meet you!", Awaiting.INPUT), s.screen)
+        assertEquals(Screen.Dialogue(TextSource.INTRO, null, "Hello there!\nIt’s so very nice to meet you!", Awaiting.INPUT), s.screen)
         assertNull(s.field)
     }
 
@@ -158,7 +158,7 @@ class PlatinumIntroFixtureTest {
         val s = state("pt_field_dialogue")
         val dialogue = assertIs<Screen.Dialogue>(s.screen)
         assertEquals(TextSource.FIELD, dialogue.source)
-        assertEquals("That concludes our special program, “Let’s Ask Prof. Rowan!”", dialogue.text)
+        assertEquals("That concludes our special program,\n“Let’s Ask Prof. Rowan!”", dialogue.text)
         assertEquals(Awaiting.INPUT, dialogue.awaiting)
         assertEquals(415, s.field?.mapId)
     }
@@ -178,6 +178,6 @@ class PlatinumIntroFixtureTest {
 
     @Test
     fun `sign message of a coordinate trigger`() {
-        assertEquals(Screen.Dialogue(TextSource.SIGN, null, "The X Button opens the menu!", Awaiting.INPUT), state("pt_sign_tip").screen)
+        assertEquals(Screen.Dialogue(TextSource.SIGN, null, "The X Button\nopens the menu!", Awaiting.INPUT), state("pt_sign_tip").screen)
     }
 }

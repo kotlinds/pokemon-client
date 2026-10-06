@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs
 import dev.kotlinds.pokemonclient.state.Awaiting
@@ -57,9 +58,6 @@ internal object HgssMainMenuAddresses {
         "option:mystery_gift" to "MYSTERY GIFT", "option:ranger" to "CONNECT TO RANGER", "option:migrate" to "MIGRATE",
         "option:connect_to_wii" to "CONNECT TO WII", "option:wfc" to "NINTENDO WFC SETTINGS", "option:wii_settings" to "WII MESSAGE SETTINGS",
     )
-
-    /** Main menu labels (msg_0442). */
-    val LABEL_BANK = dev.kotlinds.pokemonclient.data.TextBankId(442)
 }
 
 /**
@@ -107,8 +105,8 @@ internal object HgssIntroScreens : HgssScreenDecoder {
     /** The running top-level application's data, while its main function runs (exec state 2); null otherwise. */
     private fun runningAppData(mem: HgssMemory): Pair<Long, Long>? {
         val om = mem.ptr(mem.version.mainAppState + A.MAIN_APP_OVERLAY_MANAGER) ?: return null
-        if (mem.s32(om + A.OM_EXEC_STATE) != 2) return null
-        val data = mem.ptr(om + A.OM_DATA) ?: return null
+        if (mem.s32(om + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) return null
+        val data = mem.ptr(om + S.OM_DATA) ?: return null
         return om to data
     }
 
@@ -123,7 +121,7 @@ internal object HgssIntroScreens : HgssScreenDecoder {
     /** `TitleScreen_Main`: input is read in TITLESCREEN_MAIN_PLAY once `initialDelay` is over, nowhere else. */
     private fun titleScreen(mem: HgssMemory): Screen {
         val (om, data) = runningAppData(mem) ?: return Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.ANIMATION)
-        val ready = mem.s32(om + A.OM_PROC_STATE) == T.TITLE_STATE_PLAY && mem.u32(data + T.TITLE_INITIAL_DELAY) == 0L
+        val ready = mem.s32(om + S.OM_PROC_STATE) == T.TITLE_STATE_PLAY && mem.u32(data + T.TITLE_INITIAL_DELAY) == 0L
         return if (ready) Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.INPUT, A_START_OR_TOUCH)
         else Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.ANIMATION)
     }
@@ -135,7 +133,7 @@ internal object HgssIntroScreens : HgssScreenDecoder {
      * when it starts the scan and only removes when it exits. Seen on melonDS (no wireless) with a save.
      */
     private fun communicationError(mem: HgssMemory, om: Long, data: Long): Boolean =
-        mem.s32(om + A.OM_EXEC_STATE) == 2 && mem.s32(om + A.OM_PROC_STATE) != M.PROC_EXIT &&
+        mem.s32(om + S.OM_EXEC_STATE) == S.OM_EXEC_MAIN && mem.s32(om + S.OM_PROC_STATE) != M.PROC_EXIT &&
             mem.s32(data + M.WIRELESS) in M.WIRELESS_RUNNING && mem.u32(mem.version.gSystem + Gen4Structs.SYS_VBLANK_CALLBACK) == 0L
 
     /**
@@ -146,10 +144,10 @@ internal object HgssIntroScreens : HgssScreenDecoder {
     fun mainMenu(mem: HgssMemory): Screen {
         val notReady = Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION)
         val om = mem.ptr(mem.version.mainAppState + A.MAIN_APP_OVERLAY_MANAGER) ?: return notReady
-        val data = mem.ptr(om + A.OM_DATA) ?: return notReady
+        val data = mem.ptr(om + S.OM_DATA) ?: return notReady
         if (communicationError(mem, om, data)) return Screen.PressToContinue(ContinueReason.COMMUNICATION_ERROR)
-        if (mem.s32(om + A.OM_EXEC_STATE) != 2 || mem.s32(om + A.OM_PROC_STATE) != M.PROC_HANDLE_INPUT) return notReady
-        val labels = HgssData.gameData?.bank(M.LABEL_BANK)
+        if (mem.s32(om + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN || mem.s32(om + S.OM_PROC_STATE) != M.PROC_HANDLE_INPUT) return notReady
+        val labels = HgssData.gameData?.bank(HgssTextBanks.MAIN_MENU_LABELS)
         val shown = (0 until M.SLOT_COUNT).mapNotNull { slot ->
             val (id, line) = M.OPTIONS[mem.u32(data + M.SLOTS + 4L * slot).toInt()] ?: return@mapNotNull null
             val label = line?.let { labels?.getOrNull(it) }?.takeIf { it.isNotBlank() }?.replace('\n', ' ') ?: M.FALLBACK_LABELS.getValue(id)

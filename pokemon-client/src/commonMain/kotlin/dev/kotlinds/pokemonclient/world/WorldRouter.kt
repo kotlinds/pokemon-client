@@ -62,90 +62,52 @@ class WorldRouter(
             val links = zones.flatMap { WorldLinks.links(world, area, it) }.filterNot { (it.x to it.y) in pads }.associateBy { it.x to it.y }
             AreaInfo(Pathfinder(area, overlayFor(zone, area)), links, goalTiles(area))
         }
-        val startPlace = Place(startArea, start)
-        val first = State(startPlace, null)
-        val dist = HashMap<State, Int>()
-        val previous = HashMap<State, Pair<State, ZoneLink?>>()
-        // The cheapest cost each place was explored for (in its area: the same node in two areas is two places).
-        val settled = HashMap<Area, HashMap<Node, Int>>()
-        val queue = PriorityQueue<Pair<State, Int>> { a, b -> a.second - b.second }
-        dist[first] = 0
-        queue.add(first to 0)
-        var explored = 0
-        while (queue.isNotEmpty()) {
-            val (state, d) = queue.poll()
-            if (d > (dist[state] ?: Int.MAX_VALUE)) continue
-            val place = state.place
-            val known = settled.getOrPut(place.area) { HashMap() }
-            val firstVisit = place.node !in known
-            val zone = place.zone ?: startZone
-            val here = info(place.area, zone)
+        val result = dijkstra(
+            start = State(Place(startArea, start), null),
+            // The same node in two areas is two places; the bound counts places, not headings: the same reach as a
+            // search without turns.
+            place = { it.place },
+            isGoal = { isGoal(it.place) },
+            maxPlaces = maxNodes,
             // A turn costs more where wild Pokémon appear (see Pathfinder.turnCostAt); soft costs are left out while
             // looking for what blocks a route.
-            val turnCost = here.pathfinder.turnCostAt(place.node, options, soft = !relaxed && !ignorePeople)
-            if (turnDominated(known, place.node, d, turnCost)) continue
-            if (place != startPlace && isGoal(place)) return WorldRoute(links(previous, first, state), place, d, places(previous, first, state))
-            // The bound counts places, not headings: the same reach as a search without turns.
-            if (firstVisit && ++explored > maxNodes) return null
-            fun relax(next: Place, cost: Int, via: ZoneLink?, direction: Direction?) {
-                val nd = d + cost
-                val to = State(next, direction)
-                if (nd < (dist[to] ?: Int.MAX_VALUE)) {
-                    dist[to] = nd
-                    previous[to] = state to via
-                    queue.add(to to nd)
+            turnCost = { info(it.place.area, it.place.zone ?: startZone).pathfinder.turnCostAt(it.place.node, options, soft = !relaxed && !ignorePeople) },
+        ) { state, turnCost ->
+            val place = state.place
+            val here = info(place.area, place.zone ?: startZone)
+            buildList {
+                fun relax(next: Place, cost: Int, via: ZoneLink?, direction: Direction?) = add(SearchMove(State(next, direction), cost, via))
+                fun take(link: ZoneLink, cost: Int) {
+                    val toX = link.toX ?: return
+                    val toY = link.toY ?: return
+                    val area = world.areaOf(link.targetZone) ?: return
+                    if (area.tile(toX, toY) == null) return
+                    // Arrived through a warp or a fall: facing whichever way the game leaves the player, no turn counted.
+                    relax(Place(area, Node(toX, toY)), cost + LINK_COST, link, null)
                 }
-            }
-            fun take(link: ZoneLink, cost: Int) {
-                val toX = link.toX ?: return
-                val toY = link.toY ?: return
-                val area = world.areaOf(link.targetZone) ?: return
-                if (area.tile(toX, toY) == null) return
-                // Arrived through a warp or a fall: facing whichever way the game leaves the player, no turn counted.
-                relax(Place(area, Node(toX, toY)), cost + LINK_COST, link, null)
-            }
-            // Pressing the direction of the exit mat the player stands on.
-            here.links[place.node.x to place.node.y]?.takeIf { it.exitDirection != null }?.let { take(it, 0) }
-            val enterable = here.goalTiles + here.links.keys
-            for (edge in here.pathfinder.neighbours(place.node, options, enterable, allowJumps = options.acceptOneWay, relaxed = relaxed, ignorePeople = ignorePeople)) {
-                val to = edge.to
-                val next = Place(place.area, to)
-                val link = here.links[to.x to to.y]
-                val cost = edge.cost + turn(state.direction, edge, turnCost)
-                when {
-                    link == null -> if ((to.x to to.y) !in here.goalTiles || isGoal(next)) relax(next, cost, null, edge.endDirection)
-                    // Stepping on a door, a ladder down or a hole takes it at once (unless it's the destination).
-                    link.exitDirection == null -> if (isGoal(next)) relax(next, cost, null, edge.endDirection) else take(link, cost)
-                    else -> relax(next, cost, null, edge.endDirection)
+                // Pressing the direction of the exit mat the player stands on.
+                here.links[place.node.x to place.node.y]?.takeIf { it.exitDirection != null }?.let { take(it, 0) }
+                val enterable = here.goalTiles + here.links.keys
+                for (edge in here.pathfinder.neighbours(place.node, options, enterable, allowJumps = options.acceptOneWay, relaxed = relaxed, ignorePeople = ignorePeople)) {
+                    val to = edge.to
+                    val next = Place(place.area, to)
+                    val link = here.links[to.x to to.y]
+                    val cost = edge.cost + turn(state.direction, edge, turnCost)
+                    when {
+                        link == null -> if ((to.x to to.y) !in here.goalTiles || isGoal(next)) relax(next, cost, null, edge.endDirection)
+                        // Stepping on a door, a ladder down or a hole takes it at once (unless it's the destination).
+                        link.exitDirection == null -> if (isGoal(next)) relax(next, cost, null, edge.endDirection) else take(link, cost)
+                        else -> relax(next, cost, null, edge.endDirection)
+                    }
                 }
             }
         }
-        return null
+        val path = result.found ?: return null
+        return WorldRoute(path.labels.filterNotNull(), path.end.place, path.cost, path.states.map { it.place })
     }
 
     /** A search state: a place, and the direction the player arrived in (null when unknown), see [Heading]. */
     private data class State(val place: Place, val direction: Direction?)
-
-    private fun places(previous: Map<State, Pair<State, ZoneLink?>>, start: State, end: State): List<Place> {
-        val places = ArrayDeque<Place>()
-        var at = end
-        while (at != start) {
-            places.addFirst(at.place)
-            at = previous.getValue(at).first
-        }
-        return places.toList()
-    }
-
-    private fun links(previous: Map<State, Pair<State, ZoneLink?>>, start: State, end: State): List<ZoneLink> {
-        val links = ArrayDeque<ZoneLink>()
-        var at = end
-        while (at != start) {
-            val (from, link) = previous.getValue(at)
-            if (link != null) links.addFirst(link)
-            at = from
-        }
-        return links.toList()
-    }
 
     companion object {
         /**

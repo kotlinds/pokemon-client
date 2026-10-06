@@ -10,9 +10,13 @@ import dev.kotlinds.pokemonclient.Direction
  *   block on (src/unk_0206D494.c): it stops before a wall, a tile that isn't ice or another object; meeting another
  *   ice block, both freeze together and can't be pushed any more.
  *
- * Used when the plain [Pathfinder] finds no route. The search is a Dijkstra over states, each object configuration
- * getting its own [Pathfinder]; pushes are expensive so routes push as little as possible, and the search gives up
- * after [maxStates] states (null: no plan within the bound).
+ * Used when the plain [Pathfinder] finds no route. The search is the routes' [dijkstra] over states (the player's
+ * [Heading] and the objects' positions), each object configuration getting its own [Pathfinder]; the rules are the
+ * plain routes' ones: the same moves ([Pathfinder.neighbours]), the same cost of a turn ([RouteOptions.turnPenalty]:
+ * a push in another direction than the player arrived in is a turn too, the player faces the object first), the same
+ * ledge rule ([boundedLedgeRule]: the way back is checked with the objects where the route leaves them) and the same warnings
+ * ([Pathfinder.describe]). Pushes are expensive so routes push as little as possible, and the search gives up after
+ * [maxStates] places (positions × configurations; null: no plan within the bound).
  */
 class PushPlanner(private val area: Area, private val overlay: Overlay, private val maxStates: Int = DEFAULT_MAX_STATES) {
 
@@ -29,7 +33,13 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
         val gone: Boolean = false,
     )
 
-    private data class State(val node: Node, val movables: List<Movable>)
+    /** Where the player is (and arrived from, see [Heading]) and where the objects are. */
+    private data class State(val heading: Heading, val movables: List<Movable>) {
+        val node: Node get() = heading.node
+
+        /** The state without the direction: what the search bound counts, and where a turn is cut ([dijkstra]). */
+        val place: Pair<Node, List<Movable>> get() = heading.node to movables
+    }
 
     private val movableTemplates = overlay.objects.filter { it.clearedBy == FieldMoveKind.STRENGTH || it.iceBlock }
     private val others = overlay.objects.filter { it.clearedBy != FieldMoveKind.STRENGTH && !it.iceBlock }
@@ -57,40 +67,27 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
         return PushPlanner(area, overlay.copy(objects = fixed), maxStates).search(start, options, emptySet()) { state -> state.movables.single().gone }
     }
 
+    /** The cheapest plan from [start] to a state where [isDone] holds, under the [boundedLedgeRule]; null when none. */
     private fun search(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, isDone: (State) -> Boolean): Route? {
-        val initial = State(start, movableTemplates.map { Movable(it.x, it.y, boulder = it.clearedBy == FieldMoveKind.STRENGTH, fallsInto = it.fallsInto) })
-        val dist = HashMap<State, Int>()
-        val previous = HashMap<State, Pair<State, Edge>>()
-        val queue = PriorityQueue<Pair<State, Int>> { a, b -> a.second - b.second }
-        dist[initial] = 0
-        queue.add(initial to 0)
-        var expanded = 0
-        while (queue.isNotEmpty()) {
-            val (state, d) = queue.poll()
-            if (d > (dist[state] ?: Int.MAX_VALUE)) continue
-            if (state != initial && isDone(state)) return Route(path(previous, initial, state), emptyList())
-            if (++expanded > maxStates) return null
-            for ((edge, next) in moves(state, options, goalTiles)) {
-                val cost = d + edge.cost
-                if (cost < (dist[next] ?: Int.MAX_VALUE)) {
-                    dist[next] = cost
-                    previous[next] = state to edge
-                    queue.add(next to cost)
-                }
+        val initial = State(Heading(start, null), movableTemplates.map { Movable(it.x, it.y, boulder = it.clearedBy == FieldMoveKind.STRENGTH, fallsInto = it.fallsInto) })
+        fun plan(allowJumps: Boolean): SearchResult<State, *, Edge> = dijkstra(
+            start = initial,
+            place = { it.place },
+            isGoal = isDone,
+            maxPlaces = maxStates,
+            turnCost = { pathfinder(it.movables).turnCostAt(it.node, options) },
+        ) { state, turnCost ->
+            // Every move ends on its edge's tile (a push too: the player stays, the edge is "to" their own tile).
+            moves(state, options, goalTiles, allowJumps).map { (edge, movables) ->
+                SearchMove(State(Heading(edge.to, edge.endDirection), movables), edge.cost + turn(state.heading.direction, edge, turnCost), edge)
             }
         }
-        return null
-    }
-
-    private fun path(previous: Map<State, Pair<State, Edge>>, start: State, end: State): List<Edge> {
-        val edges = ArrayDeque<Edge>()
-        var at = end
-        while (at != start) {
-            val (from, edge) = previous.getValue(at)
-            edges.addFirst(edge)
-            at = from
+        // The way back is walked with the objects where the plan leaves them.
+        val wayBack = { end: State -> pathfinder(end.movables).hasWayBack(end.node, start, options) }
+        return when (val ledges = boundedLedgeRule(options, ::plan, wayBack)) {
+            is LedgeChoice.Take -> pathfinder(initial.movables).describe(ledges.edges, ledges.oneWay)
+            LedgeChoice.OnlyOneWay, null -> null
         }
-        return edges.toList()
     }
 
     private fun pathfinder(movables: List<Movable>): Pathfinder = pathfinders.getOrPut(movables) {
@@ -100,12 +97,12 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
         Pathfinder(area, overlay.copy(objects = objects))
     }
 
-    /** The moves from [state]: the plain ones with the objects where they are, and the pushes. */
-    private fun moves(state: State, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>): List<Pair<Edge, State>> {
+    /** The moves from [state], with where the objects are after each: the plain ones (objects unmoved), and the pushes. */
+    private fun moves(state: State, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, allowJumps: Boolean): List<Pair<Edge, List<Movable>>> {
         val node = state.node
-        val result = mutableListOf<Pair<Edge, State>>()
-        for (edge in pathfinder(state.movables).neighbours(node, options, goalTiles, allowJumps = options.acceptOneWay)) {
-            result += (icePush(edge, state) ?: (edge to state.copy(node = edge.to)))
+        val result = mutableListOf<Pair<Edge, List<Movable>>>()
+        for (edge in pathfinder(state.movables).neighbours(node, options, goalTiles, allowJumps = allowJumps)) {
+            result += (icePush(edge, state) ?: (edge to state.movables))
         }
         if (FieldMoveKind.STRENGTH in options.fieldMoves) {
             for (dir in Direction.entries) strengthPush(state, dir)?.let { result += it }
@@ -117,10 +114,10 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
      * When [edge] ends sliding on ice against a movable ice block, the block slides on: the same edge as a
      * [PushEdge], with the block's new place.
      */
-    private fun icePush(edge: Edge, state: State): Pair<Edge, State>? {
+    private fun icePush(edge: Edge, state: State): Pair<Edge, List<Movable>>? {
         val landing = edge.to
         if (area.tile(landing.x, landing.y)?.kind != TileKind.Ice) return null
-        val dir = lastDirection(edge)
+        val dir = edge.endDirection ?: edge.direction
         val bx = landing.x + dir.dx
         val by = landing.y + dir.dy
         val index = state.movables.indexOfFirst { it.x == bx && it.y == by && !it.boulder && !it.frozen }
@@ -150,20 +147,11 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
             }
         }
         val push = PushEdge(landing, edge.direction, bx to by, x to y, needsStrength = false, tiles = edge.tiles, cost = edge.cost + PUSH_EXTRA_COST)
-        return push to State(landing, moved)
-    }
-
-    /** The direction of the last tile of [edge] (a slide on spinners may turn; ice slides go straight). */
-    private fun lastDirection(edge: Edge): Direction {
-        val tiles = edge.tiles
-        if (tiles.size < 2) return edge.direction
-        val a = tiles[tiles.size - 2]
-        val b = tiles.last()
-        return Direction.entries.firstOrNull { a.x + it.dx == b.x && a.y + it.dy == b.y } ?: edge.direction
+        return push to moved
     }
 
     /** Walking [dir] into a boulder next to the player, when the tile behind it is free: a Strength push. */
-    private fun strengthPush(state: State, dir: Direction): Pair<Edge, State>? {
+    private fun strengthPush(state: State, dir: Direction): Pair<Edge, List<Movable>>? {
         val node = state.node
         val bx = node.x + dir.dx
         val by = node.y + dir.dy
@@ -179,7 +167,7 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
         if (area.tile(node.x, node.y) == null) return null
         val moved = state.movables.mapIndexed { i, m -> if (i == index) m.copy(x = tx, y = ty, gone = falls) else m }
         // The player stays where they are (the boulder slides away alone): following it is a plain step afterwards.
-        return PushEdge(node, dir, bx to by, tx to ty, needsStrength = true) to State(node, moved)
+        return PushEdge(node, dir, bx to by, tx to ty, needsStrength = true) to moved
     }
 
     /**

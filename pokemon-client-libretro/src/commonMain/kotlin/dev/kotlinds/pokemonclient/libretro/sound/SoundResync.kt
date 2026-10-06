@@ -67,7 +67,7 @@ class SoundResync(
     /**
      * The guards that only look at the [paused] state, or null when they pass: whether a pause starting at this frame
      * can be resynced at all. They fail only for a frame or two (the ARM7 mid-tick, a command list being processed),
-     * so a pause may better start a frame later (see `ShadowAudio` in the app).
+     * so a pause may better start a frame later (see [PauseStart]).
      */
     fun pauseRefusal(paused: ByteArray): ResyncRefusal? = try {
         pauseGuards(SoundDriverState.read(splicer.locate(paused), layout))
@@ -87,7 +87,7 @@ class SoundResync(
      * new song starts again. Measured walking from a town onto a route with its own music (Viridian City → Route 22 /
      * Route 2, Pallet Town → Route 1, Cherrygrove City → Route 30, New Bark Town → Route 29; 3 s pauses every 4 frames
      * over 200 frames): 32 of 50 pauses refused, every one from the step into the route to the new song (~2 s, the
-     * route-name banner). Unlike [pauseRefusal]'s frame or two, this lasts up to ~2.5 s: `ShadowAudio` in the app may
+     * route-name banner). Unlike [pauseRefusal]'s frame or two, this lasts up to ~2.5 s: [PauseStart] (the app's `ShadowAudio`) may
      * put the pause off until the new song plays (the game runs on normally meanwhile): 1 of 50 refused then (a pause
      * mid-step, before the game sees the new map). Out of a gatehouse onto Route 1 (a warp, the old song fading out
      * while the player already stands on the route): 37 of 50 refused, 3 once put off (two mid-step into the door,
@@ -158,21 +158,14 @@ class SoundResync(
      * otherwise the paused state is loaded back ([ResyncResult.Aborted]).
      */
     fun apply(main: ConsolePort, paused: ByteArray, decision: ResyncDecision.Spliced): ResyncResult {
-        val ram = splicer.locate(paused).mainRam
-        val buffer = ByteArray(main.memorySize(MemoryRegion.MAIN_RAM))
-        fun mainRamIsPaused(): Boolean {
-            if (buffer.size != ram.size) return false
-            main.read(MemoryRegion.MAIN_RAM, 0, buffer.size, buffer)
-            return buffer.contentEquals(paused, ram.offset)
-        }
-        if (!mainRamIsPaused()) return ResyncResult.Refused(ResyncRefusal.MainRamChangedDuringPause)
+        val pausedRam = PausedMainRam(main, paused)
+        if (!pausedRam.matches()) return ResyncResult.Refused(ResyncRefusal.MainRamChangedDuringPause)
         if (!main.loadState(decision.state)) {
             main.loadState(paused)
             return ResyncResult.Aborted("the core rejected the spliced state")
         }
-        if (!mainRamIsPaused()) {
-            val restored = main.loadState(paused) && mainRamIsPaused()
-            return ResyncResult.Aborted("main RAM changed after loading the spliced state (paused state restored: $restored)")
+        if (!pausedRam.matches()) {
+            return ResyncResult.Aborted("main RAM changed after loading the spliced state (paused state restored: ${pausedRam.restore()})")
         }
         val playing = decision.atEnd.playing
         // The music is the richest sequence: the sounds playing next to it (ambient sounds) have a track or two.
@@ -194,6 +187,31 @@ class SoundResync(
             is ResyncDecision.Refused -> ResyncResult.Refused(decision.reason)
             is ResyncDecision.Spliced -> apply(main, paused, decision)
         }
+    }
+
+    /**
+     * Loads the [paused] state back into [main] and checks its main RAM is the paused state's again: true when it is.
+     * For a caller that found the main RAM changed during a pause ([ResyncRefusal.MainRamChangedDuringPause]: the
+     * shadow wasn't isolated from the game), the same check [apply] makes before and after loading.
+     */
+    fun restorePaused(main: ConsolePort, paused: ByteArray): Boolean = PausedMainRam(main, paused).restore()
+
+    /**
+     * The check that [main]'s main RAM is, byte for byte, the [paused] state's main RAM region: the only guarantee
+     * music during pauses gives the game. One buffer for every check of a resume.
+     */
+    private inner class PausedMainRam(private val main: ConsolePort, private val paused: ByteArray) {
+        private val ram = splicer.locate(paused).mainRam
+        private val buffer = ByteArray(main.memorySize(MemoryRegion.MAIN_RAM))
+
+        fun matches(): Boolean {
+            if (buffer.size != ram.size) return false
+            main.read(MemoryRegion.MAIN_RAM, 0, buffer.size, buffer)
+            return buffer.contentEquals(paused, ram.offset)
+        }
+
+        /** Loads the paused state back; true when the main RAM then matches. */
+        fun restore(): Boolean = main.loadState(paused) && matches()
     }
 
     companion object {

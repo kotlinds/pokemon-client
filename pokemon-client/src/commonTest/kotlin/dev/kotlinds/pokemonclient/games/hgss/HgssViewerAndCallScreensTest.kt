@@ -2,7 +2,7 @@ package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.IncomingCall
 import dev.kotlinds.pokemonclient.state.Screen

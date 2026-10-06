@@ -1,7 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.StarterStage
 
@@ -24,7 +24,7 @@ internal object StarterPlans {
         val name = first.starters[target].name
         var unchanged = 0
         repeat(MAX_PRESSES) {
-            val screen = context.navigator.settle(maxFrames = SETTLE_FRAMES).screen as? Screen.StarterChoice
+            val screen = context.navigator.settle().screen as? Screen.StarterChoice
                 ?: return@ActionPlan ActionOutcome.Done("took $name")
             val button = when {
                 screen.stage == StarterStage.CONFIRMING && screen.front == target -> Button.A
@@ -47,6 +47,5 @@ internal object StarterPlans {
 
     private const val MAX_PRESSES = 12
     private const val MAX_UNCHANGED = 3
-    private const val SETTLE_FRAMES = 600
     private const val CHANGE_FRAMES = 120
 }

@@ -60,23 +60,15 @@ internal object BattleItemPlans {
         // The bag / party screen prints its message ("PP was restored.", "It won't have any effect.") and waits for A.
         // Then: used, the bag closes and the turn plays; refused, the item screens are back.
         var said: String? = null
-        repeat(MAX_MESSAGES) {
-            val state = context.navigator.settle()
-            val screen = state.screen
-            when {
-                screen is Screen.Dialogue && screen.awaiting == Awaiting.INPUT -> {
-                    said = screen.text.replace('\n', ' ')
-                    context.scope.tap(Button.A)
-                    context.navigator.awaitChange(screen, maxFrames = 90)
-                }
-                stillInBag(screen) -> {
-                    backToCommand(context)
-                    return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_EFFECT, "${action.item.raw} had no effect" + (said?.let { ": $it" } ?: ""), "the turn wasn't used"))
-                }
-                else -> return@ActionPlan ActionOutcome.Done("used item:${itemId.value}" + (target?.let { " on $it" } ?: "") + (said?.let { ": $it" } ?: ""))
-            }
+        val read = context.navigator.advanceUntil(MAX_MESSAGES, onMessage = { state -> said = (state.screen as? Screen.Dialogue)?.text?.replace('\n', ' ') ?: said }) { state ->
+            state.screen !is Screen.Dialogue
         }
-        ActionOutcome.Failed(ActionError.Timeout("the bag didn't close after using ${action.item.raw}"))
+        val end = (read as? Step.Done)?.value ?: return@ActionPlan ActionOutcome.Failed(ActionError.Timeout("the bag didn't close after using ${action.item.raw}"))
+        if (stillInBag(end.screen)) {
+            backToCommand(context)
+            return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_EFFECT, "${action.item.raw} had no effect" + (said?.let { ": $it" } ?: ""), "the turn wasn't used"))
+        }
+        ActionOutcome.Done("used item:${itemId.value}" + (target?.let { " on $it" } ?: "") + (said?.let { ": $it" } ?: ""))
     }
 
     /** The item screens still open: the game refused the item (back to the bag, the item's USE menu or the party). */

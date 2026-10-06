@@ -47,7 +47,7 @@ class HgssGymPuzzlesFixtureTest {
         val field = field(name)
         val puzzle = HgssPuzzles.read(map, HgssPuzzles.reads(reader), area)
         val pathfinder = Pathfinder(area, overlay(area, field, puzzle, reader))
-        val start = Node(field.x, field.y, pathfinder.levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))
+        val start = pathfinder.nodeOf(field)
         return assertIs<Pathfinder.Result.Found>(pathfinder.route(start) { it.x == toX && it.y == toY }, "$name to $toX,$toY").route
     }
 

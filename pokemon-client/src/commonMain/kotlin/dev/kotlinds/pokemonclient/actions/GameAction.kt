@@ -5,6 +5,7 @@ import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.MonId
+import dev.kotlinds.pokemonclient.state.normalizeName
 
 /**
  * Everything an agent can ask the game to do, as a closed set of typed actions (the same set for MCP agents, our
@@ -288,11 +289,6 @@ sealed interface GameAction {
 
     // endregion
 
-    /** Writes a note the agent will get back with the state (survives context compaction). */
-    data class Note(val text: String) : GameAction {
-        override val key get() = "note"
-    }
-
     /**
      * Pushes the Strength boulder [boulder] (`person:N`) into its own hole (Ice Path B1F: it drops to the floor below),
      * planning the pushes; the agent's explicit act, so done even when movement puzzles are left to the agent.
@@ -351,16 +347,8 @@ data class MoveRef(val raw: String)
 /** An item named by the agent: `item:<id>` or its name. */
 data class ItemRef(val raw: String)
 
-/** Matches a reference against an id + name: `<prefix>:<id>`, the bare id, or the name (case, spaces, punctuation ignored). */
+/** Matches a reference against an id + name: `<prefix>:<id>`, the bare id, or the name (compared by [normalizeName]). */
 internal fun matchesRef(raw: String, prefix: String, id: Int, name: String): Boolean {
     val value = raw.removePrefix("$prefix:")
-    return value.toIntOrNull() == id || normalize(value) == normalize(name)
+    return value.toIntOrNull() == id || normalizeName(value) == normalizeName(name)
 }
-
-/** Lowercase letters and digits only, accents removed ("Poké Ball" = "poke ball" = "POKE-BALL"). */
-private fun normalize(value: String) = value.lowercase().map { ACCENTS[it] ?: it }.filter { it.isLetterOrDigit() }.joinToString("")
-
-private val ACCENTS = mapOf(
-    'é' to 'e', 'è' to 'e', 'ê' to 'e', 'ë' to 'e', 'à' to 'a', 'â' to 'a', 'ä' to 'a', 'î' to 'i', 'ï' to 'i',
-    'ô' to 'o', 'ö' to 'o', 'ù' to 'u', 'û' to 'u', 'ü' to 'u', 'ç' to 'c', 'ñ' to 'n',
-)

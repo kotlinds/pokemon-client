@@ -1,6 +1,6 @@
 package dev.kotlinds.pokemonclient.view
 
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.BattlerState
 import dev.kotlinds.pokemonclient.state.ContinueReason
@@ -247,7 +247,7 @@ object StateView {
         state.battle?.let { put("battle", battle(it)) }
         state.field?.let { f ->
             putJsonObject("position") {
-                put("map", f.mapName)
+                put("map", f.mapName.toString())
                 put("x", f.x)
                 put("y", f.y)
                 f.facing?.let { put("facing", it.name.lowercase()) }

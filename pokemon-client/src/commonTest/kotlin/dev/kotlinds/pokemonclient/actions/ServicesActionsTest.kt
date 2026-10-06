@@ -28,8 +28,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /** Availability and parsing of the service actions (shop, PC, options, fly) on hand-made states. */
 class ServicesActionsTest {
@@ -48,7 +50,7 @@ class ServicesActionsTest {
         flyAllowed: Boolean? = true,
         objects: List<FieldObject> = emptyList(),
         facing: Direction = Direction.NORTH,
-    ) = FieldState(1, "Town", 10, 10, 0, facing, MovementMode.WALK, false, objects, flyAllowed = flyAllowed)
+    ) = FieldState(1, MapName(1, map = "Town"), 10, 10, 0, facing, MovementMode.WALK, false, objects, flyAllowed = flyAllowed)
 
     private fun state(
         screen: Screen = Screen.Overworld(awaiting = Awaiting.INPUT),
@@ -57,7 +59,7 @@ class ServicesActionsTest {
         badges: List<String> = listOf("Storm"),
         storage: PcStorage? = null,
         badgeIds: Set<Int> = if ("Storm" in badges) setOf(STORM) else emptySet(),
-    ) = GameState(0, screen, PlayerInfo("ACE", 5000, badges, 1, badgeIds = badgeIds), party, emptyList(), null, field, storage = storage)
+    ) = withFieldMoves(GameState(0, screen, PlayerInfo("ACE", 5000, badges, 1, badgeIds = badgeIds), party, emptyList(), null, field, storage = storage))
 
     private fun available(state: GameState) = registry.available(state, ActionMode.ASSISTED).associateBy { it.name }
     private fun unavailable(state: GameState) = registry.unavailable(state, ActionMode.ASSISTED).associateBy { it.name }
@@ -68,6 +70,14 @@ class ServicesActionsTest {
         assertEquals(UnavailableReason.NOT_FLYABLE_HERE, unavailable(state(field = field(flyAllowed = false)))["fly"]?.reason)
         assertEquals(UnavailableReason.NEEDS_BADGE, unavailable(state(badges = emptyList()))["fly"]?.reason)
         assertEquals(UnavailableReason.NO_POKEMON_KNOWS_MOVE, unavailable(state(party = listOf(mon(2))))["fly"]?.reason)
+    }
+
+    /** A7: Fly follows the game's rule like every field move; a game without one never lists it. */
+    @Test
+    fun flyIsHiddenInAGameWithoutAFlyRule() {
+        val noRule = withFieldMoves(state(), rules = { null })
+        assertFalse("fly" in available(noRule))
+        assertFalse("fly" in unavailable(noRule))
     }
 
     @Test

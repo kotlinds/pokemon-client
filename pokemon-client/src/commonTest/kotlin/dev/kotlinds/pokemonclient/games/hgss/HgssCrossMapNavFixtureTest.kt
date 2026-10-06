@@ -89,8 +89,10 @@ class HgssCrossMapNavFixtureTest {
     fun `Seafoam Gym names Blaine's gym in the Seafoam Islands`() {
         val world = HgssWorldRom.require()
         HgssData.useWorld(world)
-        val matches = (0 until world.zoneCount).filter { WorldTravel.wordsMatch(HgssData.mapName(it), "Seafoam Gym") }
-        assertEquals(listOf("Seafoam Islands Cinnabar Gym"), matches.map { HgssData.mapName(it) })
-        assertTrue((0 until world.zoneCount).none { WorldTravel.looseMatch(HgssData.mapName(it), "Seafoam Gym") })
+        // The maps' own names ([dev.kotlinds.pokemonclient.state.MapName.map]): what loose names are matched against.
+        val names = (0 until world.zoneCount).mapNotNull { HgssData.mapName(it).map }
+        val matches = names.filter { WorldTravel.wordsMatch(it, "Seafoam Gym") }
+        assertEquals(listOf("Seafoam Islands Cinnabar Gym"), matches)
+        assertTrue(names.none { WorldTravel.looseMatch(it, "Seafoam Gym") })
     }
 }

@@ -1,5 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BattlerRef
@@ -233,7 +236,7 @@ internal class HgssBattleRoot(val bs: Long, val ctx: Long) {
         val m = ctx + A.BC_BATTLE_MONS + battlerId * A.BM_SIZE
         val species = mem.u16(m + A.BM_SPECIES)
         if (species == 0) return null
-        return HgssText.decode(mem.chars(m + A.BM_NICKNAME, 11)).takeIf { it.isNotEmpty() } ?: HgssData.speciesName(species)
+        return Gen4Text.decode(mem.chars(m + A.BM_NICKNAME, 11)).takeIf { it.isNotEmpty() } ?: HgssData.speciesName(species)
     }
 
     companion object {
@@ -243,8 +246,8 @@ internal class HgssBattleRoot(val bs: Long, val ctx: Long) {
          */
         fun find(mem: HgssMemory): HgssBattleRoot? {
             val app = battleApp(mem) ?: return null
-            if (mem.s32(app + A.OM_EXEC_STATE) != 2 || mem.s32(app + A.OM_PROC_STATE) != A.BATTLE_STATE_MAIN) return null
-            val bs = mem.ptr(app + A.OM_DATA) ?: return null
+            if (mem.s32(app + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN || mem.s32(app + S.OM_PROC_STATE) != A.BATTLE_STATE_MAIN) return null
+            val bs = mem.ptr(app + S.OM_DATA) ?: return null
             val ctx = mem.ptr(bs + A.BS_CTX) ?: return null
             return HgssBattleRoot(bs, ctx)
         }
@@ -252,7 +255,7 @@ internal class HgssBattleRoot(val bs: Long, val ctx: Long) {
         /** The battle OverlayManager (any proc state), or null when no battle app runs. */
         fun battleApp(mem: HgssMemory): Long? {
             val app = HgssScreenMemory.fieldSubApp(mem) ?: return null
-            return app.takeIf { mem.fn(it + A.OM_INIT) == mem.version.fnBattleInit }
+            return app.takeIf { mem.fn(it + S.OM_INIT) == mem.version.fnBattleInit }
         }
     }
 }
@@ -267,19 +270,16 @@ internal object HgssScreenMemory {
         return mem.ptr(sub0 + A.FSS0_SUB_APP)
     }
 
-    /** True while any text printer task runs (`sTextPrinterTasks`, src/text.c): a message is still being printed. */
-    fun textPrinting(mem: HgssMemory): Boolean = (0 until 8).any { mem.u32(mem.version.textPrinterTasks + 4L * it) != 0L }
-
     /** Decodes the Pokémon structure (0xEC bytes) at [ptr]. */
-    fun mon(mem: HgssMemory, ptr: Long?): HgssPokemon.Decoded? =
-        ptr?.let { mem.bytes(it, A.POKEMON_SIZE.toInt()) }?.let { HgssPokemon.decode(it, HgssMonCheck::isPlausible) }
+    fun mon(mem: HgssMemory, ptr: Long?): Gen4Pokemon.Decoded? =
+        ptr?.let { mem.bytes(it, S.POKEMON_SIZE.toInt()) }?.let { Gen4Pokemon.decode(it, HgssMonCheck::isPlausible) }
 
-    fun HgssPokemon.Decoded.monId() = MonId(personality, otId)
+    fun Gen4Pokemon.Decoded.monId() = MonId(personality, otId)
 
     /** The name shown in game: "EGG", the nickname, or the species name. */
-    fun HgssPokemon.Decoded.displayName(): String = when {
+    fun Gen4Pokemon.Decoded.displayName(): String = when {
         isEgg -> "EGG"
-        hasNickname -> HgssText.decode(nicknameChars).ifEmpty { HgssData.speciesName(species) }
+        hasNickname -> Gen4Text.decode(nicknameChars).ifEmpty { HgssData.speciesName(species) }
         else -> HgssData.speciesName(species)
     }
 
@@ -446,7 +446,7 @@ internal object HgssBattleScreens : HgssScreenDecoder {
 
     /** No decision to make: the battle message (printing, or held a few frames before going on). */
     fun message(mem: HgssMemory, root: HgssBattleRoot): Screen {
-        val printing = HgssScreenMemory.textPrinting(mem)
+        val printing = mem.anyTextPrinterRunning()
         return root.message(mem)?.let { Screen.Dialogue(TextSource.BATTLE, null, it, if (printing) Awaiting.TEXT_PRINTING else Awaiting.ANIMATION) }
             ?: Screen.Battle(if (printing) Awaiting.TEXT_PRINTING else Awaiting.ANIMATION)
     }

@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.Awaiting
@@ -47,8 +48,8 @@ internal object HgssViewerScreens : HgssScreenDecoder {
     private fun gearViewer(mem: HgssMemory, awaiting: Awaiting): Screen.Viewer? {
         val fs = mem.ptr(mem.version.fieldSystemPtr) ?: return null
         val gear = mem.ptr(fs + A.FS_SUB0)?.let { mem.ptr(it + A.FSS0_SUB_APP) } ?: return null
-        if (mem.fn(gear + A.OM_INIT) != T.FN_POKEGEAR_INIT) return null
-        val data = mem.ptr(gear + A.OM_DATA) ?: return null
+        if (mem.fn(gear + S.OM_INIT) != T.FN_POKEGEAR_INIT) return null
+        val data = mem.ptr(gear + S.OM_DATA) ?: return null
         val app = when (mem.u8(data + T.GEAR_APP)) {
             T.GEAR_APP_MAP -> ViewerApp.POKEGEAR_MAP
             T.GEAR_APP_RADIO -> ViewerApp.POKEGEAR_RADIO
@@ -69,7 +70,7 @@ internal object HgssViewerScreens : HgssScreenDecoder {
      */
     private fun hallOfFame(mem: HgssMemory, state: HgssState, awaiting: Awaiting): Screen.Viewer {
         val app = mem.ptr(mem.version.fieldSystemPtr)?.let { mem.ptr(it + A.FS_SUB0) }?.let { mem.ptr(it + A.FSS0_SUB_APP) }
-        val registration = app?.let { mem.ptr(it + A.OM_DATA) }?.let { HgssGameClear.registration(mem, it, state.fading) }
+        val registration = app?.let { mem.ptr(it + S.OM_DATA) }?.let { HgssGameClear.registration(mem, it) }
         val names = state.party.filter { !it.isEgg }.map { it.nickname ?: it.speciesName }
         val stage = when {
             registration == null -> null

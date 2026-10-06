@@ -1,5 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.games.hgss.HgssAddresses as A
 
@@ -20,6 +23,13 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
 
     /** Addresses of the version being read, resolved at the start of each [read]. */
     private var v: HgssVersion = version ?: HgssVersion.HEARTGOLD_US
+        set(value) {
+            field = value
+            mem = HgssMemory(memory, value)
+        }
+
+    /** The safe Gen 4 reads ([HgssMemory]) with the address table of [v]. */
+    private var mem: HgssMemory = HgssMemory(memory, v)
 
     /**
      * Picks the address table: the forced [version], else the one matching the game code in RAM.
@@ -32,49 +42,12 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     }
 
     // ================================================================================================
-    // Low-level helpers
+    // Snapshot
     // ================================================================================================
-
-    private fun inRam(addr: Long, size: Long = 1) = addr >= A.MAIN_RAM_START && addr + size <= A.MAIN_RAM_END
-
-    private fun u8(addr: Long): Int = if (inRam(addr)) memory.read8(addr) and 0xFF else 0
-    private fun u16(addr: Long): Int = if (inRam(addr, 2)) memory.read16(addr) and 0xFFFF else 0
-    private fun s8(addr: Long): Int = u8(addr).toByte().toInt()
-    private fun s16(addr: Long): Int = u16(addr).toShort().toInt()
-    private fun u32(addr: Long): Long = if (inRam(addr, 4)) memory.read32(addr) and 0xFFFFFFFFL else 0L
-    private fun s32(addr: Long): Int = u32(addr).toInt()
-
-    /** Follows a pointer stored at [addr]; returns null if NULL / outside main RAM / misaligned. */
-    private fun ptr(addr: Long, align: Int = 4): Long? {
-        val p = u32(addr)
-        if (p == 0L || !inRam(p, 4) || p % align != 0L) return null
-        return p
-    }
-
-    private fun bytes(addr: Long, size: Int): ByteArray? =
-        if (size >= 0 && inRam(addr, size.toLong())) memory.readBytes(addr, size) else null
-
-    private fun fn(addr: Long): Long = u32(addr) and A.THUMB_MASK
-
-    private fun chars(addr: Long, count: Int): IntArray = IntArray(count) { u16(addr + 2L * it) }
-
-    /** Reads a `String` object (include/pm_string.h) if its magic matches. */
-    private fun readGameString(strPtr: Long?): String? {
-        if (strPtr == null) return null
-        if (u32(strPtr + A.STR_MAGIC) != A.STRING_MAGIC) return null
-        val max = u16(strPtr + A.STR_MAXSIZE)
-        val size = u16(strPtr + A.STR_SIZE)
-        if (size > max || size > 2048) return null
-        return HgssText.decode(chars(strPtr + A.STR_DATA, size))
-    }
 
     private class Ctx {
         val warnings = mutableListOf<String>()
     }
-
-    // ================================================================================================
-    // Snapshot
-    // ================================================================================================
 
     fun read(): HgssState? = try {
         val (resolved, code) = resolveVersion()
@@ -96,13 +69,13 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
 
     private fun readInternal(): HgssState? {
         val ctx = Ctx()
-        val frame = u32(v.gSystem + A.SYS_VBLANK_COUNTER)
-        val mainOvy = s32(v.mainAppState + A.MAIN_APP_OVERLAY_ID)
-        val om = ptr(v.mainAppState + A.MAIN_APP_OVERLAY_MANAGER)
+        val frame = mem.u32(v.gSystem + S.SYS_VBLANK_COUNTER)
+        val mainOvy = mem.s32(v.mainAppState + A.MAIN_APP_OVERLAY_ID)
+        val om = mem.ptr(v.mainAppState + A.MAIN_APP_OVERLAY_MANAGER)
             ?: return HgssState(frame = frame, mode = GameMode.LOADING, modeDetail = "no main app")
-        val init = fn(om + A.OM_INIT)
-        val tmplOvy = s32(om + A.OM_OVY_ID)
-        val execState = s32(om + A.OM_EXEC_STATE)
+        val init = mem.fn(om + S.OM_INIT)
+        val tmplOvy = mem.s32(om + A.OM_OVY_ID)
+        val execState = mem.s32(om + S.OM_EXEC_STATE)
 
         if (init == v.fnFieldContinueAppInit || init == v.fnFieldNewGameAppInit) {
             return readField(ctx, frame, om, execState)
@@ -116,20 +89,15 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             mainOvy == A.OVY_36 -> GameMode.LOADING to "starting_game"
             else -> GameMode.UNKNOWN to "mainOverlay=$mainOvy templateOverlay=$tmplOvy init=0x${init.toString(16)}"
         }
-        // Professor Oak's intro prints its dialog from OakSpeechData.string (src/oaks_speech.c:949). The String is
-        // freed once printed but normally stays readable until the next message: treat it as "last message".
-        val dialogue = if (mode == GameMode.NEW_GAME_INTRO) {
-            ptr(om + A.OM_DATA)?.let { data -> readGameString(ptr(data + A.OAK_STRING)) }
-                ?.let { DialogueInfo(text = it, messageBoxOpen = true, waitingFor = "intro") }
-        } else null
         // Outside the field we can only tell that nothing is fading (menus/intro wait for a button most of the time).
-        val awaiting = mode in setOf(GameMode.INTRO_MOVIE, GameMode.TITLE_SCREEN, GameMode.MAIN_MENU, GameMode.NEW_GAME_INTRO) && !isFading()
-        return HgssState(frame = frame, mode = mode, modeDetail = detail, dialogue = dialogue, awaitingInput = awaiting)
+        // Their screens (Professor Oak's speech included) are decoded by HgssIntroScreens / HgssOakIntroScreens.
+        val awaiting = mode in setOf(GameMode.INTRO_MOVIE, GameMode.TITLE_SCREEN, GameMode.MAIN_MENU, GameMode.NEW_GAME_INTRO) && !mem.fading
+        return HgssState(frame = frame, mode = mode, modeDetail = detail, awaitingInput = awaiting)
     }
 
     private fun readField(ctx: Ctx, frame: Long, om: Long, execState: Int): HgssState {
-        val omData = ptr(om + A.OM_DATA)
-        var fs = ptr(v.fieldSystemPtr)
+        val omData = mem.ptr(om + S.OM_DATA)
+        var fs = mem.ptr(v.fieldSystemPtr)
         if (fs == null || (omData != null && fs != omData)) {
             if (omData != null) {
                 ctx.warnings += "sFieldSysPtr (${fs?.toString(16)}) != field app data (${omData.toString(16)}), using app data"
@@ -140,35 +108,34 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             return HgssState(frame = frame, mode = GameMode.LOADING, modeDetail = "field starting", warnings = ctx.warnings)
         }
 
-        val sub0 = ptr(fs + A.FS_SUB0)
-        val fieldMapApp = sub0?.let { ptr(it + A.FSS0_FIELD_MAP_APP) }
-        val subApp = sub0?.let { ptr(it + A.FSS0_SUB_APP) }
-        val paused = sub0?.let { u32(it + A.FSS0_IS_PAUSED) != 0L } ?: true
-        val taskman = ptr(fs + A.FS_TASKMAN)
-        val mapReady = u32(fs + A.FS_MAP_READY) != 0L
+        val sub0 = mem.ptr(fs + A.FS_SUB0)
+        val fieldMapApp = sub0?.let { mem.ptr(it + A.FSS0_FIELD_MAP_APP) }
+        val subApp = sub0?.let { mem.ptr(it + A.FSS0_SUB_APP) }
+        val paused = sub0?.let { mem.u32(it + A.FSS0_IS_PAUSED) != 0L } ?: true
+        val taskman = mem.ptr(fs + A.FS_TASKMAN)
+        val mapReady = mem.u32(fs + A.FS_MAP_READY) != 0L
         val playerControllable = subApp == null && fieldMapApp != null && taskman == null && mapReady && !paused
 
         var mode: GameMode
         var detail: String? = null
-        var dialogue: DialogueInfo? = null
+        var engagedTrainer: Int? = null
         var startMenu: StartMenuInfo? = null
-        var menu: MenuInfo? = null
         var app: AppInfo? = null
         var battle: BattleInfo? = null
         var battleSystem: Long? = null
         var battleSetup: Long? = null
 
         if (subApp != null) {
-            val appInit = fn(subApp + A.OM_INIT)
-            val appOvy = s32(subApp + A.OM_OVY_ID)
+            val appInit = mem.fn(subApp + S.OM_INIT)
+            val appOvy = mem.s32(subApp + A.OM_OVY_ID)
             val name = v.appByInit[appInit] ?: A.APP_BY_OVERLAY[appOvy] ?: "app(ovy=$appOvy,init=0x${appInit.toString(16)})"
             if (name == "battle") {
                 mode = GameMode.BATTLE
-                battleSetup = ptr(subApp + A.OM_ARGS)
-                val procState = s32(subApp + A.OM_PROC_STATE)
-                val appExec = s32(subApp + A.OM_EXEC_STATE)
+                battleSetup = mem.ptr(subApp + S.OM_ARGS)
+                val procState = mem.s32(subApp + S.OM_PROC_STATE)
+                val appExec = mem.s32(subApp + S.OM_EXEC_STATE)
                 if (appExec == 2 && procState == A.BATTLE_STATE_MAIN) {
-                    battleSystem = ptr(subApp + A.OM_DATA)
+                    battleSystem = mem.ptr(subApp + S.OM_DATA)
                     battle = battleSystem?.let { readBattle(ctx, it) }
                     detail = "battle"
                 } else {
@@ -177,13 +144,13 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             } else {
                 mode = GameMode.APP
                 detail = name
-                app = runCatching { readApp(subApp, name, ptr(v.saveDataPtr)) }.getOrNull()
+                app = runCatching { readApp(subApp, name, mem.ptr(v.saveDataPtr)) }.getOrNull()
             }
         } else if (taskman != null) {
-            val tasks = taskChain(taskman)
-            val scriptEnv = tasks.firstNotNullOfOrNull { (_, env) -> env?.takeIf { u32(it + A.SE_CHECK) == A.SCRIPT_ENV_MAGIC } }
+            val tasks = mem.fieldTaskStack(fs)
+            val scriptEnv = tasks.firstNotNullOfOrNull { (_, env) -> env?.takeIf { mem.u32(it + S.SM_MAGIC) == S.SCRIPT_MANAGER_MAGIC } }
             val startMenuTask = tasks.firstOrNull { (func, _) -> func == v.fnTaskStartMenu }
-            val followerTask = tasks.firstOrNull()?.first == v.fnTaskFollowMonInteract
+            val followerTask = tasks.firstOrNull()?.function == v.fnTaskFollowMonInteract
             when {
                 // After the Hall of Fame (its app has ended): the game saves, then fades out to the credits.
                 tasks.any { (func, _) -> func == v.fnTaskGameClear } -> {
@@ -191,31 +158,28 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
                     detail = HgssGameClear.SAVE_DETAIL
                 }
 
+                // Its message (outside the script environment) is decoded by HgssTextScreens.
                 followerTask -> {
-                    dialogue = readFollowerMessage(fs)
-                    mode = if (dialogue.messageBoxOpen) GameMode.DIALOGUE else GameMode.SCRIPT
-                    detail = "follower_" + dialogue.waitingFor
+                    mode = GameMode.SCRIPT
+                    detail = FOLLOWER_DETAIL
                 }
 
+                // Its message boxes and menus are decoded by HgssTextScreens (HgssScriptScreens).
                 scriptEnv != null -> {
-                    dialogue = readDialogue(scriptEnv)
-                    mode = if (dialogue.messageBoxOpen) GameMode.DIALOGUE else GameMode.SCRIPT
-                    detail = dialogue.waitingFor
-                    if (dialogue.waitingFor == "yes_no" || dialogue.waitingFor == "multichoice") {
-                        menu = runCatching { readScriptMenu(fs, scriptEnv, dialogue.waitingFor) }.getOrNull()
-                    }
+                    mode = GameMode.SCRIPT
+                    engagedTrainer = engagedTrainer(scriptEnv)
                 }
 
                 startMenuTask != null -> {
                     mode = GameMode.START_MENU
-                    startMenu = startMenuTask.second?.let { readStartMenu(fs, it) }
+                    startMenu = startMenuTask.env?.let { readStartMenu(fs, it) }
                 }
 
                 else -> {
                     mode = GameMode.FIELD_BUSY
-                    detail = when (tasks.firstOrNull()?.first) {
+                    detail = when (tasks.firstOrNull()?.function) {
                         v.fnTaskWildEncounter -> "wild_encounter_start"
-                        else -> "task=0x${tasks.firstOrNull()?.first?.toString(16)}"
+                        else -> "task=0x${tasks.firstOrNull()?.function?.toString(16)}"
                     }
                 }
             }
@@ -226,26 +190,26 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             detail = "map_not_ready"
         }
 
-        val saveData = ptr(v.saveDataPtr) ?: ptr(fs + A.FS_SAVE_DATA)
+        val saveData = mem.ptr(v.saveDataPtr) ?: mem.ptr(fs + A.FS_SAVE_DATA)
         val player = saveData?.let { runCatching { readPlayer(it) }.getOrNull() }
         // In battle the game works on its own copy of the party (BattleSystem.trainerParty[0], same slot order as the
         // save, values updated live: HP, status, PP); the save's party is only written back when the battle ends.
         // The catching demo (BATTLE_TYPE_TUTORIAL) battles with Lyra's party and bag: the player's are the save's.
         val demo = battle?.battleTypeFlags?.contains("TUTORIAL") == true ||
-            battleSetup?.let { u32(it + A.SETUP_BATTLE_TYPE) and A.BATTLE_TYPE_TUTORIAL != 0L } == true
-        val battleParty = if (battle != null && !demo) battleSystem?.let { bs -> ptr(bs + A.BS_TRAINER_PARTY)?.let { runCatching { readPartyAt(ctx, it) }.getOrNull() } } else null
+            battleSetup?.let { mem.u32(it + A.SETUP_BATTLE_TYPE) and A.BATTLE_TYPE_TUTORIAL != 0L } == true
+        val battleParty = if (battle != null && !demo) battleSystem?.let { bs -> mem.ptr(bs + A.BS_TRAINER_PARTY)?.let { runCatching { readPartyAt(ctx, it) }.getOrNull() } } else null
         // Outside the battle proper (intro, end of battle, evolutions after it) the battle app's setup holds the party
         // the game works on; the save's is only updated when the app ends.
-        val setupParty = if (battleParty.isNullOrEmpty() && !demo) battleSetup?.let { ptr(it + A.SETUP_PARTY) }?.let { runCatching { readPartyAt(ctx, it) }.getOrNull() } else null
+        val setupParty = if (battleParty.isNullOrEmpty() && !demo) battleSetup?.let { mem.ptr(it + A.SETUP_PARTY) }?.let { runCatching { readPartyAt(ctx, it) }.getOrNull() } else null
         val copiedParty = battleParty?.takeIf { it.isNotEmpty() } ?: setupParty?.takeIf { it.isNotEmpty() }
         val saveParty = saveData?.let { runCatching { readParty(ctx, it) }.getOrNull() }
         val party = copiedParty ?: saveParty ?: emptyList()
         // Same for the bag: balls thrown and items used in battle come out of the setup's copy.
-        val bag = (if (demo) null else battleSystem?.let { ptr(it + A.BS_BAG) } ?: battleSetup?.let { ptr(it + A.SETUP_BAG) })
+        val bag = (if (demo) null else battleSystem?.let { mem.ptr(it + A.BS_BAG) } ?: battleSetup?.let { mem.ptr(it + A.SETUP_BAG) })
             ?.let { runCatching { readBagAt(it) }.getOrNull() }
             ?: saveData?.let { runCatching { readBag(it) }.getOrNull() }
         val registered = saveData?.let { sd -> saveArray(sd, A.SAVE_BAG) }
-            ?.let { b -> (0 until 2).map { u16(b + A.BAG_REGISTERED_ITEMS + 2L * it) } }.orEmpty()
+            ?.let { b -> (0 until 2).map { mem.u16(b + A.BAG_REGISTERED_ITEMS + 2L * it) } }.orEmpty()
         val story = saveData?.let { runCatching { readStory(it) }.getOrNull() }
 
         // The overworld structures (map loader, map objects) are only alive while the field map app runs.
@@ -253,17 +217,12 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
         val location = runCatching { readLocation(ctx, fs, fieldAlive) }.getOrNull()
         val surroundings = if (fieldAlive && mapReady) runCatching { readSurroundings(ctx, fs, saveData) }.getOrNull() else null
 
-        val fading = isFading()
+        val fading = mem.fading
         val scenePending = mode == GameMode.OVERWORLD && sceneScriptPending(fs, saveData)
         val awaiting = !fading && when (mode) {
             GameMode.OVERWORLD -> playerControllable && location?.moving == false && !scenePending
-            GameMode.DIALOGUE, GameMode.SCRIPT -> when (dialogue?.waitingFor) {
-                "waiting_button" -> true
-                "yes_no", "multichoice" -> menu?.waiting != false
-                else -> false
-            }
             GameMode.START_MENU -> startMenu?.waiting == true
-            GameMode.APP -> app?.waiting ?: (subApp != null && s32(subApp + A.OM_EXEC_STATE) == 2)
+            GameMode.APP -> app?.waiting ?: (subApp != null && mem.s32(subApp + S.OM_EXEC_STATE) == S.OM_EXEC_MAIN)
             GameMode.BATTLE -> battle?.awaitingInput == true
             else -> false
         }
@@ -277,9 +236,8 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             scenePending = scenePending,
             player = player,
             location = location,
-            dialogue = dialogue,
+            engagedTrainer = engagedTrainer,
             startMenu = startMenu,
-            menu = menu,
             app = app,
             story = story,
             party = party,
@@ -298,15 +256,15 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
      * scene right after arriving on the first floor.
      */
     private fun sceneScriptPending(fs: Long, saveData: Long?): Boolean {
-        if (u32(fs + A.FS_SCRIPTS_DISABLED) != 0L) return false
-        val header = ptr(fs + A.FS_MAP_EVENTS)?.let { it + A.ME_SCRIPT_HEADER } ?: return false
+        if (mem.u32(fs + A.FS_SCRIPTS_DISABLED) != 0L) return false
+        val header = mem.ptr(fs + A.FS_MAP_EVENTS)?.let { it + A.ME_SCRIPT_HEADER } ?: return false
         var p = header
         var table: Long? = null
         while (p < header + 0x100) {
-            val type = u8(p)
+            val type = mem.u8(p)
             if (type == 0) break
             if (type == 1) {
-                val ofs = u32(p + 1)
+                val ofs = mem.u32(p + 1)
                 if (ofs != 0L) table = p + 5 + ofs
                 break
             }
@@ -314,182 +272,39 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
         }
         var t = table ?: return false
         repeat(32) {
-            val var1 = u16(t)
+            val var1 = mem.u16(t)
             if (var1 == 0) return false
             val a = varGet(saveData, var1)
-            val b = varGet(saveData, u16(t + 2))
+            val b = varGet(saveData, mem.u16(t + 2))
             if (a != null && a == b) return true
             t += 6
         }
         return false
     }
 
-    /** A palette fade / wipe or a master-brightness transition is running (warps, apps opening, script fades). */
-    private fun isFading(): Boolean =
-        u16(v.paletteFadeActive) != 0 || u32(v.brightnessSubActive) != 0L || u32(v.brightnessMainActive) != 0L
-
-    /** Walks TaskManager->prev from the top task. Returns (func, env) pairs, top first. */
-    private fun taskChain(top: Long): List<Pair<Long, Long?>> {
-        val out = mutableListOf<Pair<Long, Long?>>()
-        var t: Long? = top
-        val seen = HashSet<Long>()
-        while (t != null && out.size < 16 && seen.add(t)) {
-            out += fn(t + A.TM_FUNC) to ptr(t + A.TM_ENV)
-            t = ptr(t + A.TM_PREV)
-        }
-        return out
-    }
-
     // ================================================================================================
-    // Dialogue / script / start menu
+    // Script / start menu
     // ================================================================================================
 
-    private fun readDialogue(env: Long): DialogueInfo {
-        val open = u8(env + A.SE_MSGBOX_OPEN) != 0
-        val natives = (0 until 3).mapNotNull { i ->
-            val sc = ptr(env + A.SE_SCRIPT_CONTEXTS + 4L * i) ?: return@mapNotNull null
-            if (u8(sc + A.SC_MODE) == 2) fn(sc + A.SC_NATIVE) else null
-        }
-        val waiting = when {
-            v.fnScrYesNo in natives || v.fnScrTouchYesNo in natives -> "yes_no"
-            v.fnScrMenuWait1 in natives || v.fnScrMenuWait2 in natives || v.fnScrTouchMenu in natives -> "multichoice"
-            natives.any {
-                it == v.fnScrWaitABPress || it == v.fnScrWaitButton ||
-                    it == v.fnScrWaitButtonOrDpad || it == v.fnScrWaitButtonOrDelay
-            } -> "waiting_button"
-            v.fnScrWaitTextPrint in natives -> "printing"
-            v.fnScrWaitMovement in natives -> "waiting_movement"
-            v.fnScrWaitApp in natives || v.fnScrWaitAppDestroy in natives -> "waiting_app"
-            v.fnScrPauseTimer in natives -> "pause"
-            natives.isNotEmpty() -> "native(0x${natives.first().toString(16)})"
-            else -> "running"
-        }
-        val strPtr = if (open) ptr(env + A.SE_STRING_BUFFER_0) else null
-        val text = readGameString(strPtr)
-        // The field message printer: alive while printing or waiting at a page break (\r / \f) for A.
-        val printer = ptr(v.textPrinterTasks + 4L * u8(env + A.SE_TEXT_PRINTER))?.let { ptr(it + A.SYSTASK_DATA) }
-        val printerState = printer?.let { u8(it + A.TP_STATE) }
-        val pageBreak = printerState != null && printerState in A.TEXT_PRINTER_WAIT_STATES
-        var printedChars: Int? = null
-        if (strPtr != null && printer != null && text != null) {
-            val data = strPtr + A.STR_DATA
-            val cur = u32(printer + A.TP_CURRENT_CHAR)
-            val size = u16(strPtr + A.STR_SIZE)
-            if (cur >= data && cur <= data + 2L * size) printedChars = ((cur - data) / 2).toInt()
-        }
-        // The printer's progress only matters while the script waits for it (after that the slot may be stale).
-        val visible = if (strPtr != null && text != null) {
-            val size = u16(strPtr + A.STR_SIZE).coerceAtMost(2048)
-            HgssText.visibleLines(chars(strPtr + A.STR_DATA, size), if (printer != null && waiting == "printing") printedChars else null)
-        } else null
-        val waitingFor = when {
-            pageBreak && waiting == "printing" -> "waiting_button"
-            waiting == "printing" -> "printing"
-            else -> waiting
-        }
-        return DialogueInfo(
-            text = text,
-            visibleText = visible,
-            printing = waiting == "printing" && !pageBreak,
-            messageBoxOpen = open,
-            waitingFor = waitingFor,
-            scriptId = u16(env + A.SE_ACTIVE_SCRIPT),
-            engagedTrainer = s32(env + A.SE_ENGAGED_TRAINER_0_ID).takeIf { it in 1..MAX_TRAINER_ID },
-        )
-    }
-
     /**
-     * Talking to the following Pokémon: Task_FollowMonInteract (overlay 2) prints its own message, outside the script
-     * environment. Its work (FieldSystem.unk120) holds the message String at +0x10 and a state byte at +0x869 that is 6
-     * while the message box is up (verified live).
+     * The trainer who saw the player (`ScriptEnvironment.engagedTrainers[0].trainerId`, set when a trainer's sight
+     * catches the player; its approach and intro script run), null when none.
      */
-    private fun readFollowerMessage(fs: Long): DialogueInfo {
-        val work = ptr(fs + A.FS_FOLLOW_INTERACT)
-        val shown = work != null && u8(work + A.FOLLOW_INTERACT_STATE) == A.FOLLOW_INTERACT_MESSAGE_SHOWN
-        if (!shown) return DialogueInfo(messageBoxOpen = false, waitingFor = "running")
-        val strPtr = ptr(work!! + A.FOLLOW_INTERACT_STRING)
-        val text = readGameString(strPtr) ?: return DialogueInfo(messageBoxOpen = true, waitingFor = "waiting_button")
-        val data = strPtr!! + A.STR_DATA
-        val size = u16(strPtr + A.STR_SIZE)
-        // The printer currently printing this string, if any.
-        var printed: Int? = null
-        var pageBreak = false
-        for (i in 0 until 8) {
-            val printer = ptr(v.textPrinterTasks + 4L * i)?.let { ptr(it + A.SYSTASK_DATA) } ?: continue
-            val cur = u32(printer + A.TP_CURRENT_CHAR)
-            if (cur >= data && cur <= data + 2L * size) {
-                printed = ((cur - data) / 2).toInt()
-                pageBreak = u8(printer + A.TP_STATE) in A.TEXT_PRINTER_WAIT_STATES
-            }
-        }
-        val printing = printed != null && !pageBreak
-        return DialogueInfo(
-            text = text,
-            visibleText = HgssText.visibleLines(chars(data, size.coerceAtMost(2048)), if (printing) printed else null),
-            printing = printing,
-            messageBoxOpen = true,
-            waitingFor = if (printing) "printing" else "waiting_button",
-        )
-    }
-
-    /**
-     * The script menu waiting for a choice. Most of them are drawn on the touch screen by overlay 27
-     * (ScrCmd_GetMenuChoice / ScrCmd_MenuExec): FieldSystem.unkD8 -> bottom-screen manager (app 3) -> touch menu
-     * {state, FieldMenu*, cursor}. A few use the top screen: ScriptEnvironment.unk24 (ListMenu2D, yes/no) or
-     * ScriptEnvironment.unk10 (FieldMenu with its ListMenu2D). Option labels are the expanded Strings of the FieldMenu.
-     */
-    private fun readScriptMenu(fs: Long, env: Long, kind: String): MenuInfo? {
-        val natives = (0 until 3).mapNotNull { i ->
-            val sc = ptr(env + A.SE_SCRIPT_CONTEXTS + 4L * i) ?: return@mapNotNull null
-            if (u8(sc + A.SC_MODE) == 2) fn(sc + A.SC_NATIVE) else null
-        }
-        fun items(fieldMenu: Long, offset: Long): List<String> {
-            val n = u8(fieldMenu + A.FMENU_COUNT)
-            if (n !in 1..28) return emptyList()
-            return (0 until n).map { i -> readGameString(ptr(fieldMenu + offset + i * A.LIST_MENU_ITEM_SIZE))?.replace('\n', ' ') ?: "?" }
-        }
-        if (v.fnScrTouchYesNo in natives || v.fnScrTouchMenu in natives) {
-            val manager = ptr(fs + A.FS_BOTTOM_SCREEN_TASK)?.let { ptr(it + A.SYSTASK_DATA) } ?: return null
-            if (u8(manager + A.BSM_APP_ID) != A.BOTTOM_APP_SCRIPT_MENU) return null
-            val tm = ptr(manager + A.BSM_APP_TASK)?.let { ptr(it + A.SYSTASK_DATA) } ?: return null
-            val state = s32(tm + A.TOUCH_MENU_STATE)
-            val cursor = s32(tm + A.TOUCH_MENU_CURSOR)
-            return if (v.fnScrTouchYesNo in natives) {
-                MenuInfo("yes_no", listOf("YES", "NO"), cursor.takeIf { it in 0..1 }, waiting = state == A.TM_STATE_YES_NO_WAIT)
-            } else {
-                val labels = ptr(tm + A.TOUCH_MENU_FIELD_MENU)?.let { items(it, A.FMENU_ITEMS_TOUCH) } ?: emptyList()
-                // 5..8 options: 2 columns, row by row; with an odd count the last one sits alone at the bottom right
-                // (ov27_0225D3C4, verified on screen), so a "-" placeholder keeps row-major indices right.
-                val grid = labels.size > 4
-                val padded = grid && labels.size % 2 == 1
-                val options = if (padded) labels.dropLast(1) + "-" + labels.last() else labels
-                val index = cursor.takeIf { it in labels.indices }?.let { if (padded && it == labels.size - 1) it + 1 else it }
-                MenuInfo("multichoice", options, index, columns = if (grid) 2 else 1, waiting = state == A.TM_STATE_MENU_WAIT)
-            }
-        }
-        if (v.fnScrYesNo in natives) {
-            val cursor = ptr(env + A.SE_LIST_MENU_2D)?.let { u8(it + A.LM2D_SELECTED) }
-            return MenuInfo("yes_no", listOf("YES", "NO"), cursor?.takeIf { it in 0..1 }, screen = "top")
-        }
-        val fieldMenu = ptr(env + A.SE_FIELD_MENU) ?: return MenuInfo(kind, emptyList(), null, screen = "top")
-        val options = items(fieldMenu, A.FMENU_ITEMS_TOP)
-        val cursor = ptr(fieldMenu + A.FMENU_LIST_MENU)?.let { u8(it + A.LM2D_SELECTED) }
-        return MenuInfo("multichoice", options, cursor?.takeIf { it in options.indices }, screen = "top")
-    }
+    private fun engagedTrainer(env: Long): Int? = mem.s32(env + A.SE_ENGAGED_TRAINER_0_ID).takeIf { it in 1..MAX_TRAINER_ID }
 
     /** What we know about a full-screen app: at least its name; entries/cursor/prompt for the ones we decode. */
     private fun readApp(om: Long, name: String, saveData: Long?): AppInfo {
-        val running = s32(om + A.OM_EXEC_STATE) == 2
-        val data = ptr(om + A.OM_DATA)
+        val running = mem.s32(om + S.OM_EXEC_STATE) == S.OM_EXEC_MAIN
+        val data = mem.ptr(om + S.OM_DATA)
         return when (name) {
             "choose_starter" -> {
                 val work = data ?: return AppInfo(name, "Starter selection")
                 // D-pad order: RIGHT turns the machine 0 -> 2 -> 1 (Chikorita -> Totodile -> Cyndaquil).
                 val order = listOf(0, 2, 1)
                 val labels = listOf("CHIKORITA (Grass)", "CYNDAQUIL (Fire)", "TOTODILE (Water)")
-                val sel = u32(work + A.CS_CUR_SELECTION).toInt().takeIf { it in 0..2 }
+                val sel = mem.u32(work + A.CS_CUR_SELECTION).toInt().takeIf { it in 0..2 }
                 val front = sel?.let { labels[it].substringBefore(' ') }
-                val prompt = when (u32(work + A.CS_SELECT_STATE).toInt()) {
+                val prompt = when (mem.u32(work + A.CS_SELECT_STATE).toInt()) {
                     0 -> "Prof. Elm: pick a Poké Ball. A looks at the ball in front, LEFT/RIGHT turn the machine to the next ball."
                     1 -> "The ball in front holds $front. A chooses it (Elm then asks to confirm), LEFT/RIGHT turn to another ball."
                     2 -> "Prof. Elm asks: do you want $front? A = yes, take it; B = no, look again."
@@ -497,28 +312,28 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
                 }
                 AppInfo(
                     name, "Starter selection (Prof. Elm's machine)", order.map { labels[it] }, sel?.let { order.indexOf(it) },
-                    layout = "horizontal", prompt = prompt, waiting = running && s32(om + A.OM_PROC_STATE) == A.CS_PROC_HANDLE_INPUT,
+                    layout = "horizontal", prompt = prompt, waiting = running && mem.s32(om + S.OM_PROC_STATE) == A.CS_PROC_HANDLE_INPUT,
                 )
             }
             // Only the whole team's wait takes input; the rest of the sequence plays by itself.
             "hall_of_fame_register" -> AppInfo(
                 name, "Hall of Fame",
-                waiting = running && data != null && HgssGameClear.registration(HgssMemory(memory, v), data, isFading())?.waitsForButton == true,
+                waiting = running && data != null && HgssGameClear.registration(mem, data)?.waitsForButton == true,
             )
             // Only "The End" waits for input (the credits themselves can at most be skipped, and only on a replay).
             "credits" -> AppInfo(
                 name, "Credits",
-                waiting = !isFading() && HgssGameClear.credits(HgssMemory(memory, v), om)?.stage == HgssGameClear.CreditsStage.THE_END,
+                waiting = !mem.fading && HgssGameClear.credits(mem, om)?.stage == HgssGameClear.CreditsStage.THE_END,
             )
             "mailbox" -> {
                 val slots = (0 until 10).map { i ->
                     val mail = saveData?.let { saveArray(it, A.SAVE_MAILBOX) }?.let { it + i * A.MAIL_SIZE }
-                    if (mail == null || u8(mail + A.MAIL_TYPE) == 0xFF) "-"
-                    else "mail from " + HgssText.decode(chars(mail + A.MAIL_AUTHOR, 8))
+                    if (mail == null || mem.u8(mail + A.MAIL_TYPE) == 0xFF) "-"
+                    else "mail from " + Gen4Text.decode(mem.chars(mail + A.MAIL_AUTHOR, 8))
                 }
                 // CANCEL is the bottom-right button: a "-" placeholder keeps the 2-column row-major layout.
                 val entries = slots + "-" + "CANCEL"
-                val next = data?.let { ptr(it + A.MAILBOX_INNER) }?.let { ptr(it + A.MAILBOX_GRID_INPUT) }?.let { u8(it + A.GRID_INPUT_NEXT) }
+                val next = data?.let { mem.ptr(it + A.MAILBOX_INNER) }?.let { mem.ptr(it + A.MAILBOX_GRID_INPUT) }?.let { mem.u8(it + A.GRID_INPUT_NEXT) }
                 val cursor = when (next) {
                     in 0..9 -> next
                     10 -> 11
@@ -527,7 +342,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
                 AppInfo(
                     name, "PC Mailbox", entries, cursor, layout = "grid2",
                     prompt = "stored mail in 2 columns (\"-\" = empty slot): D-pad moves, A opens the selected mail's menu, B or CANCEL closes the Mailbox",
-                    waiting = running && !isFading(),
+                    waiting = running && !mem.fading,
                 )
             }
             else -> AppInfo(name, name.replace('_', ' '), waiting = running)
@@ -535,10 +350,10 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     }
 
     private fun readStartMenu(fs: Long, env: Long): StartMenuInfo? {
-        val n = u32(env + A.SM_NUM_BUTTONS).toInt()
+        val n = mem.u32(env + A.SM_NUM_BUTTONS).toInt()
         if (n !in 1..10) return null
         // The last two entries are the fixed Pokégear touch buttons (actions 9 and 10), not grid icons.
-        val actions = (0 until n).map { i -> u8(env + A.SM_SELECTION_TO_ACTION + i) }
+        val actions = (0 until n).map { i -> mem.u8(env + A.SM_SELECTION_TO_ACTION + i) }
         val grid = arrayOfNulls<String>(8)
         val gridIds = arrayOfNulls<String>(8)
         val slotOfIndex = mutableMapOf<Int, Int>()
@@ -554,10 +369,10 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
         val rows = (0 until 4).filter { r -> grid[r] != null || grid[r + 4] != null }
         val items = rows.flatMap { r -> listOf(grid[r] ?: "-", grid[r + 4] ?: "-") }
         val ids = rows.flatMap { r -> listOf(gridIds[r], gridIds[r + 4]) }
-        val cursorIndex = u8(fs + A.FS_START_MENU_CURSOR)
+        val cursorIndex = mem.u8(fs + A.FS_START_MENU_CURSOR)
         val cursor = slotOfIndex[cursorIndex]?.let { icon -> rows.indexOf(icon % 4).takeIf { it >= 0 }?.let { it * 2 + icon / 4 } }
         return StartMenuInfo(
-            items, cursor, waiting = u16(env + A.SM_STATE) == A.SM_STATE_HANDLE_INPUT, ids = ids,
+            items, cursor, waiting = mem.u16(env + A.SM_STATE) == A.SM_STATE_HANDLE_INPUT, ids = ids,
             leftColumn = (0 until 4).mapNotNull { grid[it] }, rightColumn = (4 until 8).mapNotNull { grid[it] },
         )
     }
@@ -569,11 +384,11 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     /** Address of save array [id] (SaveArray_Get, src/save.c:128), or null. */
     private fun saveArray(saveData: Long, id: Int): Long? {
         val hdr = saveData + A.SAVE_ARRAY_HEADERS + id * A.SAH_SIZE
-        if (s32(hdr + A.SAH_ID) != id) return null
-        val off = u32(hdr + A.SAH_OFFSET)
-        val len = u32(hdr + A.SAH_LENGTH)
+        if (mem.s32(hdr + A.SAH_ID) != id) return null
+        val off = mem.u32(hdr + A.SAH_OFFSET)
+        val len = mem.u32(hdr + A.SAH_LENGTH)
         val addr = saveData + A.SAVE_DYNAMIC_REGION + off
-        return if (inRam(addr, len.coerceAtLeast(1))) addr else null
+        return if (mem.inRam(addr, len.coerceAtLeast(1))) addr else null
     }
 
     private val badgeNames = listOf(
@@ -584,19 +399,19 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     private fun readPlayer(saveData: Long): PlayerInfo? {
         val pd = saveArray(saveData, A.SAVE_PLAYERDATA) ?: return null
         val prof = pd + A.PD_PROFILE
-        val johto = u8(prof + A.PP_JOHTO_BADGES)
-        val kanto = u8(prof + A.PP_KANTO_BADGES)
+        val johto = mem.u8(prof + A.PP_JOHTO_BADGES)
+        val kanto = mem.u8(prof + A.PP_KANTO_BADGES)
         val badges = (0 until 8).filter { johto shr it and 1 == 1 }.map { badgeNames[it] } +
             (0 until 8).filter { kanto shr it and 1 == 1 }.map { badgeNames[8 + it] }
         return PlayerInfo(
-            name = HgssText.decode(chars(prof + A.PP_NAME, 8)),
-            gender = if (u8(prof + A.PP_GENDER) == 0) "male" else "female",
-            trainerId = u32(prof + A.PP_ID) and 0xFFFF,
-            money = u32(prof + A.PP_MONEY),
-            coins = u16(pd + A.PD_COINS),
+            name = Gen4Text.decode(mem.chars(prof + A.PP_NAME, 8)),
+            gender = if (mem.u8(prof + A.PP_GENDER) == 0) "male" else "female",
+            trainerId = mem.u32(prof + A.PP_ID) and 0xFFFF,
+            money = mem.u32(prof + A.PP_MONEY),
+            coins = mem.u16(pd + A.PD_COINS),
             badges = badges,
             badgeCount = badges.size,
-            playTime = Triple(u16(pd + A.PD_PLAY_TIME), u8(pd + A.PD_PLAY_TIME + 2), u8(pd + A.PD_PLAY_TIME + 3))
+            playTime = Triple(mem.u16(pd + A.PD_PLAY_TIME), mem.u8(pd + A.PD_PLAY_TIME + 2), mem.u8(pd + A.PD_PLAY_TIME + 3))
                 .takeIf { (_, m, s) -> m < 60 && s < 60 },
             badgeIds = ((0 until 8).filter { johto shr it and 1 == 1 } + (0 until 8).filter { kanto shr it and 1 == 1 }.map { 8 + it }).toSet(),
             flyPoints = saveArray(saveData, A.SAVE_FLAGS)?.let(::flyPoints).orEmpty(),
@@ -607,7 +422,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     private fun flyPoints(varsFlags: Long): List<Int> =
         HgssFlyMapAddresses.FLYPOINTS.indices.filter { i ->
             val flag = HgssFlyMapAddresses.FLAG_FLYPOINT_FIRST + HgssFlyMapAddresses.FLYPOINTS[i].flag
-            u8(varsFlags + A.FLAGS_OFFSET + flag / 8) shr (flag % 8) and 1 == 1
+            mem.u8(varsFlags + A.FLAGS_OFFSET + flag / 8) shr (flag % 8) and 1 == 1
         }
 
     private fun moveInfo(id: Int, pp: Int, maxPp: Int): MoveInfo {
@@ -617,18 +432,18 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
 
     /** Raw bytes of the save's party slots (0xEC each), for diagnostics and fixtures. */
     fun partyRaw(): List<ByteArray> {
-        val saveData = ptr(v.saveDataPtr) ?: return emptyList()
+        val saveData = mem.ptr(v.saveDataPtr) ?: return emptyList()
         val party = saveArray(saveData, A.SAVE_PARTY) ?: return emptyList()
-        val count = s32(party + A.PARTY_CUR_COUNT).takeIf { it in 0..6 } ?: return emptyList()
-        return (0 until count).mapNotNull { bytes(party + A.PARTY_MONS + it * A.POKEMON_SIZE, A.POKEMON_SIZE.toInt()) }
+        val count = mem.s32(party + S.PARTY_CUR_COUNT).takeIf { it in 0..6 } ?: return emptyList()
+        return (0 until count).mapNotNull { mem.bytes(party + S.PARTY_MONS + it * S.POKEMON_SIZE, S.POKEMON_SIZE.toInt()) }
     }
 
     /** Raw bytes of the slots of PC box [box] (0x88 each), for diagnostics. */
     fun boxRaw(box: Int): List<ByteArray> {
-        val saveData = ptr(v.saveDataPtr) ?: return emptyList()
+        val saveData = mem.ptr(v.saveDataPtr) ?: return emptyList()
         val storage = saveArray(saveData, A.SAVE_PC_STORAGE) ?: return emptyList()
         val k = HgssKeyboardPcShopAddresses
-        return (0 until k.BOX_SLOTS).mapNotNull { bytes(storage + box * k.PCS_BOX_STRIDE + it * k.BOX_MON_SIZE, k.BOX_MON_SIZE) }
+        return (0 until k.BOX_SLOTS).mapNotNull { mem.bytes(storage + box * k.PCS_BOX_STRIDE + it * k.BOX_MON_SIZE, k.BOX_MON_SIZE) }
     }
 
     private fun readParty(ctx: Ctx, saveData: Long): List<PartyMon> {
@@ -638,26 +453,26 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
 
     /** Reads a `Party` struct (the save party, or a battle party copy). */
     private fun readPartyAt(ctx: Ctx, party: Long): List<PartyMon> {
-        val count = s32(party + A.PARTY_CUR_COUNT)
+        val count = mem.s32(party + S.PARTY_CUR_COUNT)
         if (count !in 0..6) {
             ctx.warnings += "party count $count out of range"
             return emptyList()
         }
         return (0 until count).mapNotNull { i ->
-            val raw = bytes(party + A.PARTY_MONS + i * A.POKEMON_SIZE, A.POKEMON_SIZE.toInt()) ?: return@mapNotNull null
+            val raw = mem.bytes(party + S.PARTY_MONS + i * S.POKEMON_SIZE, S.POKEMON_SIZE.toInt()) ?: return@mapNotNull null
             // Every way the structure can be while the game rewrites it is tried; problems name what is still wrong.
-            val mon = HgssPokemon.decode(raw, HgssMonCheck::isPlausible) ?: return@mapNotNull null
+            val mon = Gen4Pokemon.decode(raw, HgssMonCheck::isPlausible) ?: return@mapNotNull null
             toPartyMon(i, mon).copy(problems = HgssMonCheck.problems(mon))
         }
     }
 
-    private fun toPartyMon(slot: Int, mon: HgssPokemon.Decoded): PartyMon {
+    private fun toPartyMon(slot: Int, mon: Gen4Pokemon.Decoded): PartyMon {
         val species = mon.species
         val moves = (0 until 4).mapNotNull { m ->
             val id = mon.move(m)
-            if (id == 0) null else moveInfo(id, mon.movePp(m), HgssPokemon.maxPp(id, mon.movePpUps(m)))
+            if (id == 0) null else moveInfo(id, mon.movePp(m), HgssData.maxPp(id, mon.movePpUps(m)))
         }
-        val nickname = HgssText.decode(mon.nicknameChars)
+        val nickname = Gen4Text.decode(mon.nicknameChars)
         return PartyMon(
             slot = slot,
             personality = mon.personality,
@@ -670,7 +485,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             level = mon.level,
             hp = mon.hp,
             maxHp = mon.maxHp,
-            status = if (mon.isEgg) "EGG" else HgssPokemon.statusName(mon.status, mon.hp),
+            status = if (mon.isEgg) "EGG" else Gen4Pokemon.statusName(mon.status, mon.hp),
             types = HgssData.speciesTypes(species),
             heldItem = mon.heldItem.takeIf { it != 0 }?.let { HgssData.itemName(it) },
             ability = mon.ability.takeIf { it != 0 }?.let { HgssData.abilityName(it) },
@@ -687,11 +502,11 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
 
     /** Reads a `Bag` struct (the save's, or the battle's copy). */
     private fun readBagAt(bag: Long): List<BagPocket>? {
-        if (!inRam(bag, A.BAG_REGISTERED_ITEMS + 4)) return null
+        if (!mem.inRam(bag, A.BAG_REGISTERED_ITEMS + 4)) return null
         return A.BAG_POCKETS.map { (name, off, n) ->
             val items = (0 until n).mapNotNull { i ->
-                val id = u16(bag + off + 4L * i)
-                val qty = u16(bag + off + 4L * i + 2)
+                val id = mem.u16(bag + off + 4L * i)
+                val qty = mem.u16(bag + off + 4L * i + 2)
                 if (id == 0 || qty == 0) null else BagItem(id, HgssData.itemName(id), qty)
             }
             BagPocket(name, items)
@@ -704,12 +519,12 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
      */
     private fun readStory(saveData: Long): StoryInfo? {
         val vf = saveArray(saveData, A.SAVE_FLAGS) ?: return null
-        val flags = STORY_FLAGS.filter { id -> u8(vf + A.FLAGS_OFFSET + id / 8) shr (id % 8) and 1 == 1 }.toSet()
-        val vars = STORY_VARS.associateWith { id -> u16(vf + 2L * (id - A.VAR_BASE)) }
+        val flags = STORY_FLAGS.filter { id -> mem.u8(vf + A.FLAGS_OFFSET + id / 8) shr (id % 8) and 1 == 1 }.toSet()
+        val vars = STORY_VARS.associateWith { id -> mem.u16(vf + 2L * (id - A.VAR_BASE)) }
         val badges = saveArray(saveData, A.SAVE_PLAYERDATA)?.let { pd ->
             val prof = pd + A.PD_PROFILE
-            val johto = u8(prof + A.PP_JOHTO_BADGES)
-            val kanto = u8(prof + A.PP_KANTO_BADGES)
+            val johto = mem.u8(prof + A.PP_JOHTO_BADGES)
+            val kanto = mem.u8(prof + A.PP_KANTO_BADGES)
             (0 until 8).filter { johto shr it and 1 == 1 }.toSet() + (0 until 8).filter { kanto shr it and 1 == 1 }.map { it + 8 }
         } ?: emptySet()
         return StoryInfo(flags, vars, badges)
@@ -719,7 +534,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     fun variable(varId: Int): Int? = try {
         resolveVersion().first?.let { resolved ->
             v = resolved
-            varGet(ptr(v.saveDataPtr), varId)
+            varGet(mem.ptr(v.saveDataPtr), varId)
         }
     } catch (_: Exception) {
         null
@@ -730,7 +545,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
         resolveVersion().first?.let { resolved ->
             v = resolved
             if (flagId !in 0 until A.NUM_SAVE_FLAGS) return@let null
-            ptr(v.saveDataPtr)?.let { sd -> saveArray(sd, A.SAVE_FLAGS) }?.let { vf -> u8(vf + A.FLAGS_OFFSET + flagId / 8) shr (flagId % 8) and 1 == 1 }
+            mem.ptr(v.saveDataPtr)?.let { sd -> saveArray(sd, A.SAVE_FLAGS) }?.let { vf -> mem.u8(vf + A.FLAGS_OFFSET + flagId / 8) shr (flagId % 8) and 1 == 1 }
         }
     } catch (_: Exception) {
         null
@@ -744,7 +559,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     fun gymmick(): ByteArray? = try {
         resolveVersion().first?.let { resolved ->
             v = resolved
-            ptr(v.saveDataPtr)?.let { sd -> saveArray(sd, A.SAVE_MISC) }?.let { misc -> bytes(misc + A.MISC_GYMMICK, A.GYMMICK_SIZE) }
+            mem.ptr(v.saveDataPtr)?.let { sd -> saveArray(sd, A.SAVE_MISC) }?.let { misc -> mem.bytes(misc + A.MISC_GYMMICK, A.GYMMICK_SIZE) }
         }
     } catch (_: Exception) {
         null
@@ -753,7 +568,7 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     /** Script var value (FieldSystem_VarGet, src/fieldmap.c:365) — only save vars are supported. */
     private fun varGet(saveData: Long?, varId: Int): Int? = when {
         varId < A.VAR_BASE -> varId
-        varId < A.VAR_BASE + A.NUM_VARS -> saveData?.let { sd -> saveArray(sd, A.SAVE_FLAGS)?.let { u16(it + 2L * (varId - A.VAR_BASE)) } }
+        varId < A.VAR_BASE + A.NUM_VARS -> saveData?.let { sd -> saveArray(sd, A.SAVE_FLAGS)?.let { mem.u16(it + 2L * (varId - A.VAR_BASE)) } }
         else -> null
     }
 
@@ -761,62 +576,38 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     // Location / player avatar
     // ================================================================================================
 
-    private fun playerMapObject(fs: Long): Long? = ptr(fs + A.FS_PLAYER_AVATAR)?.let { ptr(it + A.PA_MAP_OBJECT) }
+    private fun playerMapObject(fs: Long): Long? = mem.ptr(fs + A.FS_PLAYER_AVATAR)?.let { mem.ptr(it + S.PA_MAP_OBJECT) }
 
     private fun readLocation(ctx: Ctx, fs: Long, fieldAlive: Boolean): LocationInfo? {
-        val loc = ptr(fs + A.FS_LOCATION) ?: return null
-        val mapId = s32(loc + A.LOC_MAP_ID)
-        if (mapId !in 0 until 1000) {
-            ctx.warnings += "map id $mapId out of range"
+        val loc = mem.ptr(fs + A.FS_LOCATION) ?: return null
+        val avatar = mem.ptr(fs + A.FS_PLAYER_AVATAR)
+        // The live map object only while the field map runs; the saved Location otherwise.
+        val mo = avatar?.let { mem.ptr(it + S.PA_MAP_OBJECT) }?.takeIf { fieldAlive }
+        val position = mem.playerPosition(loc, mo) ?: run {
+            ctx.warnings += "map id ${mem.s32(loc + S.LOC_MAP_ID)} out of range"
             return null
         }
-        val avatar = ptr(fs + A.FS_PLAYER_AVATAR)
-        val mo = avatar?.let { ptr(it + A.PA_MAP_OBJECT) }
-        var x = s32(loc + A.LOC_X)
-        var z = s32(loc + A.LOC_Z)
-        var height = 0
-        var facing = s32(loc + A.LOC_DIRECTION)
-        var moving = false
-        if (mo != null && fieldAlive) {
-            x = s32(mo + A.MO_X)
-            z = s32(mo + A.MO_Z)
-            height = s32(mo + A.MO_Y)
-            facing = s32(mo + A.MO_FACING)
-            // At rest the position vector is exactly the tile center (src/map_object.c:525).
-            val px = s32(mo + A.MO_POSITION_VECTOR)
-            val pz = s32(mo + A.MO_POSITION_VECTOR + 8)
-            // (MapObject flags 0x10/0x20 are useless here: the standing "movement" restarts every frame when idle.)
-            moving = px != x * 16 * 4096 + 8 * 4096 || pz != z * 16 * 4096 + 8 * 4096 ||
-                s32(mo + A.MO_PREVIOUS_X) != x || s32(mo + A.MO_PREVIOUS_Z) != z
-        }
-        val state = avatar?.let { s32(it + A.PA_STATE) }
-        val shoes = avatar?.let { ptr(it + A.PA_PLAYER_SAVE_DATA) }?.let { u16(it) != 0 }
+        val (mapId, x, z, height, facing, moving) = position
+        val state = avatar?.let { mem.s32(it + A.PA_STATE) }
+        val shoes = avatar?.let { mem.ptr(it + A.PA_PLAYER_SAVE_DATA) }?.let { mem.u16(it) != 0 }
 
         var standing: String? = null
         var facingTile: String? = null
         var facingBlocked: Boolean? = null
-        if (fieldAlive && u32(fs + A.FS_MAP_READY) != 0L) {
+        if (fieldAlive && mem.u32(fs + A.FS_MAP_READY) != 0L) {
             val tiles = TileReader(fs)
             tiles.attr(x, z)?.let { standing = HgssData.tileBehaviorNames.getOrNull(it and 0xFF) }
-            val (fx, fz) = when (facing) {
-                0 -> x to z - 1
-                1 -> x to z + 1
-                2 -> x - 1 to z
-                else -> x + 1 to z
-            }
-            tiles.attr(fx, fz)?.let {
+            facing?.let { tiles.attr(x + it.dx, z + it.dy) }?.let {
                 facingTile = HgssData.tileBehaviorNames.getOrNull(it and 0xFF)
                 facingBlocked = it and A.TILE_COLLISION_BIT != 0
             }
         }
         return LocationInfo(
             mapId = mapId,
-            mapName = HgssData.mapName(mapId),
-            locationName = HgssData.mapLocation(mapId),
             x = x,
             z = z,
             height = height,
-            facing = A.DIRECTIONS.getOrElse(facing) { "dir$facing" },
+            facing = facing?.name?.lowercase() ?: "?",
             moving = moving,
             avatarState = state?.let { A.PLAYER_STATES.getOrElse(it) { "STATE_$it" } } ?: "UNKNOWN",
             hasRunningShoes = shoes,
@@ -835,10 +626,10 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
      * (GetMetatileBehavior -> FieldSystem.unk60 accessor, asm/unk_02054648.s).
      */
     private inner class TileReader(fs: Long) {
-        private val accessor = u32(fs + A.FS_TERRAIN_ACCESSOR)
-        private val loader = ptr(fs + A.FS_MAP_LOADER)
-        private val terrain = ptr(fs + A.FS_TERRAIN_ATTRIBUTES, 2)
-        private val matrix = ptr(fs + A.FS_MAP_MATRIX, 2)
+        private val accessor = mem.u32(fs + A.FS_TERRAIN_ACCESSOR)
+        private val loader = mem.ptr(fs + A.FS_MAP_LOADER)
+        private val terrain = mem.ptr(fs + A.FS_TERRAIN_ATTRIBUTES, 2)
+        private val matrix = mem.ptr(fs + A.FS_MAP_MATRIX, 2)
 
         val width: Int
         val height: Int
@@ -849,17 +640,17 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             var w = 0
             var h = 0
             if (accessor == v.terrainAccessorLoader && loader != null) {
-                w = s32(loader + A.ML_MATRIX_WIDTH)
-                h = s32(loader + A.ML_MATRIX_HEIGHT)
+                w = mem.s32(loader + A.ML_MATRIX_WIDTH)
+                h = mem.s32(loader + A.ML_MATRIX_HEIGHT)
                 for (i in 0 until A.ML_SLOT_COUNT) {
-                    val buf = ptr(loader + A.ML_BLOCK_BUFFERS + 4L * i) ?: continue
-                    if (!inRam(buf, A.ML_BUFFER_BLOCK_INDEX + 4)) continue
+                    val buf = mem.ptr(loader + A.ML_BLOCK_BUFFERS + 4L * i) ?: continue
+                    if (!mem.inRam(buf, A.ML_BUFFER_BLOCK_INDEX + 4)) continue
                     slots[i] = buf
-                    slotBlocks[i] = s32(buf + A.ML_BUFFER_BLOCK_INDEX)
+                    slotBlocks[i] = mem.s32(buf + A.ML_BUFFER_BLOCK_INDEX)
                 }
             } else if (accessor == v.terrainAccessorTerrainAttributes && matrix != null) {
-                w = u8(matrix + A.MM_WIDTH)
-                h = u8(matrix + A.MM_HEIGHT)
+                w = mem.u8(matrix + A.MM_WIDTH)
+                h = mem.u8(matrix + A.MM_HEIGHT)
             }
             if (w !in 1..255 || h !in 1..255) {
                 w = 0; h = 0
@@ -878,15 +669,15 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             val tile = (z % A.BLOCK_TILES) * A.BLOCK_TILES + (x % A.BLOCK_TILES)
             if (accessor == v.terrainAccessorLoader) {
                 for (i in 0 until A.ML_SLOT_COUNT) {
-                    if (slots[i] != 0L && slotBlocks[i] == block) return u16(slots[i] + 2L * tile)
+                    if (slots[i] != 0L && slotBlocks[i] == block) return mem.u16(slots[i] + 2L * tile)
                 }
                 return null
             }
             val ta = terrain ?: return null
             if (block >= A.TA_MAX_MATRIX) return null
-            val idx = u8(ta + block)
+            val idx = mem.u8(ta + block)
             if (idx >= A.TA_MAX_BLOCKS) return null
-            return u16(ta + A.TA_ATTRS + 2L * (idx * 1024 + tile))
+            return mem.u16(ta + A.TA_ATTRS + 2L * (idx * 1024 + tile))
         }
     }
 
@@ -896,9 +687,9 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
 
     private fun readSurroundings(ctx: Ctx, fs: Long, saveData: Long?): Surroundings? {
         val playerMo = playerMapObject(fs) ?: return null
-        val px = s32(playerMo + A.MO_X)
-        val pz = s32(playerMo + A.MO_Z)
-        val mapId = ptr(fs + A.FS_LOCATION)?.let { s32(it + A.LOC_MAP_ID) } ?: -1
+        val px = mem.s32(playerMo + S.MO_X)
+        val pz = mem.s32(playerMo + S.MO_Z)
+        val mapId = mem.ptr(fs + A.FS_LOCATION)?.let { mem.s32(it + S.LOC_MAP_ID) } ?: -1
         val mapType = HgssData.mapType(mapId)
         val interior = mapType == "INTERIOR"
         val tiles = TileReader(fs)
@@ -916,22 +707,22 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     }
 
     private fun readMapObjects(fs: Long, playerMo: Long, px: Int, pz: Int): List<MapObjectInfo> {
-        val mom = ptr(fs + A.FS_MAP_OBJECT_MANAGER) ?: return emptyList()
-        val count = u32(mom + A.MOM_OBJECT_COUNT).toInt()
-        val objs = ptr(mom + A.MOM_OBJECTS) ?: return emptyList()
-        if (count !in 1..128 || !inRam(objs, count * A.MO_SIZE)) return emptyList()
-        val follower = ptr(fs + A.FS_FOLLOW_MON + A.FOLLOW_MON_MAP_OBJECT)
+        val mom = mem.ptr(fs + A.FS_MAP_OBJECT_MANAGER) ?: return emptyList()
+        val count = mem.u32(mom + A.MOM_OBJECT_COUNT).toInt()
+        val objs = mem.ptr(mom + A.MOM_OBJECTS) ?: return emptyList()
+        if (count !in 1..128 || !mem.inRam(objs, count * A.MO_SIZE)) return emptyList()
+        val follower = mem.ptr(fs + A.FS_FOLLOW_MON + A.FOLLOW_MON_MAP_OBJECT)
         val out = mutableListOf<MapObjectInfo>()
         for (i in 0 until count) {
             val o = objs + i * A.MO_SIZE
             if (o == playerMo) continue
-            val flags = u32(o + A.MO_FLAGS)
+            val flags = mem.u32(o + A.MO_FLAGS)
             if (flags and A.MO_FLAG_ACTIVE == 0L) continue
-            val sprite = s32(o + A.MO_SPRITE_ID)
+            val sprite = mem.s32(o + A.MO_SPRITE_ID)
             if (sprite == A.SPRITE_CAMERA_FOCUS) continue
             val spriteName = HgssData.spriteName(sprite)
-            val x = s32(o + A.MO_X)
-            val z = s32(o + A.MO_Z)
+            val x = mem.s32(o + S.MO_X)
+            val z = mem.s32(o + S.MO_Z)
             val kind = when {
                 o == follower -> "follower"
                 spriteName == "MONSTARBALL" -> "item_ball"
@@ -940,64 +731,64 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             }
             // An object of the zone just left, kept on screen across a map connection, is re-tagged with the new zone:
             // script 0xFFFF, and its old zone in the event flag (sub_0205F058, src/map_object.c).
-            val script = s32(o + A.MO_SCRIPT_ID)
+            val script = mem.s32(o + A.MO_SCRIPT_ID)
             val carried = script == A.MO_SCRIPT_CARRIED
             out += MapObjectInfo(
-                id = s32(o + A.MO_ID),
+                id = mem.s32(o + S.MO_LOCAL_ID),
                 sprite = spriteName,
                 x = x,
                 z = z,
                 dx = x - px,
                 dz = z - pz,
-                height = s32(o + A.MO_Y),
-                facing = A.DIRECTIONS.getOrElse(s32(o + A.MO_FACING)) { "?" },
-                movement = s32(o + A.MO_MOVEMENT),
-                type = s32(o + A.MO_TYPE),
-                scriptId = s32(o + A.MO_SCRIPT_ID),
+                height = mem.s32(o + S.MO_Y),
+                facing = S.DIRECTIONS.getOrNull(mem.s32(o + S.MO_FACING))?.name?.lowercase() ?: "?",
+                movement = mem.s32(o + A.MO_MOVEMENT),
+                type = mem.s32(o + A.MO_TYPE),
+                scriptId = mem.s32(o + A.MO_SCRIPT_ID),
                 hidden = flags and A.MO_FLAG_HIDDEN != 0L,
                 kind = kind,
                 label = if (kind == "follower") "your Pokémon (following you)" else HgssLabels.person(spriteName),
-                mapId = if (carried) s32(o + A.MO_EVENT_FLAG) else s32(o + A.MO_MAP_ID),
-                eventFlag = if (carried) 0 else s32(o + A.MO_EVENT_FLAG),
-                param0 = s32(o + A.MO_PARAM0),
+                mapId = if (carried) mem.s32(o + A.MO_EVENT_FLAG) else mem.s32(o + A.MO_MAP_ID),
+                eventFlag = if (carried) 0 else mem.s32(o + A.MO_EVENT_FLAG),
+                param0 = mem.s32(o + A.MO_PARAM0),
             )
         }
         return HgssLabels.bigSpriteParts(out).sortedBy { Math.abs(it.dx) + Math.abs(it.dz) }
     }
 
     private fun readEvents(ctx: Ctx, fs: Long, saveData: Long?, mapId: Int, tiles: TileReader): Pair<List<BgEventInfo>, List<TriggerInfo>> {
-        val me = ptr(fs + A.FS_MAP_EVENTS) ?: return Pair(emptyList(), emptyList())
-        fun count(off: Long) = u32(me + off).toInt().takeIf { it in 0..256 } ?: 0.also { ctx.warnings += "bad event count" }
+        val me = mem.ptr(fs + A.FS_MAP_EVENTS) ?: return Pair(emptyList(), emptyList())
+        fun count(off: Long) = mem.u32(me + off).toInt().takeIf { it in 0..256 } ?: 0.also { ctx.warnings += "bad event count" }
 
-        val bgs = ptr(me + A.ME_BG, 2)?.let { base ->
+        val bgs = mem.ptr(me + A.ME_BG, 2)?.let { base ->
             (0 until count(A.ME_NUM_BG)).map { i ->
                 val b = base + i * A.BG_SIZE
-                val x = s32(b + A.BG_X)
-                val z = s32(b + A.BG_Z)
-                val type = when (u16(b + A.BG_TYPE)) {
+                val x = mem.s32(b + A.BG_X)
+                val z = mem.s32(b + A.BG_Z)
+                val type = when (mem.u16(b + A.BG_TYPE)) {
                     0 -> "normal"
                     1 -> "sign"
                     2 -> "hidden_item"
-                    else -> "type${u16(b + A.BG_TYPE)}"
+                    else -> "type${mem.u16(b + A.BG_TYPE)}"
                 }
                 val attr = tiles.attr(x, z)
-                BgEventInfo(x, z, type, u16(b + A.BG_SCRIPT), blocked = attr != null && attr and A.TILE_COLLISION_BIT != 0)
+                BgEventInfo(x, z, type, mem.u16(b + A.BG_SCRIPT), blocked = attr != null && attr and A.TILE_COLLISION_BIT != 0)
             }
         } ?: emptyList()
 
         // Triggers whose script ends silently in some story state (world Trigger.quietWhen, from the ROM's scripts).
         val quietWhen = HgssData.world?.areaOf(mapId)?.triggers.orEmpty().filter { it.zone == mapId }.associate { it.id to it.quietWhen }
-        val triggers = ptr(me + A.ME_COORD, 2)?.let { base ->
+        val triggers = mem.ptr(me + A.ME_COORD, 2)?.let { base ->
             (0 until count(A.ME_NUM_COORD)).map { i ->
                 val c = base + i * A.COORD_SIZE
-                val variable = u16(c + A.COORD_VAR)
-                val value = u16(c + A.COORD_VAL)
+                val variable = mem.u16(c + A.COORD_VAR)
+                val value = mem.u16(c + A.COORD_VAL)
                 val varValue = varGet(saveData, variable)
                 TriggerInfo(
                     index = i,
-                    x = s16(c + A.COORD_X), z = s16(c + A.COORD_Z),
-                    width = u16(c + A.COORD_W), height = u16(c + A.COORD_H),
-                    scriptId = u16(c + A.COORD_SCRIPT),
+                    x = mem.s16(c + A.COORD_X), z = mem.s16(c + A.COORD_Z),
+                    width = mem.u16(c + A.COORD_W), height = mem.u16(c + A.COORD_H),
+                    scriptId = mem.u16(c + A.COORD_SCRIPT),
                     active = varValue?.let { it == value },
                     variable = variable,
                     value = value,
@@ -1011,6 +802,9 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     private companion object {
         /** Half size of the area read around the player (the loaded blocks never reach further). */
         const val AREA_HALF_SIZE = 32
+
+        /** [HgssState.modeDetail] while talking to the following Pokémon (Task_FollowMonInteract). */
+        const val FOLLOWER_DETAIL = "follower"
 
         /** Highest NPC trainer id (trdata has 737 records in HG/SS): beyond, the field is garbage. */
         const val MAX_TRAINER_ID = 1000
@@ -1145,35 +939,35 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     // ================================================================================================
 
     private fun readBattle(ctx: Ctx, bs: Long): BattleInfo? {
-        val battleCtx = ptr(bs + A.BS_CTX) ?: return null
-        val type = u32(bs + A.BS_BATTLE_TYPE)
-        val maxBattlers = s32(bs + A.BS_MAX_BATTLERS)
+        val battleCtx = mem.ptr(bs + A.BS_CTX) ?: return null
+        val type = mem.u32(bs + A.BS_BATTLE_TYPE)
+        val maxBattlers = mem.s32(bs + A.BS_MAX_BATTLERS)
         if (maxBattlers !in 2..4) {
             ctx.warnings += "battle: maxBattlers=$maxBattlers"
             return null
         }
-        if (!inRam(battleCtx, A.BC_BATTLE_MONS + 4 * A.BM_SIZE)) return null
+        if (!mem.inRam(battleCtx, A.BC_BATTLE_MONS + 4 * A.BM_SIZE)) return null
         val flags = A.BATTLE_TYPE_FLAGS.filter { (bit, _) -> type shr bit and 1L == 1L }.map { it.second }
         val battlers = (0 until maxBattlers).map { id -> readBattler(battleCtx, id) }
         val trainers = if (type and 1L != 0L) {
             (0 until maxBattlers).filter { it % 2 == 1 }.mapNotNull { id ->
-                val tid = u16(bs + A.BS_TRAINER_ID + 2L * id)
+                val tid = mem.u16(bs + A.BS_TRAINER_ID + 2L * id)
                 if (tid == 0) return@mapNotNull null
                 val t = bs + A.BS_TRAINERS + id * A.TRAINER_SIZE
-                TrainerInfo(id, tid, HgssData.trainerClassName(u8(t + A.TRAINER_CLASS)), HgssText.decode(chars(t + A.TRAINER_NAME, 8)))
+                TrainerInfo(id, tid, HgssData.trainerClassName(mem.u8(t + A.TRAINER_CLASS)), Gen4Text.decode(mem.chars(t + A.TRAINER_NAME, 8)))
             }.distinctBy { it.trainerId }
         } else emptyList()
-        val input = ptr(bs + A.BS_BATTLE_INPUT)
-        val menuId = input?.let { s8(it + A.BI_CUR_MENU_ID) }
+        val input = mem.ptr(bs + A.BS_BATTLE_INPUT)
+        val menuId = input?.let { mem.s8(it + A.BI_CUR_MENU_ID) }
         val menu = menuId?.let { A.BATTLE_MENUS[it] }
         val cursor = input?.let {
-            if (u8(it + A.BI_MENU_CURSOR) != 0) listOf(s8(it + A.BI_MENU_CURSOR + 1), s8(it + A.BI_MENU_CURSOR + 2)) else null
+            if (mem.u8(it + A.BI_MENU_CURSOR) != 0) listOf(mem.s8(it + A.BI_MENU_CURSOR + 1), mem.s8(it + A.BI_MENU_CURSOR + 2)) else null
         }
         // battle_input.c / the player's battle controller: the menu is up, not sliding in, no button animation,
         // and (for the command/move/target menus) the engine is in the selection phase waiting for battler 0.
         // The battler's selection state must match the menu shown (1 command, 4 move, 6 target): right after FIGHT is
         // chosen the battler is already choosing a move while the main menu is still displayed.
-        val battlerState = u8(battleCtx + A.BC_BATTLER_STATE)
+        val battlerState = mem.u8(battleCtx + A.BC_BATTLER_STATE)
         val expectedState = when (menuId) {
             in 1..10 -> 1
             11 -> 4
@@ -1181,29 +975,29 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             else -> null
         }
         // Bag (8) / party screen (10) opened from the battle menu: their own screens handle the input.
-        val subScreen = if (s32(battleCtx + A.BC_COMMAND) == A.BC_COMMAND_SELECTION) when (battlerState) {
+        val subScreen = if (mem.s32(battleCtx + A.BC_COMMAND) == A.BC_COMMAND_SELECTION) when (battlerState) {
             8 -> "BAG_SCREEN"
             10 -> "PARTY_SCREEN"
             else -> null
         } else null
         val awaiting = subScreen != null || input != null && menuId != null && menuId in 1..17 &&
-            u8(input + A.BI_TOUCH_DISABLED) == 0 && u32(input + A.BI_FEEDBACK_TASK) == 0L && u32(input + A.BI_UNK10_TASK) == 0L &&
-            (menuId >= 13 || (s32(battleCtx + A.BC_COMMAND) == A.BC_COMMAND_SELECTION && battlerState == expectedState))
+            mem.u8(input + A.BI_TOUCH_DISABLED) == 0 && mem.u32(input + A.BI_FEEDBACK_TASK) == 0L && mem.u32(input + A.BI_UNK10_TASK) == 0L &&
+            (menuId >= 13 || (mem.s32(battleCtx + A.BC_COMMAND) == A.BC_COMMAND_SELECTION && battlerState == expectedState))
         return BattleInfo(
             isWild = type and 1L == 0L,
             battleTypeFlags = flags,
             isDoubles = type and 2L != 0L,
-            turn = s32(battleCtx + A.BC_TOTAL_TURNS).takeIf { it in 0..10000 },
-            partyOrder = (0 until 6).map { u8(battleCtx + A.BC_PARTY_ORDER + it) }.takeIf { order -> order.sorted() == (0 until 6).toList() } ?: emptyList(),
+            turn = mem.s32(battleCtx + A.BC_TOTAL_TURNS).takeIf { it in 0..10000 },
+            partyOrder = (0 until 6).map { mem.u8(battleCtx + A.BC_PARTY_ORDER + it) }.takeIf { order -> order.sorted() == (0 until 6).toList() } ?: emptyList(),
             player = battlers.filter { it.side == "player" && it.species != 0 },
             opponents = battlers.filter { it.side == "opponent" && it.species != 0 },
             trainers = trainers,
             menu = subScreen ?: menu,
             menuCursor = if (subScreen != null) null else cursor,
             awaitingInput = awaiting,
-            message = readGameString(ptr(bs + A.BS_MSG_BUFFER)),
-            safariBalls = if (type and (1L shl 5) != 0L) s32(bs + A.BS_SAFARI_BALLS) else null,
-            outcomeFlag = u8(bs + A.BS_OUTCOME_FLAG),
+            message = mem.gameString(mem.ptr(bs + A.BS_MSG_BUFFER)),
+            safariBalls = if (type and (1L shl 5) != 0L) mem.s32(bs + A.BS_SAFARI_BALLS) else null,
+            outcomeFlag = mem.u8(bs + A.BS_OUTCOME_FLAG),
             sidesOut = sidesOut(ctx, bs, battleCtx, type, battlers),
         )
     }
@@ -1227,8 +1021,8 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             // A battler caught mid-rewrite may read 0 HP: no decision on such a reading.
             if (onField.any { HgssBattlerCheck.problems(it).isNotEmpty() }) return@filter false
             // BattleSystem_GetParty: trainerParty[battlerId & 1] in doubles, trainerParty[battlerId] in singles: the side's party either way.
-            val partyPtr = ptr(bs + A.BS_TRAINER_PARTY + 4L * side) ?: return@filter false
-            val count = s32(partyPtr + A.PARTY_CUR_COUNT)
+            val partyPtr = mem.ptr(bs + A.BS_TRAINER_PARTY + 4L * side) ?: return@filter false
+            val count = mem.s32(partyPtr + S.PARTY_CUR_COUNT)
             val party = runCatching { readPartyAt(ctx, partyPtr) }.getOrNull() ?: return@filter false
             if (party.size != count || party.any { it.problems.isNotEmpty() }) return@filter false
             val fieldHp = onField.mapNotNull { b -> b.partySlot?.let { it to b.hp } }.toMap()
@@ -1238,43 +1032,43 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
 
     private fun readBattler(battleCtx: Long, id: Int): Battler {
         val m = battleCtx + A.BC_BATTLE_MONS + id * A.BM_SIZE
-        val species = u16(m + A.BM_SPECIES)
+        val species = mem.u16(m + A.BM_SPECIES)
         val moves = (0 until 4).mapNotNull { i ->
-            val mv = u16(m + A.BM_MOVES + 2L * i)
+            val mv = mem.u16(m + A.BM_MOVES + 2L * i)
             // BattleMon.movePP holds the PP Ups (src/battle/overlay_12_0224E4FC.c), not the max PP.
-            if (mv == 0) null else moveInfo(mv, u8(m + A.BM_PP_CUR + i), HgssPokemon.maxPp(mv, u8(m + A.BM_PP_MAX + i)))
+            if (mv == 0) null else moveInfo(mv, mem.u8(m + A.BM_PP_CUR + i), HgssData.maxPp(mv, mem.u8(m + A.BM_PP_MAX + i)))
         }
-        val t1 = u8(m + A.BM_TYPE1)
-        val t2 = u8(m + A.BM_TYPE2)
+        val t1 = mem.u8(m + A.BM_TYPE1)
+        val t2 = mem.u8(m + A.BM_TYPE2)
         val stageNames = listOf("hp", "atk", "def", "speed", "spAtk", "spDef", "accuracy", "evasion")
-        val stages = (1 until 8).associate { i -> stageNames[i] to s8(m + A.BM_STAT_CHANGES + i) - 6 }
-        val hp = s32(m + A.BM_HP)
-        val item = u16(m + A.BM_ITEM)
+        val stages = (1 until 8).associate { i -> stageNames[i] to mem.s8(m + A.BM_STAT_CHANGES + i) - 6 }
+        val hp = mem.s32(m + A.BM_HP)
+        val item = mem.u16(m + A.BM_ITEM)
         return Battler(
             battlerId = id,
-            personality = u32(m + A.BM_PERSONALITY),
-            otId = u32(m + A.BM_OTID),
-            statusRaw = u32(m + A.BM_STATUS),
-            status2 = u32(m + A.BM_STATUS2),
-            moveEffects = u32(m + A.BM_MOVE_EFFECT_FLAGS),
-            counters = u32(m + A.BM_SUB),
+            personality = mem.u32(m + A.BM_PERSONALITY),
+            otId = mem.u32(m + A.BM_OTID),
+            statusRaw = mem.u32(m + A.BM_STATUS),
+            status2 = mem.u32(m + A.BM_STATUS2),
+            moveEffects = mem.u32(m + A.BM_MOVE_EFFECT_FLAGS),
+            counters = mem.u32(m + A.BM_SUB),
             side = if (id % 2 == 0) "player" else "opponent",
-            partySlot = u8(battleCtx + A.BC_SELECTED_MON_INDEX + id).takeIf { it < 6 },
+            partySlot = mem.u8(battleCtx + A.BC_SELECTED_MON_INDEX + id).takeIf { it < 6 },
             species = species,
             speciesName = HgssData.speciesName(species),
-            nickname = HgssText.decode(chars(m + A.BM_NICKNAME, 11)).takeIf { it.isNotEmpty() },
-            level = u8(m + A.BM_LEVEL),
+            nickname = Gen4Text.decode(mem.chars(m + A.BM_NICKNAME, 11)).takeIf { it.isNotEmpty() },
+            level = mem.u8(m + A.BM_LEVEL),
             hp = hp,
-            maxHp = s32(m + A.BM_MAX_HP),
-            status = HgssPokemon.statusName(u32(m + A.BM_STATUS), hp),
+            maxHp = mem.s32(m + A.BM_MAX_HP),
+            status = Gen4Pokemon.statusName(mem.u32(m + A.BM_STATUS), hp),
             types = listOf(t1, t2).distinct().map { HgssData.typeName(it) },
-            ability = u8(m + A.BM_ABILITY).takeIf { it != 0 }?.let { HgssData.abilityName(it) },
+            ability = mem.u8(m + A.BM_ABILITY).takeIf { it != 0 }?.let { HgssData.abilityName(it) },
             heldItem = item.takeIf { it != 0 }?.let { HgssData.itemName(it) },
             moves = moves,
             statStages = stages,
-            abilityId = u8(m + A.BM_ABILITY),
+            abilityId = mem.u8(m + A.BM_ABILITY),
             heldItemId = item,
-            announceFlags = u32(m + A.BM_ANNOUNCE_FLAGS),
+            announceFlags = mem.u32(m + A.BM_ANNOUNCE_FLAGS),
         )
     }
 }

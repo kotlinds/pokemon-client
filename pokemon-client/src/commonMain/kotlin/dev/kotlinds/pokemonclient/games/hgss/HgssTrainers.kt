@@ -1,7 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u16
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u8
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
 
 /**
  * Which trainer a person on the map is, from its script (never from its sprite or what it says), with the ROM's

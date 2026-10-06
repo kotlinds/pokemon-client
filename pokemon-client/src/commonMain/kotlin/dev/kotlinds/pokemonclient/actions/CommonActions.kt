@@ -2,7 +2,6 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.state.AnimationKind
-import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.StartMenuFeature
 import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.state.FieldObjectKind
@@ -15,6 +14,8 @@ import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.world.FieldMoveAccess
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -574,11 +575,6 @@ object CommonActions {
         parse = { json -> GameAction.Fish(ItemRef(string(json, "rod"))) },
     ), FieldPlans.fish)
 
-    /** The Fly move id (Gen 4), and below the badge it needs (badges are named by the game data layer, not shown text). */
-    internal const val MOVE_FLY = 19
-    /** The Storm Badge: by id (BADGE_STORM, include/constants/badge.h), never by its name (the game may be in French). */
-    internal const val FLY_BADGE_ID = 4
-
     /** Old Rod, Good Rod, Super Rod (Gen 4 item ids). */
     private val RODS = setOf(445, 446, 447)
 
@@ -641,12 +637,14 @@ object CommonActions {
         parameters = listOf(Parameter("destination", ParameterType.STRING, "fly:<map id> as listed on the fly map, or the town's name.")),
         modes = assisted,
         availability = { state ->
+            // The game's Fly rule (the move, the badge by id: never its shown name, the game may be in French).
+            // Null (a state not read by its game, tests) can't tell: hidden like a game without Fly.
+            val fly = state.fieldMoves?.get(FieldMoveKind.FLY)
             when {
-                !MovePlans.canWalk(state, hasWorld = true) -> Availability.Hidden
+                !MovePlans.canWalk(state, hasWorld = true) || fly == null || fly == FieldMoveAccess.Unknown -> Availability.Hidden
                 state.field?.flyAllowed == false -> Availability.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "Fly can't be used here (indoors, in a cave...)", "go outdoors first")
-                state.party.none { mon -> !mon.isEgg && mon.moves.any { it.move.id.value == MOVE_FLY } } ->
-                    Availability.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly")
-                state.player != null && FLY_BADGE_ID !in state.player.badgeIds -> Availability.Unavailable(UnavailableReason.NEEDS_BADGE, "Fly needs the Storm Badge")
+                fly == FieldMoveAccess.NoPokemon -> Availability.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly")
+                fly is FieldMoveAccess.NoBadge -> Availability.Unavailable(UnavailableReason.NEEDS_BADGE, "Fly needs the ${fly.badge} Badge")
                 else -> Availability.Available()
             }
         },
@@ -696,7 +694,7 @@ object CommonActions {
 
     /** Walking around but the start menu has no [feature] yet: say so instead of failing on the menu. */
     private fun locked(state: GameState, feature: StartMenuFeature): Availability.Unavailable? {
-        val walking = state.battle == null && (state.screen as? Screen.Overworld)?.awaiting == Awaiting.INPUT
+        val walking = FieldControl.inControl(state)
         if (!walking || state.startMenu?.contains(feature) != false) return null
         val detail = if (StartMenuFeature.BAG !in state.startMenu) "The start menu doesn't open yet" else "The start menu has no ${feature.name.lowercase()} yet"
         return Availability.Unavailable(UnavailableReason.NOT_UNLOCKED_YET, detail, "the story unlocks it (Mom gives it at the start)")

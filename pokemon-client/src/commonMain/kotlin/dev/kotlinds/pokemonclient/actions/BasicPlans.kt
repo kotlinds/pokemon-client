@@ -1,7 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.TextSource
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BattlerRef
@@ -160,23 +160,13 @@ internal object BasicPlans {
      * shows while the battle is freed) is only waited for.
      */
     private fun escapeResult(context: PlanContext): Boolean? {
-        val start = context.scope.frame
-        // Bounded in rounds too: each one runs frames, but a scripted game may not count them.
-        repeat(RUN_FRAMES / 10) {
-            if (context.scope.frame - start >= RUN_FRAMES) return null
-            val state = context.navigator.settle()
-            val screen = state.screen
-            when {
-                state.battle == null -> return true
-                screen is Screen.Selectable && screen.awaiting == Awaiting.INPUT -> return false
-                (screen is Screen.Dialogue || screen is Screen.PressToContinue) && screen.awaiting == Awaiting.INPUT -> {
-                    context.scope.tap(Button.A)
-                    context.navigator.awaitChange(screen, maxFrames = 60)
-                }
-                else -> context.scope.step(10)
-            }
+        // Bounded in rounds too: each one runs frames, but a scripted game may not count them. Every other screen
+        // (the fade out, whatever it shows while the battle is freed) is only waited through.
+        val end = context.navigator.advanceUntil(maxPresses = RUN_FRAMES / 10, maxFrames = RUN_FRAMES, waitOn = { true }) { state ->
+            state.battle == null || (state.screen is Screen.Selectable && state.screen.awaiting == Awaiting.INPUT)
         }
-        return null
+        val state = (end as? Step.Done)?.value ?: return null
+        return state.battle == null
     }
 
     /** The escape plays out in a few seconds; a failed one adds the foe's turn (~20 s at most). */
@@ -253,8 +243,7 @@ internal object BasicPlans {
         repeat(3) {
             val screen = context.navigator.settle().screen
             if (screen !is Screen.MoveSelect && screen !is Screen.TargetSelect) return ActionOutcome.Failed(error)
-            context.scope.tap(Button.B)
-            context.navigator.awaitChange(screen, maxFrames = 60)
+            context.navigator.press(Button.B, screen)
         }
         return ActionOutcome.Failed(error)
     }

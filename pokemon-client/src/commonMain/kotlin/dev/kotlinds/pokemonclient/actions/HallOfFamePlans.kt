@@ -3,7 +3,7 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.runtime.ActionProgress
 import dev.kotlinds.pokemonclient.runtime.ProgressUnit
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.ContinueReason

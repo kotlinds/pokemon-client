@@ -21,6 +21,7 @@ import dev.kotlinds.pokemonclient.world.TileKind
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
  * Knowledge levels: what the player hasn't seen is shown only with a walkthrough (`showHidden`). Hidden items are never
@@ -30,7 +31,7 @@ class HiddenKnowledgeViewTest {
 
     private val area = Area(1, "cave", 0, 0, 40, 5, Array(200) { TileInfo(false, TileKind.Floor) }, signs = listOf(Sign(1, 2, 3, 2, 8001, SignKind.HIDDEN_ITEM, 801)))
 
-    private fun field(x: Int, puzzle: PuzzleState? = null) = FieldState(1, "cave", x, 2, 0, Direction.EAST, MovementMode.WALK, moving = false, puzzle = puzzle)
+    private fun field(x: Int, puzzle: PuzzleState? = null) = FieldState(1, MapName(1, map = "cave"), x, 2, 0, Direction.EAST, MovementMode.WALK, moving = false, puzzle = puzzle)
 
     @Test
     fun hiddenItemsOnlyWithAWalkthrough() {

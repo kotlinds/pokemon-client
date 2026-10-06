@@ -1,5 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents
+import dev.kotlinds.pokemonclient.games.gen4.Gen4LandData
+import dev.kotlinds.pokemonclient.games.gen4.Gen4MapMatrix
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.world.TileKind
 import kotlin.test.Test
@@ -48,15 +51,15 @@ class HgssWorldFormatsTest {
     @Test
     fun `matrix with and without header and altitude sections`() {
         val full = Bytes().u8(2).u8(1).u8(1).u8(1).u8(3).ascii("map")
-            .u16(33).u16(60).u8(0).u8(6).u16(10).u16(HgssMapMatrix.NO_LAND).bytes()
-        val m = HgssMapMatrix.parse(0, full)
+            .u16(33).u16(60).u8(0).u8(6).u16(10).u16(Gen4MapMatrix.NO_LAND).bytes()
+        val m = Gen4MapMatrix.parse(0, full)
         assertEquals("map", m.name)
         assertEquals(2 to 1, m.width to m.height)
         assertEquals(60, m.zoneAt(1, 0))
         assertEquals(6, m.altitudeAt(1, 0))
-        assertEquals(listOf(10, HgssMapMatrix.NO_LAND), m.landData.toList())
+        assertEquals(listOf(10, Gen4MapMatrix.NO_LAND), m.landData.toList())
 
-        val single = HgssMapMatrix.parse(90, Bytes().u8(1).u8(2).u8(0).u8(0).u8(2).ascii("m_").u16(251).u16(252).bytes())
+        val single = Gen4MapMatrix.parse(90, Bytes().u8(1).u8(2).u8(0).u8(0).u8(2).ascii("m_").u16(251).u16(252).bytes())
         assertNull(single.zones)
         assertNull(single.zoneAt(0, 1))
         assertEquals(0, single.altitudeAt(0, 1))
@@ -84,7 +87,7 @@ class HgssWorldFormatsTest {
     @Test
     fun `land data grid starts after the variable header`() {
         for (extra in listOf(0, 0x18, 0x58)) {
-            val land = HgssLandData.parse(landData(extra, { if (it == 3 * 32 + 5) 0x803B else it % 2 }, listOf(0 to -48)))
+            val land = Gen4LandData.parse(landData(extra, { if (it == 3 * 32 + 5) 0x803B else it % 2 }, listOf(0 to -48)))
             assertEquals(0x803B, land.attribute(5, 3), "extra 0x${extra.toString(16)}")
             assertEquals(1, land.attribute(1, 0))
             assertNotNull(land.bdhc)
@@ -94,7 +97,7 @@ class HgssWorldFormatsTest {
     @Test
     fun `BDHC heights per tile, several surfaces on a bridge`() {
         // Flat plane y = 48 (n = (0,1,0), d = -48) and a 45° slope y = x (n = (-0.707, 0.707, 0), d = 0).
-        val heights = HgssLandData.parse(landData(0, { 0 }, listOf(0 to -48, 1 to 0))).bdhc!!.tileHeights()
+        val heights = Gen4LandData.parse(landData(0, { 0 }, listOf(0 to -48, 1 to 0))).bdhc!!.tileHeights()
         assertEquals(1024, heights.size)
         // Tile 0 has its center at x = -248 (slope height -248), tile 16 at x = 8.
         assertEquals(listOf(-248, 48), heights[0])
@@ -112,7 +115,7 @@ class HgssWorldFormatsTest {
         b.u16(6).u16(330).u16(15).u16(0).u16(583).u16(0).u16(1).u16(0).u16(0).u16(0).u16(0).u16(0).u16(16).u16(49).s32(0)
         b.s32(1).u16(16).u16(53).u16(78).u16(7).s32(0)
         b.s32(1).u16(3).u16(11).u16(12).u16(2).u16(7).u16(0).u16(0).u16(0x4109)
-        val ev = HgssZoneEvents.parse(b.bytes())
+        val ev = Gen4ZoneEvents.parse(b.bytes())
         assertEquals(dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents.BgEvent(6, 0, 13, 51, 0, 0), ev.bgs.single())
         val (edith, oldMan) = ev.objects
         assertTrue(edith.isTrainer)
@@ -121,8 +124,8 @@ class HgssWorldFormatsTest {
         assertEquals(583, oldMan.eventFlag)
         assertEquals(dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents.WarpEvent(16, 53, 78, 7, 0), ev.warps.single())
         assertEquals(dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents.CoordEvent(3, 11, 12, 2, 7, 0, 0, 0x4109), ev.coords.single())
-        assertEquals(HgssZoneEvents(emptyList(), emptyList(), emptyList(), emptyList()), HgssZoneEvents.parse(ByteArray(0)))
-        assertFailsWith<IllegalArgumentException> { HgssZoneEvents.parse(Bytes().s32(50).s32(0).s32(0).s32(0).bytes()) }
+        assertEquals(Gen4ZoneEvents(emptyList(), emptyList(), emptyList(), emptyList()), Gen4ZoneEvents.parse(ByteArray(0)))
+        assertFailsWith<IllegalArgumentException> { Gen4ZoneEvents.parse(Bytes().s32(50).s32(0).s32(0).s32(0).bytes()) }
     }
 
     @Test

@@ -23,6 +23,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 class ViewsTest {
 
@@ -34,13 +35,13 @@ class ViewsTest {
     )
 
     private val field = FieldState(
-        mapId = 7, mapName = "Town", x = 2, y = 1, height = 0, facing = Direction.NORTH, movement = MovementMode.WALK, moving = false,
+        mapId = 7, mapName = MapName(7, map = "Town"), x = 2, y = 1, height = 0, facing = Direction.NORTH, movement = MovementMode.WALK, moving = false,
         objects = listOf(FieldObject("person:4", "nurse", FieldObjectKind.PERSON, 3, 1, Direction.SOUTH, PersonRole.NURSE)),
     )
 
     @Test
     fun theMapShowsTilesPeopleExitsAndSignsWithTheirIds() {
-        val view = MapView.render(area, field, zoneName = { if (it == 9) "Route 1" else null }, width = 5, height = 3)
+        val view = MapView.render(area, field, mapName = { MapName(it, map = if (it == 9) "Route 1" else null) }, width = 5, height = 3)
         val rows = view["map"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertEquals("   1 . . A P #", rows[2])
         assertEquals("   0 . . \" S #", rows[1])

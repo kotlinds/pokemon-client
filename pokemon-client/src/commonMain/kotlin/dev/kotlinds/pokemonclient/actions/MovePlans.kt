@@ -1,9 +1,11 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.world.FieldMoves
+
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.InputFrame
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldObjectKind
 import dev.kotlinds.pokemonclient.state.FieldState
@@ -32,6 +34,7 @@ import dev.kotlinds.pokemonclient.world.RouteFailure
 import dev.kotlinds.pokemonclient.world.RouteOptions
 import dev.kotlinds.pokemonclient.world.StepWeights
 import dev.kotlinds.pokemonclient.world.EncounterConditions
+import dev.kotlinds.pokemonclient.world.FIELD_HEIGHT_UNITS
 import dev.kotlinds.pokemonclient.world.TeleportLink
 import dev.kotlinds.pokemonclient.world.SignKind
 import dev.kotlinds.pokemonclient.world.TileKind
@@ -66,12 +69,10 @@ internal object MovePlans {
             val target = resolve(context, action.target, null, null) ?: return@ActionPlan unknownTarget(context, action.target)
             val talkedTo = context.state().field?.objects?.firstOrNull { objectTargetId(it) == action.target }
             val trainerId = talkedTo?.trainer?.trainerId
-            val walked = WorldTravel.walkNextTo(context, target.copy(adjacent = true)).walk
-            if (walked is Walk.Interrupted && trainerId != null && trainerId in engagedTrainers(walked.state)) {
-                val now = context.navigator.settle()
-                return@ActionPlan ActionOutcome.Done("${action.target} saw you on the way (after ${walked.steps} step(s)) and came to battle: " +
-                    "the battle you asked for (now: ${now.screen.kind})")
-            }
+            // The tiles really moved (walk and turn), for an interruption after the walk arrived (see below).
+            val counter = TileCounter()
+            val walked = context.navigator.watching(counter::observe) { WorldTravel.walkNextTo(context, target.copy(adjacent = true)).walk }
+            if (walked is Walk.Interrupted) engagedTarget(context, action.target, trainerId, walked.state, walked.steps)?.let { return@ActionPlan it }
             if (walked is Walk.NoRoute && talkedTo?.height != null && (walked.failure == RouteFailure.Unreachable || walked.failure == RouteFailure.DifferentLevel)) {
                 return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH,
                     "no tile next to ${action.target} at its height (${talkedTo.height}) is reachable from here: ${walked.detail}",
@@ -87,9 +88,14 @@ internal object MovePlans {
             val height = area?.let { a -> field.objects.firstOrNull { objectTargetId(it) == action.target }?.let { knownHeight(a, it) } }
             if (height != null && height != field.height) return@repeat
             val facing = facingTowards(field, live) ?: return@repeat
-            if (field.facing != facing) {
-                context.scope.tap(facing.button)
-                context.scope.step(TURN_FRAMES)
+            // Turned and checked before A (the verification rule): A facing elsewhere would talk to someone else.
+            when (val faced = context.navigator.watching(counter::observe) { FieldControl.face(context, facing, "talk to ${action.target}") }) {
+                is FieldControl.Facing.Faced -> Unit
+                // Stopped while turning to it: the target (a trainer) seeing the player then is the battle asked for,
+                // like on the way; anything else is an interruption after the tiles walked.
+                is FieldControl.Facing.Stopped -> return@ActionPlan engagedTarget(context, action.target, trainerId, faced.state, counter.tiles)
+                    ?: Walk.Interrupted(faced.state, counter.tiles).toOutcome(context) { "" }
+                is FieldControl.Facing.Failed -> return@ActionPlan ActionOutcome.Failed(faced.error)
             }
             val beforeState = context.navigator.settle()
             val before = beforeState.screen
@@ -116,6 +122,16 @@ internal object MovePlans {
     }
 
     /**
+     * The success of `interact` with a trainer ([trainerId]) who engaged the player in [state] (saw them on the way or
+     * while they turned to it, after [steps] tiles): the very battle asked for. Null when it isn't that trainer.
+     */
+    private fun engagedTarget(context: PlanContext, target: String, trainerId: Int?, state: GameState, steps: Int): ActionOutcome? {
+        if (trainerId == null || trainerId !in engagedTrainers(state)) return null
+        val now = context.navigator.settle()
+        return ActionOutcome.Done("$target saw you on the way (after $steps step(s)) and came to battle: the battle you asked for (now: ${now.screen.kind})")
+    }
+
+    /**
      * The trainers ([dev.kotlinds.pokemonclient.state.FieldTrainer.trainerId]) engaging the player in [state]: the one
      * who saw them (walking up), or those of the battle that started.
      */
@@ -128,7 +144,7 @@ internal object MovePlans {
         val ty = target.y ?: return null
         val distance = kotlin.math.abs(tx - field.x) + kotlin.math.abs(ty - field.y)
         if (distance !in 1..2) return null
-        return directionTo(field.x, field.y, tx, ty)
+        return Direction.between(field.x, field.y, tx, ty)
     }
 
     /**
@@ -190,6 +206,7 @@ internal object MovePlans {
                 is StepResult.Moved -> Unit
                 is StepResult.Stopped -> return@ActionPlan battleOrStop(context)
                 is StepResult.Refused -> Unit
+                is StepResult.Failed -> return@ActionPlan ActionOutcome.Failed(step.error)
             }
             if (context.state().battle != null || context.state().screen !is Screen.Overworld) return@ActionPlan battleOrStop(context)
         }
@@ -294,7 +311,7 @@ internal object MovePlans {
     internal fun knownHeight(area: Area, o: dev.kotlinds.pokemonclient.state.FieldObject): Int? {
         val height = o.height ?: return null
         val surfaces = area.tile(o.x, o.y)?.heights.orEmpty()
-        if (surfaces.isNotEmpty() && surfaces.none { kotlin.math.abs(it - height * HEIGHT_UNITS) < HEIGHT_UNITS }) return null
+        if (surfaces.isNotEmpty() && surfaces.none { kotlin.math.abs(it - height * FIELD_HEIGHT_UNITS) < FIELD_HEIGHT_UNITS }) return null
         return height
     }
 
@@ -302,7 +319,7 @@ internal object MovePlans {
     internal fun atHeight(area: Area, node: Node, height: Int): Boolean {
         val heights = area.tile(node.x, node.y)?.heights.orEmpty()
         val surface = heights.getOrNull(node.level) ?: heights.firstOrNull() ?: return true
-        return kotlin.math.abs(surface - height * HEIGHT_UNITS) < HEIGHT_UNITS
+        return kotlin.math.abs(surface - height * FIELD_HEIGHT_UNITS) < FIELD_HEIGHT_UNITS
     }
 
     /**
@@ -401,16 +418,16 @@ internal object MovePlans {
             // Through the targeted door already (its animation outlasted a step): arrived. Walking into the next zone
             // of the overworld (a ledge jumped onto Route 5) changes the map id but not the area: not a warp.
             if (target.warp == true && startField != null && changedArea(context, field, startField)) return Walk.Arrived(field)
-            val area = context.game.world?.areaOf(field.mapId) ?: return Walk.NoRoute(RouteFailure.StartUnknown, "no map data for ${field.mapName}")
+            val area = context.game.world?.areaOf(field.mapId) ?: return Walk.NoRoute(RouteFailure.StartUnknown, noMapDetail(field))
             val pathfinder = Pathfinder(area, overlay(context, field, refused))
-            val start = Node(field.x, field.y, pathfinder.levelAt(field.x, field.y, field.height * HEIGHT_UNITS))
+            val start = pathfinder.nodeOf(field)
             val goalTiles = goalTiles(area, target)
             val isGoal: (Node) -> Boolean = target.isGoal ?: { node -> (node.x to node.y) in goalTiles }
             if (isGoal(start) && target.warp != true) return Walk.Arrived(field)
             // On the targeted exit mat already (just came in through it): only the press towards the exit is left.
             if (target.warp == true && target.exit != null && field.x == target.x && field.y == target.y) return takeExit(context, target, target.exit, field, options)
             val access = FieldMoveWalk.access(context, state)
-            val routeOptions = routeOptions(field, options, FieldMoveWalk.usable(access), stepWeights(context, state, options))
+            val routeOptions = routeOptions(field, options, FieldMoves.usable(access), stepWeights(context, state, options))
             // A tile target may be entered whatever it is (a warp, a scene trigger); targets reached with A never are.
             val enterable = if (target.adjacent) emptySet() else goalTiles
             // Moving platforms (Blackthorn Gym): plan the rides; a plain route would never step on a trigger knowingly.
@@ -499,6 +516,7 @@ internal object MovePlans {
                             return@repeat
                         }
                         is StepResult.Stopped -> return Walk.Interrupted(ride.state)
+                        is StepResult.Failed -> return Walk.Failed(ride.error)
                     }
                 }
                 val intoWarp = area.warps.any { it.x == edge.to.x && it.y == edge.to.y }
@@ -538,6 +556,7 @@ internal object MovePlans {
                         if (intoGoalWarp) awaitMapChange(context, field.mapId, from = edge.to.x to edge.to.y)?.let { return Walk.Arrived(it) }
                         return Walk.Interrupted(step.state, at = edge.to.x to edge.to.y)
                     }
+                    is StepResult.Failed -> return Walk.Failed(step.error)
                 }
             }
             // On the targeted door / hole: its transition may still be running.
@@ -550,7 +569,7 @@ internal object MovePlans {
             // walk may have crossed into the next zone of the area on the way (Pewter City → Route 2's gatehouse mat):
             // still on this area means not through yet, and the exit is pressed from the zone the player is on now.
             if (target.warp == true && !changedArea(context, endField, field) && target.exit != null) return takeExit(context, target, target.exit, endField, options)
-            val endNode = Node(endField.x, endField.y, pathfinder.levelAt(endField.x, endField.y, endField.height * HEIGHT_UNITS))
+            val endNode = pathfinder.nodeOf(endField)
             if (!isGoal(endNode) && target.warp != true) return@repeat
             return Walk.Arrived(endField)
         }
@@ -582,7 +601,7 @@ internal object MovePlans {
         var waited = 0
         while (waited < frames) {
             val state = context.state()
-            if (state.battle != null || state.screen is Screen.Dialogue || state.screen is Screen.Selectable) return null
+            if (FieldControl.takenOver(state, FieldControl.Motion.TRANSITION)) return null
             val field = state.field
             if (field != null && field.mapId != startMap) return context.navigator.settle().field ?: field
             if (field != null && from != null && sameMapWarp(state, field, from)) return context.navigator.settle().field ?: field
@@ -683,12 +702,12 @@ internal object MovePlans {
 
     /** The teleports of [puzzle] as route edges (heights converted to tile units). */
     internal fun puzzleTeleports(puzzle: PuzzleState?): List<TeleportLink> = puzzle?.teleports.orEmpty().flatMap { t ->
-        t.from.map { TeleportLink(it.x, it.y, t.to.x, t.to.y, fromHeight = t.fromHeight?.times(HEIGHT_UNITS), toHeight = t.toHeight?.times(HEIGHT_UNITS)) }
+        t.from.map { TeleportLink(it.x, it.y, t.to.x, t.to.y, fromHeight = t.fromHeight?.times(FIELD_HEIGHT_UNITS), toHeight = t.toHeight?.times(FIELD_HEIGHT_UNITS)) }
     }
 
     /** The moving floors of [puzzle] (a lift platform) as live tile heights (tile units). */
     internal fun puzzleSurfaces(puzzle: PuzzleState?): Map<Pair<Int, Int>, List<Int>> =
-        puzzle?.surfaces.orEmpty().flatMap { s -> s.tiles.map { (it.x to it.y) to s.heights.map { h -> h * HEIGHT_UNITS } } }.toMap()
+        puzzle?.surfaces.orEmpty().flatMap { s -> s.tiles.map { (it.x to it.y) to s.heights.map { h -> h * FIELD_HEIGHT_UNITS } } }.toMap()
 
     /**
      * How far [o] watches for the player: 0 once beaten (a beaten trainer never stops the player again), else its
@@ -791,13 +810,7 @@ internal object MovePlans {
 
     /** After stepping on a scene trigger: lets the step end and the scene's script start, then waits for its first stop. */
     private fun sceneStarted(context: PlanContext): GameState {
-        var still = 0
-        var waited = 0
-        while (still < STILL_FRAMES && waited < SETTLE_STEP_FRAMES) {
-            context.scope.step(1)
-            waited++
-            still = if (context.state().field?.moving == true) 0 else still + 1
-        }
+        FieldControl.awaitStill(context)
         return context.navigator.settle()
     }
 
@@ -829,6 +842,12 @@ internal object MovePlans {
         data class Moved(val field: FieldState) : StepResult
         data object Refused : StepResult
         data class Stopped(val state: GameState) : StepResult
+
+        /**
+         * A check before the press failed (a boulder's push: the player never turned to face it), nothing pressed
+         * blindly: the typed [error] ([FieldMoveWalk.push]).
+         */
+        data class Failed(val error: ActionError) : StepResult
     }
 
     /**
@@ -853,26 +872,20 @@ internal object MovePlans {
             frames++
             val state = context.state()
             val field = state.field
-            if (state.screen !is Screen.Overworld || field == null || field.trainerEncounter) return StepResult.Stopped(state)
+            // Not moving yet: any screen but the overworld (a fade, an animation) stops the hold (Motion.HOLD).
+            if (field == null || FieldControl.takenOver(state, FieldControl.Motion.HOLD)) return StepResult.Stopped(state)
             val started = field.moving || field.x != start.x || field.y != start.y || field.mapId != start.mapId
             if (!started) continue
             // The move has started: let go at once (on a bike, holding one frame too long commits to the next
-            // tile), then wait for it to end and read where the player really is.
-            // The game may still act on an input read a few frames ago (a bike starts the next tile by itself): the
-            // step is over only once the player has stood still for a few frames in a row.
-            var waited = 0
-            var still = 0
-            val settle = SETTLE_STEP_FRAMES + slide * SLIDE_TILE_FRAMES
-            val stillFrames = if (slide > 0) SLIDE_STILL_FRAMES else STILL_FRAMES
-            while (waited < settle && still < stillFrames) {
-                context.scope.step(1)
-                waited++
-                still = if (context.state().field?.moving == true) 0 else still + 1
-            }
-            val after = context.state()
+            // tile), then wait for it to end (the player still for a few frames) and read where the player really is.
+            val still = FieldControl.awaitStill(
+                context,
+                maxFrames = FieldControl.SETTLE_FRAMES + slide * SLIDE_TILE_FRAMES,
+                stillFrames = if (slide > 0) SLIDE_STILL_FRAMES else FieldControl.STILL_FRAMES,
+            )
+            val after = still.state
             val end = after.field
-            if (after.screen !is Screen.Overworld && after.screen.awaiting != Awaiting.ANIMATION) return StepResult.Stopped(after)
-            if (end == null || end.trainerEncounter) return StepResult.Stopped(after)
+            if (end == null || FieldControl.takenOver(after, FieldControl.Motion.WALK)) return StepResult.Stopped(after)
             if (end.mapId != start.mapId || (end.x == to.x && end.y == to.y)) return StepResult.Moved(end)
             // Only turned to face the direction (no tile change): keep holding.
             if (end.x == start.x && end.y == start.y) continue
@@ -889,7 +902,7 @@ internal object MovePlans {
     private fun teleport(context: PlanContext, edge: Edge.Teleport, options: MoveOptions): StepResult {
         val start = context.state().field ?: return StepResult.Stopped(context.state())
         val step = stepOnce(context, edge.direction, edge.via, options, long = true)
-        if (step is StepResult.Refused) return step
+        if (step is StepResult.Refused || step is StepResult.Failed) return step
         // A lift keeps the player on its tile: its end is the height change.
         val viaHeight = (step as? StepResult.Moved)?.field?.height
         // The script starts at the end of the step: wait until it has moved the player (or for a while), then until
@@ -902,7 +915,7 @@ internal object MovePlans {
             val state = context.state()
             val field = state.field
             val awaiting = state.screen.awaiting
-            if (state.battle != null || state.screen is Screen.Dialogue || state.screen is Screen.Selectable) return StepResult.Stopped(state)
+            if (FieldControl.takenOver(state, FieldControl.Motion.TRANSITION)) return StepResult.Stopped(state)
             val arrived = field != null && (field.mapId != start.mapId || field.x != edge.via.x || field.y != edge.via.y ||
                 (edge.to.x == edge.via.x && edge.to.y == edge.via.y && viaHeight != null && field.height != viaHeight))
             val idle = field != null && state.screen is Screen.Overworld && awaiting == Awaiting.INPUT && !field.moving
@@ -1002,44 +1015,19 @@ internal object MovePlans {
     private fun notInField(context: PlanContext) =
         ActionOutcome.Failed(ActionError.UnexpectedScreen("the overworld", context.state().screen.kind))
 
-    private fun noMap(field: FieldState) =
-        ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "no map data for ${field.mapName}"))
-
     // endregion
-
-    /** Direction from (fx, fy) towards (tx, ty) when they are in line, else null. */
-    private fun directionTo(fx: Int, fy: Int, tx: Int, ty: Int): Direction? = when {
-        fx == tx && ty < fy -> Direction.NORTH
-        fx == tx && ty > fy -> Direction.SOUTH
-        fy == ty && tx < fx -> Direction.WEST
-        fy == ty && tx > fx -> Direction.EAST
-        else -> null
-    }
 
     private fun Screen.Overworld.sameAsOverworld(other: Screen) = other is Screen.Overworld && other.banner == banner
 
-    private val Direction.button
-        get() = when (this) {
-            Direction.NORTH -> Button.UP
-            Direction.SOUTH -> Button.DOWN
-            Direction.WEST -> Button.LEFT
-            Direction.EAST -> Button.RIGHT
-        }
-
-    /** The player's height in RAM is the BDHC height of [dev.kotlinds.pokemonclient.world.TileInfo.heights] / 8. */
-    internal const val HEIGHT_UNITS = 8
     private const val STEP_FRAMES = 24
     /** Jumps and doors (the door opens first) take longer than a step. */
     private const val LONG_STEP_FRAMES = 64
-    private const val SETTLE_STEP_FRAMES = 64
-    private const val STILL_FRAMES = 6
 
     /** After a slide, still for longer than a spinner's spin on each arrow (7 frames, overlay 1 ov01_021F31CC). */
     private const val SLIDE_STILL_FRAMES = 16
 
     /** Extra wait per tile of a slide (a tile takes about 8 frames on ice, 8 plus the 7-frame spin on arrows). */
     private const val SLIDE_TILE_FRAMES = 24
-    private const val TURN_FRAMES = 4
 
     /** A silent switch's script (sound, shutters moving) runs a little while after A. */
     private const val SWITCH_FRAMES = 40
@@ -1069,5 +1057,5 @@ internal object MovePlans {
 
     /** True when moving actions can start: walking (or surfing) freely, with the maps known. */
     fun canWalk(state: GameState, hasWorld: Boolean): Boolean =
-        hasWorld && state.battle == null && state.field != null && state.screen is Screen.Overworld && state.screen.awaiting == Awaiting.INPUT
+        hasWorld && state.field != null && FieldControl.inControl(state)
 }

@@ -1,5 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.AnimationKind
@@ -48,9 +51,9 @@ internal object HgssKeyboardPcShopScreens : HgssScreenDecoder {
     private fun fieldSystem(mem: HgssMemory): Long? {
         val v = mem.version
         val om = mem.ptr(v.mainAppState + A.MAIN_APP_OVERLAY_MANAGER) ?: return null
-        val init = mem.fn(om + A.OM_INIT)
+        val init = mem.fn(om + S.OM_INIT)
         if (init != v.fnFieldContinueAppInit && init != v.fnFieldNewGameAppInit) return null
-        return mem.ptr(om + A.OM_DATA) ?: mem.ptr(v.fieldSystemPtr)
+        return mem.ptr(om + S.OM_DATA) ?: mem.ptr(v.fieldSystemPtr)
     }
 }
 
@@ -100,11 +103,11 @@ internal data class StoredMon(val id: MonId, val name: String, val level: Int?, 
         /** Decodes the box or party Pokémon at [addr] ([size] 0x88 or 0xEC); null for an empty or unreadable slot. */
         fun read(mem: HgssMemory, addr: Long, size: Int): StoredMon? {
             val raw = mem.bytes(addr, size) ?: return null
-            val mon = HgssPokemon.decode(raw, HgssMonCheck::isPlausible) ?: return null
+            val mon = Gen4Pokemon.decode(raw, HgssMonCheck::isPlausible) ?: return null
             if (mon.species == 0 || mon.species > PartyMon.MAX_SPECIES) return null
             val name = when {
                 mon.isEgg -> "Egg"
-                else -> HgssText.decode(mon.nicknameChars).ifEmpty { HgssData.speciesName(mon.species) }
+                else -> Gen4Text.decode(mon.nicknameChars).ifEmpty { HgssData.speciesName(mon.species) }
             }
             return StoredMon(MonId(mon.personality, mon.otId), name, mon.level.takeIf { mon.party != null && it > 0 }, mon.heldItem, mon.isEgg)
         }
@@ -127,7 +130,7 @@ internal val DIRECTIONS = listOf(Button.UP, Button.DOWN, Button.LEFT, Button.RIG
 
 /**
  * The naming keyboard of HeartGold / SoulSilver: the Gen 4 decoder ([dev.kotlinds.pokemonclient.games.gen4.Gen4NamingKeyboard])
- * with the HG/SS addresses (vblank callback, `sAppData`) and palette fade.
+ * with the HG/SS addresses (vblank callback, `sAppData`).
  */
 internal object HgssNamingKeyboard {
 
@@ -135,7 +138,6 @@ internal object HgssNamingKeyboard {
         dev.kotlinds.pokemonclient.games.gen4.Gen4NamingKeyboard.decode(
             mem, mem.version.gSystem,
             dev.kotlinds.pokemonclient.games.gen4.Gen4NamingAddresses(version.namingVBlankCallback, version.namingAppData),
-            fading = mem.u16(mem.version.paletteFadeActive) != 0,
         )
 
     fun topology(cells: IntArray): Topology = dev.kotlinds.pokemonclient.games.gen4.Gen4NamingKeyboard.topology(cells)
@@ -185,10 +187,10 @@ internal object HgssPcBox {
     private const val QUESTION_RELEASE = 1
 
     fun decode(mem: HgssMemory, version: HgssKeyboardPcShopVersion, om: Long): Screen {
-        if (mem.s32(om + A.OM_EXEC_STATE) != 2) return Screen.Animation(AnimationKind.TRANSITION)
-        val data = mem.ptr(om + A.OM_DATA) ?: return Screen.Animation(AnimationKind.TRANSITION)
+        if (mem.s32(om + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) return Screen.Animation(AnimationKind.TRANSITION)
+        val data = mem.ptr(om + S.OM_DATA) ?: return Screen.Animation(AnimationKind.TRANSITION)
         val work = mem.ptr(data + K.PCB_WORK) ?: return Screen.Animation(AnimationKind.TRANSITION)
-        val proc = mem.s32(om + A.OM_PROC_STATE)
+        val proc = mem.s32(om + S.OM_PROC_STATE)
         when {
             proc == K.PC_STATE_YES_NO -> {
                 val id = mem.u16(work + K.PCW_YES_NO_ID)
@@ -237,8 +239,8 @@ internal object HgssPcBox {
             storage?.let { StoredMon.read(mem, it + box * K.PCS_BOX_STRIDE + slot * K.BOX_MON_SIZE, K.BOX_MON_SIZE) }
 
         fun partyMon(slot: Int): StoredMon? = party?.let { p ->
-            if (slot >= mem.s32(p + A.PARTY_CUR_COUNT)) null
-            else StoredMon.read(mem, p + A.PARTY_MONS + slot * A.POKEMON_SIZE, A.POKEMON_SIZE.toInt())
+            if (slot >= mem.s32(p + S.PARTY_CUR_COUNT)) null
+            else StoredMon.read(mem, p + S.PARTY_MONS + slot * S.POKEMON_SIZE, S.POKEMON_SIZE.toInt())
         }
 
         fun boxName(box: Int) = storage?.let { mem.inlineText(it + K.PCS_BOX_NAMES + box * K.PCS_BOX_NAME_CHARS * 2L, K.PCS_BOX_NAME_CHARS) }
@@ -448,8 +450,8 @@ internal object HgssMart {
 
     fun decode(mem: HgssMemory, version: HgssKeyboardPcShopVersion, fs: Long, state: HgssState): Screen? {
         val task = mem.ptr(fs + A.FS_TASKMAN) ?: return null
-        if (mem.fn(task + A.TM_FUNC) != version.fnTaskMart) return null
-        val mart = mem.ptr(task + A.TM_ENV) ?: return null
+        if (mem.fn(task + S.FIELD_TASK_FUNC) != version.fnTaskMart) return null
+        val mart = mem.ptr(task + S.FIELD_TASK_ENV) ?: return null
         // SELL hands over to the Bag app (shop_menu.c:1520): decoded by the bag family.
         if (mem.u8(mart + K.MART_BUY_SELL) != K.MART_BUY) return null
         return when (val st = mem.u8(mart + K.MART_STATE)) {
@@ -486,9 +488,8 @@ internal object HgssMart {
      * false while it prints, null once it is done.
      */
     private fun printerWaiting(mem: HgssMemory, mart: Long): Boolean? {
-        val id = mem.u8(mart + K.MART_PRINTER_ID)
-        val printer = mem.ptr(mem.version.textPrinterTasks + 4L * id)?.let { mem.ptr(it + A.SYSTASK_DATA) } ?: return null
-        return mem.u8(printer + A.TP_STATE) in A.TEXT_PRINTER_WAIT_STATES
+        val printer = mem.textPrinter(mem.u8(mart + K.MART_PRINTER_ID)) ?: return null
+        return mem.printerWaitsForInput(printer)
     }
 
     /**
@@ -549,9 +550,9 @@ internal object HgssMart {
     }
 
     private fun yesNo(mem: HgssMemory, fs: Long, mart: Long): Screen {
-        val bsm = mem.ptr(fs + A.FS_BOTTOM_SCREEN_TASK)?.let { mem.ptr(it + A.SYSTASK_DATA) } ?: return Screen.Animation(AnimationKind.TRANSITION)
+        val bsm = mem.ptr(fs + A.FS_BOTTOM_SCREEN_TASK)?.let { mem.ptr(it + S.SYSTASK_DATA) } ?: return Screen.Animation(AnimationKind.TRANSITION)
         if (mem.u8(bsm + A.BSM_APP_ID) != K.BOTTOM_APP_MART) return Screen.Animation(AnimationKind.TRANSITION)
-        val work = mem.ptr(bsm + A.BSM_APP_TASK)?.let { mem.ptr(it + A.SYSTASK_DATA) } ?: return Screen.Animation(AnimationKind.TRANSITION)
+        val work = mem.ptr(bsm + A.BSM_APP_TASK)?.let { mem.ptr(it + S.SYSTASK_DATA) } ?: return Screen.Animation(AnimationKind.TRANSITION)
         val prompt = mem.ptr(work + K.OV31_YES_NO) ?: return Screen.Animation(AnimationKind.TRANSITION)
         val item = mem.u16(mart + K.MART_ITEM)
         val quantity = mem.s16(mart + K.MART_QUANTITY)
@@ -568,11 +569,11 @@ internal object HgssMart {
 internal object HgssTouchSave {
 
     fun decode(mem: HgssMemory, version: HgssKeyboardPcShopVersion, fs: Long): Screen? {
-        val bsm = mem.ptr(fs + A.FS_BOTTOM_SCREEN_TASK)?.let { mem.ptr(it + A.SYSTASK_DATA) } ?: return null
+        val bsm = mem.ptr(fs + A.FS_BOTTOM_SCREEN_TASK)?.let { mem.ptr(it + S.SYSTASK_DATA) } ?: return null
         if (mem.u8(bsm + A.BSM_APP_ID) != K.BOTTOM_APP_SAVE) return null
         val task = mem.ptr(bsm + A.BSM_APP_TASK) ?: return null
-        if (mem.fn(task + K.SYSTASK_FUNC) != version.fnTouchSaveApp) return null
-        val app = mem.ptr(task + A.SYSTASK_DATA) ?: return null
+        if (mem.fn(task + S.SYSTASK_FUNC) != version.fnTouchSaveApp) return null
+        val app = mem.ptr(task + S.SYSTASK_DATA) ?: return null
         val question = when (mem.s32(app + K.SAVE_STATE)) {
             K.SAVE_STATE_ASK -> "Would you like to save the game?"
             K.SAVE_STATE_OVERWRITE -> "There is already a saved file. Is it OK to overwrite it?"
@@ -592,7 +593,7 @@ internal object HgssTouchSave {
 internal object HgssHatch {
 
     fun decode(mem: HgssMemory, om: Long): Screen {
-        val data = mem.ptr(om + A.OM_DATA) ?: return Screen.Animation(AnimationKind.EGG_HATCH)
+        val data = mem.ptr(om + S.OM_DATA) ?: return Screen.Animation(AnimationKind.EGG_HATCH)
         if (mem.s32(data + K.HATCH_STATE) != K.HATCH_STATE_NICKNAME) return Screen.Animation(AnimationKind.EGG_HATCH)
         val yesNo = mem.ptr(data + K.HATCH_YES_NO) ?: return Screen.Animation(AnimationKind.EGG_HATCH)
         // ov95_021E7450: UP selects YES, DOWN selects NO (no wrap), A confirms, B answers NO; touch rects ov95_021E7820.

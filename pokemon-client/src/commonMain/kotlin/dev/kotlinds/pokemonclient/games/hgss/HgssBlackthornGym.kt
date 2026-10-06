@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.world.Area
 import dev.kotlinds.pokemonclient.world.MovingPlatforms
 import dev.kotlinds.pokemonclient.world.PlatformPose
@@ -163,10 +164,8 @@ class HgssBlackthornGym(override val poses: List<PlatformPose>, private val area
          */
         fun poses(gymmick: ByteArray): List<PlatformPose>? {
             if (gymmick.size < 4 + 15) return null
-            val type = (gymmick[0].toInt() and 0xFF) or ((gymmick[1].toInt() and 0xFF) shl 8)
-            if (type != GYMMICK_TYPE) return null
-            fun u16(o: Int) = (gymmick[o].toInt() and 0xFF) or ((gymmick[o + 1].toInt() and 0xFF) shl 8)
-            return (0 until 3).map { PlatformPose(u16(4 + 2 * it), u16(10 + 2 * it), gymmick[16 + it].toInt() and 3) }
+            if (Gen4RomBytes.u16(gymmick, 0) != GYMMICK_TYPE) return null
+            return (0 until 3).map { PlatformPose(Gen4RomBytes.u16(gymmick, 4 + 2 * it), Gen4RomBytes.u16(gymmick, 10 + 2 * it), gymmick[16 + it].toInt() and 3) }
         }
     }
 }

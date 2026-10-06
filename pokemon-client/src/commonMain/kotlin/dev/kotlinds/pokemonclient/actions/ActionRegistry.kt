@@ -108,6 +108,21 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
     }
 
     /**
+     * [execute], then lets the game settle (frames only, never a button: [Navigator.settle]) until it expects input:
+     * how every host runs an agent's step (the app's sessions, the bench), so what the agent reads next is the
+     * screen the action led to. The step never runs much past [STEP_FRAMES] in all (an agent's call must answer
+     * before its client gives up): a long action leaves less time to settle, but always at least [MIN_SETTLE_FRAMES]
+     * (a menu closing, the next screen fading in).
+     */
+    fun executeAndSettle(action: GameAction, scope: ActionScope, game: PokemonGame, settings: ActionSettings = ActionSettings()): ActionOutcome {
+        val start = scope.framesUsed
+        return execute(action, scope, game, settings).also {
+            val used = scope.framesUsed - start
+            Navigator(scope, game).settle(maxFrames = (STEP_FRAMES - used).coerceIn(MIN_SETTLE_FRAMES.toLong(), STEP_FRAMES.toLong()).toInt())
+        }
+    }
+
+    /**
      * Whether [spec] is listed as usable in [state]: usable now, or usable once the field is ready ([fieldReady]).
      * The listing matches what [execute] accepts, since [execute] waits for the game to settle before refusing
      * ([availabilityOnceSettled]): right after a battle the field actions are listed during the fade back already
@@ -172,6 +187,18 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
     }
 
     companion object {
+        /** About 30 s of game (real time): what one step of an agent may take, action and settling together. */
+        const val STEP_FRAMES = 1800
+
+        /** Always let the game settle a little after an action (a menu closing, the next screen fading in). */
+        const val MIN_SETTLE_FRAMES = 120
+
+        /**
+         * Lets a battle still playing out between two steps of a chain settle (frames only, never a button) and reads
+         * the state then, at most [STEP_FRAMES]: the `settle` of a [ChainRunner], the same for every host.
+         */
+        fun settleBetweenSteps(scope: ActionScope, game: PokemonGame): GameState = Navigator(scope, game).settle(maxFrames = STEP_FRAMES)
+
         /** The common actions, with [overrides] replacing the recipe of some action types for one game. */
         fun of(overrides: Map<KClass<out GameAction>, ActionPlan<out GameAction>> = emptyMap()): ActionRegistry =
             ActionRegistry(CommonActions.definitions.map { def ->

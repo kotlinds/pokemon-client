@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
+
 /**
  * What follows the Champion's defeat (`CallTask_GameClear`, src/game_clear.c), read from RAM:
  * 1. the registration in the Hall of Fame (overlay 63, `RegisterHallOfFame_*`, src/register_hall_of_fame.c): each
@@ -61,7 +63,7 @@ internal object HgssGameClear {
     )
 
     /** Reads the registration from its app [data]; null when it isn't laid out as expected. */
-    fun registration(mem: HgssMemory, data: Long, fading: Boolean): Registration? {
+    fun registration(mem: HgssMemory, data: Long): Registration? {
         val count = mem.u32(data + HOF_NUM_MONS).toInt().takeIf { it in 1..6 } ?: return null
         val scene = mem.s32(data + HOF_SCENE)
         val stage = mem.u16(data + HOF_SUBPROC_STAGE)
@@ -74,7 +76,7 @@ internal object HgssGameClear {
             count = count,
             presenting = !wholeTeam && index < count,
             monIndex = index,
-            waitsForButton = inWholeMain && stage == WHOLE_SUBPROC_WAIT_BUTTON && !fading,
+            waitsForButton = inWholeMain && stage == WHOLE_SUBPROC_WAIT_BUTTON && !mem.fading,
             wholeTeam = wholeTeam,
             leaving = wholeTeam && (scene > SCENE_WHOLE_PARTY_MAIN || inWholeMain && stage > WHOLE_SUBPROC_WAIT_BUTTON),
         )
@@ -100,9 +102,9 @@ internal object HgssGameClear {
      * null while they start (`Credits_Init`) or end (`Credits_Exit`).
      */
     fun credits(mem: HgssMemory, manager: Long): Credits? {
-        if (mem.s32(manager + HgssAddresses.OM_EXEC_STATE) != 2) return null
-        val skippable = mem.ptr(manager + HgssAddresses.OM_ARGS)?.let { mem.u32(it + CREDITS_ARGS_GAME_CLEARED) != 0L } ?: false
-        val stage = when (mem.s32(manager + HgssAddresses.OM_PROC_STATE)) {
+        if (mem.s32(manager + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) return null
+        val skippable = mem.ptr(manager + S.OM_ARGS)?.let { mem.u32(it + CREDITS_ARGS_GAME_CLEARED) != 0L } ?: false
+        val stage = when (mem.s32(manager + S.OM_PROC_STATE)) {
             in 0 until CREDITS_STATE_THE_END -> CreditsStage.ROLLING
             CREDITS_STATE_THE_END, CREDITS_STATE_THE_END_MUSIC_BOX -> CreditsStage.THE_END
             else -> CreditsStage.ENDING

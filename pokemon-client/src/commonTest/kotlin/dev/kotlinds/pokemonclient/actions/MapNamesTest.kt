@@ -5,6 +5,7 @@ import dev.kotlinds.pokemonclient.state.FieldState
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /** Map names as agents write them, and same-map warps (NOTES, Kanto part). */
 class MapNamesTest {
@@ -39,12 +40,12 @@ class MapNamesTest {
 
     @Test
     fun townsAreNamedWithOrWithoutTownOrCity() {
-        assertTrue(WorldTravel.sameMapName("Cerulean City", "Cerulean"))
-        assertTrue(WorldTravel.sameMapName("Cerulean", "cerulean city"))
-        assertFalse(WorldTravel.sameMapName("Cerulean Gym", "Cerulean"))
+        assertTrue(MapName.sameMapName("Cerulean City", "Cerulean"))
+        assertTrue(MapName.sameMapName("Cerulean", "cerulean city"))
+        assertFalse(MapName.sameMapName("Cerulean Gym", "Cerulean"))
     }
 
-    private fun field(x: Int, y: Int) = FieldState(mapId = 410, mapName = "Saffron Gym", x = x, y = y, height = 0, facing = null, movement = dev.kotlinds.pokemonclient.state.MovementMode.WALK, moving = false)
+    private fun field(x: Int, y: Int) = FieldState(mapId = 410, mapName = MapName(410, map = "Saffron Gym"), x = x, y = y, height = 0, facing = null, movement = dev.kotlinds.pokemonclient.state.MovementMode.WALK, moving = false)
 
     @Test
     fun aPadToTheSameMapWorkedWhenThePlayerLeftIt() {

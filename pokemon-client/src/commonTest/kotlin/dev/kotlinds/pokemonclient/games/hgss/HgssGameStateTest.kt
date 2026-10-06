@@ -57,7 +57,7 @@ class HgssGameStateTest {
         val state = state("nb1")
         assertIs<Screen.Overworld>(state.screen)
         val field = assertNotNull(state.field)
-        assertTrue(field.mapName.contains("New Bark"))
+        assertTrue(field.mapName.toString().contains("New Bark"))
     }
 
     @Test

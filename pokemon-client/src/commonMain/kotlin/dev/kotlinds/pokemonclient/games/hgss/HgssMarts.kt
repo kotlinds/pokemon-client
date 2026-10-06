@@ -1,6 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u16
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
 
 /**
  * What a shop clerk sells, known before talking to them: the clerk's map script sets `VAR_SPECIAL_x8004` then

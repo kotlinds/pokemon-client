@@ -52,7 +52,7 @@ class HgssPuzzlesLeftToAgentFixtureTest {
     )
 
     private fun start(field: FieldState, overlay: Overlay, area: dev.kotlinds.pokemonclient.world.Area) =
-        Node(field.x, field.y, Pathfinder(area, overlay).levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))
+        Pathfinder(area, overlay).nodeOf(field)
 
     @Test
     fun `Violet Gym - Falkner is behind the lift`() {

@@ -3,7 +3,7 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.runtime.ActionScope
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.Entry
@@ -48,7 +48,7 @@ class Navigator(
      * Waits until the game expects input (two consecutive polls), at most [maxFrames] frames, and returns the state.
      * Text being printed is left to print: only [Awaiting.INPUT] counts.
      */
-    fun settle(maxFrames: Int = 600, stablePolls: Int = 2, pollFrames: Int = 2): GameState {
+    fun settle(maxFrames: Int = SETTLE_FRAMES, stablePolls: Int = 2, pollFrames: Int = 2): GameState {
         var state = state()
         var ready = 0
         var waited = 0
@@ -162,22 +162,53 @@ class Navigator(
     }
 
     /**
+     * Presses [button] on [before] (the screen it is meant for), then lets the game run until the screen differs, at
+     * most [maxFrames]: a message page or a menu often stays drawn, still "waiting for input", for a few frames after
+     * the press, and reading it again at once would press twice on it. The one "press then wait for the reaction" of
+     * the recipes' loops.
+     */
+    fun press(button: Button, before: Screen, maxFrames: Int = PRESS_FRAMES) {
+        scope.tap(button)
+        awaitChange(before, maxFrames)
+    }
+
+    /**
      * Presses A to advance messages until [stop] matches the state, stopping on ANY menu or choice it doesn't
      * expect (never a burst of blind A presses). Returns the final state. [stop] must only look at the state:
      * acting inside it (answering a question...) would leave this loop judging a screen that is gone.
+     *
+     * Each press waits for its message to change ([press]) before the next reading. Screens that only play (by
+     * default a battle's, an animation, an evolution: [waitOn]) are waited through without pressing. [onMessage] is
+     * told each message before A is pressed on it (what it said, that one was read at all). At most [maxPresses]
+     * rounds and [maxFrames] frames ([ActionError.Timeout] beyond); each reading lets the game settle for up to
+     * [settleFrames] ([settle]).
      */
-    fun advanceUntil(maxPresses: Int = 60, stop: (GameState) -> Boolean): Step<GameState> {
+    fun advanceUntil(
+        maxPresses: Int = 60,
+        maxFrames: Int = Int.MAX_VALUE,
+        settleFrames: Int = SETTLE_FRAMES,
+        waitOn: (Screen) -> Boolean = ::playing,
+        onMessage: (GameState) -> Unit = {},
+        stop: (GameState) -> Boolean,
+    ): Step<GameState> {
+        val start = scope.frame
         repeat(maxPresses) {
-            val state = settle()
+            if (scope.frame - start > maxFrames) return Step.Failed(ActionError.Timeout("messages didn't end after ${maxFrames / 60} s"))
+            val state = settle(maxFrames = settleFrames)
             if (stop(state)) return Step.Done(state)
             when (val screen = state.screen) {
-                is Screen.Dialogue, is Screen.PressToContinue -> scope.tap(Button.A)
-                is Screen.Battle, is Screen.Animation, is Screen.Evolution -> scope.step(10)
-                else -> return Step.Failed(ActionError.UnexpectedScreen("a message", screen.kind))
+                is Screen.Dialogue, is Screen.PressToContinue -> {
+                    onMessage(state)
+                    press(Button.A, screen)
+                }
+                else -> if (waitOn(screen)) scope.step(WAIT_FRAMES) else return Step.Failed(ActionError.UnexpectedScreen("a message", screen.kind))
             }
         }
         return Step.Failed(ActionError.Timeout("messages didn't end after $maxPresses presses"))
     }
+
+    /** The screens [advanceUntil] waits through by default: they only play (a battle's turn, an animation, an evolution). */
+    private fun playing(screen: Screen): Boolean = screen is Screen.Battle || screen is Screen.Animation || screen is Screen.Evolution
 
     /** First button of a shortest path from [from] to [to] along the screen's topology (BFS), or null. */
     private fun firstStep(screen: Screen.Selectable, from: Int, to: Int): Button? {
@@ -213,6 +244,15 @@ class Navigator(
 
         /** Two seconds: long enough for any menu transition, short enough when a confirmation changes nothing. */
         const val CHANGE_FRAMES = 120
+
+        /** How long a message or a menu takes to react to a press (a page scrolling, a menu closing): one second. */
+        const val PRESS_FRAMES = 60
+
+        /** Longest wait for the game to expect input again ([settle]): ten seconds. */
+        const val SETTLE_FRAMES = 600
+
+        /** Frames waited on a screen that only plays ([advanceUntil]) before reading it again. */
+        const val WAIT_FRAMES = 10
     }
 }
 

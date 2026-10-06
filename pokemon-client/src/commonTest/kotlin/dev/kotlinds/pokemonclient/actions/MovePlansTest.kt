@@ -2,15 +2,7 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.Memory
-import dev.kotlinds.pokemonclient.PokemonGame
-import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.console.ConsolePort
-import dev.kotlinds.pokemonclient.console.Frame
-import dev.kotlinds.pokemonclient.console.InputFrame
-import dev.kotlinds.pokemonclient.console.MemoryRegion
-import dev.kotlinds.pokemonclient.console.Platform
-import dev.kotlinds.pokemonclient.runtime.ActionScope
-import dev.kotlinds.pokemonclient.runtime.InputProbe
+import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BattleKind
 import dev.kotlinds.pokemonclient.state.BattleState
@@ -26,6 +18,8 @@ import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.world.Area
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.FieldMoveRule
+import dev.kotlinds.pokemonclient.world.Node
+import dev.kotlinds.pokemonclient.world.PushEdge
 import dev.kotlinds.pokemonclient.world.TileInfo
 import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.WorldSource
@@ -33,16 +27,17 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /**
- * The walker against a simulated field: holding a direction for [STEP_FRAMES] frames moves the player one tile
+ * The walker against a simulated field ([GridGame]): holding a direction for [GridGame.STEP_FRAMES] frames moves the player one tile
  * (when the tile is free), like the real games. [invisibleWalls] are refused by the game although the map allows
  * them; stepping on [battleTile] starts a wild battle.
  */
 private class WalkingGame(
     rows: List<String>,
-    var x: Int,
-    var y: Int,
+    x: Int,
+    y: Int,
     val invisibleWalls: Set<Pair<Int, Int>> = emptySet(),
     val battleTile: Pair<Int, Int>? = null,
     val people: List<FieldObject> = emptyList(),
@@ -55,7 +50,17 @@ private class WalkingGame(
     val approachFrames: Int = 0,
     /** The trainer id of the one who sees the player at [sightTile] ([FieldState.engagedTrainerId]). */
     val spotterId: Int? = null,
-) : PokemonGame {
+    /** On this tile the game ignores the D-pad (the player can't turn there): a turn that never happens. */
+    val frozenTile: Pair<Int, Int>? = null,
+    /**
+     * A door: walking into it starts a fade ([FADE_FRAMES] frames of a transition screen, the player not moved yet),
+     * after which the player stands on it.
+     */
+    val doorTile: Pair<Int, Int>? = null,
+    /** Turning to this direction on this tile makes the trainer [spotterId] see the player (no step needed). */
+    val sightOnTurn: Pair<Pair<Int, Int>, Direction>? = null,
+) : GridGame(x, y) {
+    private var fadeLeft = 0
     val area: Area = run {
         val width = rows.maxOf { it.length }
         Area(0, "test", 0, 0, width, rows.size, Array(width * rows.size) { i ->
@@ -70,28 +75,24 @@ private class WalkingGame(
             }
         })
     }
-    var facing = Direction.SOUTH
     var inBattle = false
     var spotted = false
     private var approachLeft = approachFrames
-    private var heldFor = 0
-    private var held: Set<Button> = emptySet()
-    val visited = mutableListOf(x to y)
 
     override val name = "Walking"
     override val world = object : WorldSource {
         override fun areaOf(zoneId: Int) = area
     }
-    override val inputProbe = InputProbe { held }
     override fun fieldMoveRule(move: FieldMoveKind) = FieldMoveRule(MoveId(57), "Fog")
     override fun state(memory: Memory): GameState {
-        val height = (area.tile(x, y)?.heights?.firstOrNull() ?: 0) / MovePlans.HEIGHT_UNITS
-        val field = FieldState(1, "test", x, y, height, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted,
+        val height = (area.tile(x, y)?.heights?.firstOrNull() ?: 0) / dev.kotlinds.pokemonclient.world.FIELD_HEIGHT_UNITS
+        val field = FieldState(1, MapName(1, map = "test"), x, y, height, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted,
             engagedTrainerId = spotterId.takeIf { spotted })
         val battle = if (inBattle) BattleState(BattleKind.WILD, false, null, emptyList(), emptyList(), emptyList(), null) else null
         val screen = when {
             inBattle -> Screen.Battle(Awaiting.ANIMATION)
             // The "!" and the walk up: still the overworld, busy.
+            fadeLeft > 0 -> Screen.Animation(AnimationKind.TRANSITION)
             spotted && approachLeft > 0 -> Screen.Overworld(null, Awaiting.ANIMATION)
             // The trainer walked up and talks (its intro text before the battle).
             spotted -> Screen.Dialogue(TextSource.FIELD, "Youngster Joey", "I just lost, so I'm trying to find more Pokémon.", Awaiting.INPUT)
@@ -100,45 +101,33 @@ private class WalkingGame(
         return GameState(0, screen, null, emptyList(), null, battle, field.takeIf { !inBattle })
     }
 
-    val console = object : ConsolePort {
-        override val platform = Platform.NINTENDO_DS
-        override var frame = 0L
-        override val revision get() = frame
-        override fun step(frames: Int, input: InputFrame) = repeat(frames) {
-            frame++
-            held = input.buttons
-            if (spotted && approachLeft > 0) approachLeft--
-            val direction = DIRECTIONS.entries.firstOrNull { it.key in input.buttons }?.value
-            if (direction == null || inBattle || spotted) {
-                heldFor = 0
-                return@repeat
-            }
-            facing = direction
-            if (++heldFor < STEP_FRAMES) return@repeat
-            heldFor = 0
-            val nx = x + direction.dx
-            val ny = y + direction.dy
-            val free = area.tile(nx, ny)?.let { !it.blocked && it.kind !is TileKind.Water } == true && (nx to ny) !in invisibleWalls && people.none { it.x == nx && it.y == ny }
-            if (free) {
-                x = nx
-                y = ny
-                visited += x to y
-                if ((x to y) == battleTile) inBattle = true
-                if ((x to y) == sightTile) spotted = true
-            }
+    override fun busy(): Boolean {
+        if (fadeLeft > 0) {
+            if (--fadeLeft == 0) doorTile?.let { (dx, dy) -> moveTo(dx, dy) }
+            return true
         }
-        override fun memorySize(region: MemoryRegion) = 16
-        override fun read(region: MemoryRegion, offset: Int, length: Int, into: ByteArray) = Unit
-        override fun framebuffer(): Frame? = null
-        override fun saveState() = ByteArray(0)
-        override fun loadState(state: ByteArray) = true
+        sightOnTurn?.let { (tile, direction) -> if ((x to y) == tile && facing == direction) spotted = true }
+        if (spotted && approachLeft > 0) approachLeft--
+        return inBattle || spotted || (x to y) == frozenTile
     }
 
-    fun context() = PlanContext(ActionScope(console, inputProbe), this)
+    override fun step(direction: Direction) {
+        val nx = x + direction.dx
+        val ny = y + direction.dy
+        if ((nx to ny) == doorTile) {
+            fadeLeft = FADE_FRAMES
+            return
+        }
+        val free = area.tile(nx, ny)?.let { !it.blocked && it.kind !is TileKind.Water } == true && (nx to ny) !in invisibleWalls && people.none { it.x == nx && it.y == ny }
+        if (!free) return
+        moveTo(nx, ny)
+        if ((x to y) == battleTile) inBattle = true
+        if ((x to y) == sightTile) spotted = true
+    }
 
     companion object {
-        const val STEP_FRAMES = 4
-        val DIRECTIONS = mapOf(Button.UP to Direction.NORTH, Button.DOWN to Direction.SOUTH, Button.LEFT to Direction.WEST, Button.RIGHT to Direction.EAST)
+        /** Frames of a door's fade. */
+        const val FADE_FRAMES = 20
     }
 }
 
@@ -196,6 +185,52 @@ class MovePlansTest {
         assertTrue("the battle you asked for" in detail && "6 step(s)" in detail, detail)
     }
 
+    /**
+     * The trainer asked for may see the player only as they turn to face it (after the walk arrived): still the battle
+     * asked for, and the tiles walked are told (not "0 step(s)").
+     */
+    @Test
+    fun interactingWithATrainerWhoSeesThePlayerTurningToItIsTheBattleAskedFor() {
+        // The only tile next to Joey is 0,0 (a wall below him): reached facing north, then a turn east.
+        val joey = FieldObject("person:4", "Youngster Joey", FieldObjectKind.PERSON, 1, 0, Direction.WEST,
+            trainer = FieldTrainer(583, "Youngster", "Joey", defeated = false, sightRange = 1))
+        val game = WalkingGame(listOf("..", ".#", ".."), x = 0, y = 2, people = listOf(joey), approachFrames = 30, spotterId = 583,
+            sightOnTurn = (0 to 0) to Direction.EAST)
+        game.facing = Direction.NORTH
+        val detail = assertIs<ActionOutcome.Done>(MovePlans.interact.run(GameAction.Interact("person:4"), game.context())).detail.orEmpty()
+        assertTrue("the battle you asked for" in detail && "2 step(s)" in detail, "$detail at ${game.x},${game.y}")
+    }
+
+    /**
+     * Before the step has started, any screen but the overworld stops the hold (a door's fade included): the step
+     * reports the game taking over, not a plain move, and the direction isn't held into the transition.
+     */
+    @Test
+    fun aFadeBeforeTheStepStartedStopsTheHold() {
+        val game = WalkingGame(listOf("..."), x = 0, y = 0, doorTile = 1 to 0)
+        game.facing = Direction.EAST
+        val step = MovePlans.stepOnce(game.context(), Direction.EAST, Node(1, 0), MoveOptions())
+        val stopped = assertIs<MovePlans.StepResult.Stopped>(step)
+        assertIs<Screen.Animation>(stopped.state.screen)
+        assertEquals(0 to 0, game.x to game.y)
+    }
+
+    /**
+     * A boulder's push faces it first, verified: when the game never turns the player (three taps), the push stops with
+     * the typed error instead of holding the direction blindly.
+     */
+    @Test
+    fun aPushWhoseTurnNeverHappensIsATypedErrorNotABlindHold() {
+        val game = WalkingGame(listOf("..."), x = 0, y = 0, frozenTile = 0 to 0)
+        game.facing = Direction.SOUTH
+        val edge = PushEdge(Node(0, 0), Direction.EAST, 1 to 0, 2 to 0, needsStrength = true)
+        val failed = assertIs<MovePlans.StepResult.Failed>(FieldMoveWalk.push(game.context(), edge, MoveOptions()))
+        val error = assertIs<ActionError.VerificationFailed>(failed.error)
+        assertEquals("east", error.expected)
+        assertEquals(3, error.attempts)
+        assertEquals(0 to 0, game.x to game.y)
+    }
+
     @Test
     fun anotherTrainerSeeingThePlayerStillInterruptsTheInteraction() {
         val bert = FieldObject("person:4", "Bird Keeper Bert", FieldObjectKind.PERSON, 9, 0, Direction.WEST,
@@ -225,6 +260,23 @@ class MovePlansTest {
         assertTrue(game.x to game.y in setOf(2 to 0, 3 to 1), "next to the person, not on it: ${game.x},${game.y}")
     }
 
+    /**
+     * The turn towards the person is checked before A (the verification rule): when the game never turns the player,
+     * `interact` stops with an explicit error after three taps instead of pressing A facing elsewhere.
+     */
+    @Test
+    fun interactNeverPressesAWhenTheTurnDidNotHappen() {
+        val nurse = FieldObject("person:0", "nurse", FieldObjectKind.PERSON, 3, 0, Direction.SOUTH)
+        // The straight way ends on 3,1 facing east; the player must turn north there, which this game refuses.
+        val game = WalkingGame(listOf("....", "...."), x = 0, y = 1, people = listOf(nurse), frozenTile = 3 to 1)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.interact.run(GameAction.Interact("person:0"), game.context()))
+        val error = assertIs<ActionError.VerificationFailed>(failed.error)
+        assertEquals("north", error.expected)
+        assertEquals("east", error.actual)
+        assertEquals(3, error.attempts)
+        assertEquals(3 to 1, game.x to game.y)
+    }
+
     @Test
     fun unknownTargetsListTheKnownOnes() {
         val nurse = FieldObject("person:0", "nurse", FieldObjectKind.PERSON, 3, 0, Direction.SOUTH)
@@ -250,7 +302,7 @@ class MovePlansTest {
         assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(12, 0, null), game.context()))
         assertEquals(12 to 0, game.x to game.y)
         val frames = game.console.frame - before
-        assertTrue(frames < 12 * WalkingGame.STEP_FRAMES + 30, "took $frames frames")
+        assertTrue(frames < 12 * GridGame.STEP_FRAMES + 30, "took $frames frames")
         assertEquals((0..12).map { it to 0 }, game.visited)
     }
 

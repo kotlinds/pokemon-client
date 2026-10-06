@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.games.platinum
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Memory
 import dev.kotlinds.pokemonclient.games.gen4.Gen4NamingAddresses
+import dev.kotlinds.pokemonclient.games.gen4.Gen4TextPrinters
 
 /**
  * Version-specific absolute addresses of Pokémon Platinum (ARM9 main binary and overlay functions / globals), one
@@ -29,8 +30,10 @@ data class PlatinumVersion(
     val saveDataPtr: Long,
     /** `static ScreenFadeManager sScreenFadeManager` (src/screen_fade.c); `active` is at +0x14C. */
     val screenFadeManager: Long,
-    /** `static SysTask *sTextPrinterTasks[8]` (src/text.c). */
-    val textPrinterTasks: Long,
+    /** `static SysTask *sTextPrinterTasks[8]` (src/text.c) and Platinum's page-break wait states. */
+    val textPrinters: Gen4TextPrinters,
+    /** Slots of `ScriptManager.ctx` (`NUM_SCRIPT_CONTEXTS`, include/script_manager.h): 2 in Platinum (3 in HGSS). */
+    val scriptContexts: Int,
     /** The naming keyboard (src/applications/naming_screen.c). */
     val naming: Gen4NamingAddresses,
 
@@ -63,6 +66,7 @@ data class PlatinumVersion(
     val fnScrCheckABXPadPress: Long,          // ScriptContext_CheckABXPadPress
     val fnScrCheckABPadPress: Long,           // ScriptContext_CheckABPadPress
     val fnScrWaitForYesNoResult: Long,        // ScriptContext_WaitForYesNoResult
+    val fnScrWaitSubContext: Long,            // ScriptContext_WaitSubContext: a caller parked while CallCommonScript's child runs
     val fnScrSignpostPrinting: Long,          // WaitScrollingSignpostInput: a sign's message printing
     val fnScrSignpostInput: Long,             // HandleSignpostInput: a sign's message waiting for A / B (or a turn)
 
@@ -80,7 +84,9 @@ data class PlatinumVersion(
             fieldSystemPtr = 0x021C07DCL,
             saveDataPtr = 0x021C0794L,
             screenFadeManager = 0x021BF474L,
-            textPrinterTasks = 0x021C04E0L,
+            // RENDER_STATE_CLEAR / RENDER_STATE_START_SCROLL (src/render_text.c): waiting for A at a page break.
+            textPrinters = Gen4TextPrinters(0x021C04E0L, setOf(2, 3)),
+            scriptContexts = 2,
             naming = Gen4NamingAddresses(
                 vblankCallback = 0x02087190L, appData = 0x021C0A30L, delayCounterOffset = 0x5CCL,
                 cursorSprite = (0x32CL + 4 * 8) to 0x34L, // uiSprites[NMS_SPRITE_CURSOR = 8], Sprite.draw
@@ -105,6 +111,7 @@ data class PlatinumVersion(
             fnScrCheckABXPadPress = 0x02040204L,
             fnScrCheckABPadPress = 0x02040294L,
             fnScrWaitForYesNoResult = 0x02040824L,
+            fnScrWaitSubContext = 0x0203F9ECL,
             fnScrSignpostPrinting = 0x02040670L,
             fnScrSignpostInput = 0x02040730L,
             mapHeaders = 0x020E601CL,
@@ -118,10 +125,10 @@ data class PlatinumVersion(
 }
 
 /** Gen 4 safe reads ([Gen4Memory]) with the Platinum address table at hand. */
-class PlatinumMemory(memory: Memory, val version: PlatinumVersion) : Gen4Memory(memory, version.gSystem) {
+class PlatinumMemory(memory: Memory, val version: PlatinumVersion) : Gen4Memory(memory, version.gSystem, version.textPrinters) {
 
     /** A screen fade (`sScreenFadeManager.active`) is running: the screen ignores input meanwhile. */
-    val fading: Boolean get() = u16(version.screenFadeManager + SCREEN_FADE_ACTIVE) != 0
+    override val fading: Boolean get() = u16(version.screenFadeManager + SCREEN_FADE_ACTIVE) != 0
 
     private companion object {
         /** `ScreenFadeManager.active` (src/screen_fade.c:51, offsetof with the decomp's compiler). */

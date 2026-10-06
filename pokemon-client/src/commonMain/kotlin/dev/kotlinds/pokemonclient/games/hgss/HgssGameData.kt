@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4MessageFile
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.BlzCodec
 import dev.kotlinds.NarcArchive
@@ -20,9 +21,9 @@ import dev.kotlinds.pokemonclient.data.PokemonType
 import dev.kotlinds.pokemonclient.data.SpeciesInfo
 import dev.kotlinds.pokemonclient.data.TextBankId
 import dev.kotlinds.pokemonclient.data.TypeChart
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u16
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u32
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u8
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u32
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
 import dev.kotlinds.pokemonclient.state.AbilityId
 import dev.kotlinds.pokemonclient.state.ItemId
 import dev.kotlinds.pokemonclient.state.MoveId
@@ -38,7 +39,7 @@ import dev.kotlinds.pokemonclient.state.SpeciesId
  * - [MOVE_NARC] `poketool/waza/waza_tbl.narc`: one `MoveTbl` (16 bytes, include/move.h) per move;
  * - [ITEM_NARC] `itemtool/itemdata/item_data.narc`: one `ItemData` (36 bytes, include/item.h) per data member,
  *   item id → member through `sItemNarcIds` (ARM9);
- * - [MESSAGE_NARC] `msgdata/msg.narc`: the text banks ([HgssTextBanks]), decoded with [HgssMessageFile];
+ * - [MESSAGE_NARC] `msgdata/msg.narc`: the text banks ([HgssTextBanks]), decoded with [Gen4MessageFile];
  * - ARM9 / battle overlay tables ([HgssCodeTables]): TM / HM moves, item → data member, type chart.
  *
  * Nothing depends on the ROM's language: the archives and banks have the same indices in every release; only the
@@ -65,7 +66,7 @@ class HgssGameData(private val rom: NdsRom, val version: HgssVersion) : GameData
     /** A names bank: the PK / MN ligature glyphs (codes 0x1E0 / 0x1E1, charmap ₧ ₦) spelled "PK" / "MN". */
     private fun names(bank: TextBankId): List<String> = bank(bank).map { it.replace("₧", "PK").replace("₦", "MN") }
 
-    private fun messageFile(bank: TextBankId): HgssMessageFile? = messageFiles.getOrNull(bank.value)?.let { HgssMessageFile(it) }
+    private fun messageFile(bank: TextBankId): Gen4MessageFile? = messageFiles.getOrNull(bank.value)?.let { Gen4MessageFile(it) }
 
     /** Species names, index = species id. */
     val speciesNames: List<String> by lazy { names(HgssTextBanks.SPECIES_NAMES) }

@@ -13,6 +13,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 class ActionChainsTest {
 
@@ -37,7 +38,7 @@ class ActionChainsTest {
 
     private fun state(screen: Screen, field: Boolean = true) = GameState(
         0, screen, null, emptyList(), null, null,
-        if (field) FieldState(1, "Town", 10, 10, 0, Direction.SOUTH, MovementMode.WALK, false, emptyList()) else null,
+        if (field) FieldState(1, MapName(1, map = "Town"), 10, 10, 0, Direction.SOUTH, MovementMode.WALK, false, emptyList()) else null,
     )
 
     private val nothingToRead = ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "No menu is open")

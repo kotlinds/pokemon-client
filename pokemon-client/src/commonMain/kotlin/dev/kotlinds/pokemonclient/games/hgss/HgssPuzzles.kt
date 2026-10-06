@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.world.Area
 import dev.kotlinds.pokemonclient.state.PlatformEffect
@@ -222,9 +223,9 @@ object HgssPuzzles {
 
     private fun azaleaGym(reads: Reads): PuzzleState? {
         val gymmick = reads.gymmick() ?: return null
-        if (u32(gymmick, 0) != GYMMICK_AZALEA) return null
+        if (Gen4RomBytes.s32(gymmick, 0) != GYMMICK_AZALEA) return null
         val carts = (0 until 4).map { gymmick[4 + it].toInt() and 0xFF }
-        val switches = u32(gymmick, 8) and 3
+        val switches = Gen4RomBytes.s32(gymmick, 8) and 3
         val rides = carts.distinct().filter { it in STATIONS.indices }.sorted().mapNotNull { station ->
             val to = azaleaRoute(station, switches) ?: return@mapNotNull null
             PuzzleTeleport("cart:$station", TeleportKind.CART_RIDE, listOf(azaleaTrigger(station)), azaleaLanding(station, to))
@@ -283,7 +284,8 @@ object HgssPuzzles {
         val platforms = poses.mapIndexed { i, pose ->
             val (pivot, forward, backward) = gym.triggers(pose)
             val (fx, fy) = gym.forward(pose)
-            fun direction(dx: Int, dy: Int) = Direction.entries.first { it.dx == dx && it.dy == dy }
+            // The forward of a pose is one tile (a rotated (1, 0)): always a step's direction.
+            val slide = Direction.step(0, 0, fx, fy) ?: return null
             fun possible(tile: Pair<Int, Int>) = gym.ride(poses, tile.first, tile.second)?.moved == true
             PuzzlePlatform(
                 id = "platform:$i",
@@ -292,8 +294,8 @@ object HgssPuzzles {
                 tiles = gym.walkTiles(listOf(pose)).map { PuzzleTile(it.first, it.second) }.sortedWith(compareBy({ it.y }, { it.x })),
                 triggers = listOf(
                     PlatformTrigger(PuzzleTile(pivot.first, pivot.second), PlatformEffect.RotateClockwise, possible(pivot)),
-                    PlatformTrigger(PuzzleTile(forward.first, forward.second), PlatformEffect.Slide(direction(fx, fy), gym.width(i)), possible(forward)),
-                    PlatformTrigger(PuzzleTile(backward.first, backward.second), PlatformEffect.Slide(direction(-fx, -fy), gym.width(i)), possible(backward)),
+                    PlatformTrigger(PuzzleTile(forward.first, forward.second), PlatformEffect.Slide(slide, gym.width(i)), possible(forward)),
+                    PlatformTrigger(PuzzleTile(backward.first, backward.second), PlatformEffect.Slide(slide.opposite, gym.width(i)), possible(backward)),
                 ),
             )
         }
@@ -302,8 +304,6 @@ object HgssPuzzles {
 
     // endregion
 
-    private fun u32(b: ByteArray, o: Int): Int =
-        (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
 
     // endregion
 }

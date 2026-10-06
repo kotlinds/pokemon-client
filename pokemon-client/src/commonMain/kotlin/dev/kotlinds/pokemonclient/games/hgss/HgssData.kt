@@ -1,8 +1,10 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.data.TextBankId
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Charmap
 import dev.kotlinds.pokemonclient.data.PokemonType
 import dev.kotlinds.pokemonclient.readBundledText
+import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.state.SpeciesId
 import kotlin.concurrent.Volatile
@@ -12,7 +14,7 @@ import kotlin.concurrent.Volatile
  *
  * Transitional facade: when a ROM is loaded ([useGameData], done by [HgssGame]), species, moves, items, abilities,
  * trainer classes, species types and TM data come from the ROM ([HgssGameData]); otherwise (no ROM, tests) they come
- * from the bundled tables below. The charmap is always the Kotlin table [HgssCharmap]. The map tables (maps, map
+ * from the bundled tables below. The charmap is always the Kotlin table [Gen4Charmap]. The map tables (maps, map
  * locations / sections / types, BG labels, sprites, tile behaviors) are still bundled only.
  *
  * Bundled tables (resources under /hgss, generated from the pokeheartgold decomp):
@@ -30,7 +32,7 @@ import kotlin.concurrent.Volatile
  *  - species_types.txt  files/poketool/personal/personal.json ("Grass/Poison")
  *  - tile_behaviors.txt include/constants/metatile_behavior.h + flags from src/metatile_behavior.c
  *                       (name \t flags; flag 1 = surfable, 2 = wild encounters)
- *  - charmap.txt        charmap.txt (Gen 4 character encoding, HEX=char); unused, see [HgssCharmap]
+ *  - charmap.txt        charmap.txt (Gen 4 character encoding, HEX=char); unused, see [Gen4Charmap]
  */
 object HgssData {
 
@@ -99,6 +101,9 @@ object HgssData {
     /** Battle data of each move (type and category as English labels), by move id. */
     val moveData: Map<Int, MoveData> get() = gameData?.let { romCache(it).moveData } ?: bundledMoveData
 
+    /** Max PP of move [moveId] with [ppUps] PP Ups ([Gen4Pokemon.maxPp] of its base PP), 0 for an unknown move. */
+    fun maxPp(moveId: Int, ppUps: Int): Int = moveData[moveId]?.pp?.let { Gen4Pokemon.maxPp(it, ppUps) } ?: 0
+
     private val bundledMoveData: Map<Int, MoveData> by lazy {
         lines("move_data.tsv").mapNotNull { l ->
             val p = l.split('\t')
@@ -144,7 +149,7 @@ object HgssData {
     /** Behavior id by name (e.g. "TALL_GRASS"), -1 if unknown. */
     fun behaviorId(name: String): Int = tileBehaviorNames.indexOf(name)
 
-    /** The Gen 4 character encoding (u16 code → text), see [HgssCharmap]. */
+    /** The Gen 4 character encoding (u16 code → text), see [Gen4Charmap]. */
     val charmap: Map<Int, String> get() = dev.kotlinds.pokemonclient.games.gen4.Gen4Charmap.table
 
     /** English type labels, index = game type id ([PokemonType.label]). */
@@ -154,34 +159,30 @@ object HgssData {
     fun moveName(id: Int): String = moves.getOrNull(id)?.takeIf { it.isNotEmpty() } ?: "MOVE_$id"
     fun itemName(id: Int): String = items.getOrNull(id)?.takeIf { it.isNotEmpty() } ?: "ITEM_$id"
     fun abilityName(id: Int): String = abilities.getOrNull(id)?.takeIf { it.isNotEmpty() } ?: "ABILITY_$id"
-    fun mapName(id: Int): String = maps.getOrNull(id)?.takeIf { it.isNotEmpty() } ?: "MAP_$id"
     /**
-     * The place name shown in game for map [id] ("Ecruteak City"): from the ROM (the map header's map section, named
-     * in text bank [LOCATION_BANK]) when one is loaded, else from the decomp table.
+     * The name of map [id] for the decoders that have no game at hand ([MapName], the model every game uses): the
+     * ROM's maps' ([HgssWorldSource.mapName], the one reading of a name) when loaded ([world]), else [bundledMapName].
      */
-    fun mapLocation(id: Int): String? {
-        val data = gameData
-        val header = world?.header(id)
-        if (data != null && header != null) return data.text(TextBankId(LOCATION_BANK), header.mapsec)?.takeIf { it.isNotEmpty() }
-        return mapLocations.getOrNull(id)?.takeIf { it.isNotEmpty() }
-    }
+    fun mapName(id: Int): MapName = world?.mapName(id) ?: bundledMapName(id)
 
+    /** The name of map [id] without a ROM: the decomp's tables (English place names, [internalMapName]). */
+    fun bundledMapName(id: Int): MapName = MapName(id, mapLocations.getOrNull(id)?.takeIf { it.isNotEmpty() }, internalMapName(id))
+
+    /** The developers' name of map [id] (the decomp's `MAP_*` constant, prettified: "New Bark Player House 2F"), or null. */
+    fun internalMapName(id: Int): String? = maps.getOrNull(id)?.takeIf { it.isNotEmpty() }
     /** CITY_TOWN, ROUTE, INTERIOR, CAVE, UNDERGROUND (map header mapType, from the ROM when loaded), or null. */
     fun mapType(id: Int): String? {
         world?.header(id)?.let { return MAP_TYPE_NAMES.getOrNull(it.mapType) }
         return mapTypes.getOrNull(id)?.takeIf { it.isNotEmpty() }
     }
 
-    /** The ROM's maps, for [mapLocation] / [mapType] (set by [HgssGame] with the ROM). */
+    /** The ROM's maps, for [mapName] / [mapType] (set by [HgssGame] with the ROM). */
     var world: HgssWorldSource? = null
         private set
 
     fun useWorld(source: HgssWorldSource?) {
         world = source
     }
-
-    /** Text bank of the map section (place) names (msg_0279). */
-    private const val LOCATION_BANK = 279
 
     /** `enum MapType` (include/map_header.h), by value. */
     private val MAP_TYPE_NAMES = listOf("INVALID", "CITY_TOWN", "ROUTE", "CAVE", "INTERIOR", "POKEMON_CENTER", "UNDERGROUND")

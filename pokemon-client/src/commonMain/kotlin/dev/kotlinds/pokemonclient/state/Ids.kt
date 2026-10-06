@@ -45,3 +45,39 @@ value class AbilityId(val value: Int)
 data class Named<T>(val id: T, val name: String)
 
 internal fun Long.toHex8() = (this and 0xFFFFFFFFL).toString(16).padStart(8, '0')
+
+/**
+ * The form names are compared in, wherever an agent names something (an item, a move, a species, a map, a fly
+ * destination...): lowercase letters and digits only, accents folded, so "Poké Ball" = "poke ball" = "POKE-BALL" and
+ * "Célestia" = "Celestia". The game may be in French, German, Spanish or Italian, and agents often type names without
+ * their accents: every name lookup goes through this one function so they all accept the same spellings.
+ *
+ * Common Kotlin has no Unicode decomposition (java.text.Normalizer is JVM only), hence the table of [ACCENT_FOLDS]:
+ * the accented letters of the Latin alphabets the games are released in, plus the ligatures (œ, æ, ß) folded to their
+ * letters.
+ */
+fun normalizeName(value: String): String = buildString(value.length) {
+    for (c in value.lowercase()) {
+        val folded = ACCENT_FOLDS[c]
+        when {
+            folded != null -> append(folded)
+            c.isLetterOrDigit() -> append(c)
+        }
+    }
+}
+
+/** Accented letters (lowercase) → their plain letters, for [normalizeName]. */
+private val ACCENT_FOLDS: Map<Char, String> = buildMap {
+    fun fold(letters: String, plain: String) = letters.forEach { put(it, plain) }
+    fold("àáâãäåā", "a")
+    fold("çćč", "c")
+    fold("èéêëēė", "e")
+    fold("ìíîïī", "i")
+    fold("ñń", "n")
+    fold("òóôõöøō", "o")
+    fold("ùúûüū", "u")
+    fold("ýÿ", "y")
+    fold("œ", "oe")
+    fold("æ", "ae")
+    fold("ß", "ss")
+}

@@ -1,11 +1,12 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.world.FieldMoves
+
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.world.Area
-import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Pathfinder
 import dev.kotlinds.pokemonclient.world.RouteFailure
 import dev.kotlinds.pokemonclient.world.WorldLinks
@@ -13,6 +14,8 @@ import dev.kotlinds.pokemonclient.world.WorldRouter
 import dev.kotlinds.pokemonclient.world.WorldSource
 import dev.kotlinds.pokemonclient.world.RouteOptions
 import dev.kotlinds.pokemonclient.world.ZoneLink
+import dev.kotlinds.pokemonclient.state.MapName
+import dev.kotlinds.pokemonclient.state.normalizeName
 
 /**
  * `go_to` across the world: resolves where to go (a tile, an object, `exit:<direction>`, a map's name, a tile on
@@ -82,7 +85,7 @@ internal object WorldTravel {
      * else the target as resolved ("person:3", "exit:north", "12,5 on Route 20").
      */
     private fun describeGoal(context: PlanContext, start: FieldState, goal: Goal): String =
-        if (goal.target.x == null && goal.zone != start.mapId) context.game.zoneName(goal.zone) ?: goal.target.id else goal.target.id
+        if (goal.target.x == null && goal.zone != start.mapId) context.game.mapName(goal.zone).toString() else goal.target.id
 
     /**
      * A failure after the player already moved (walked towards a link, took a warp, then found no way on) says so:
@@ -138,10 +141,10 @@ internal object WorldTravel {
             ambiguous(context, world, area, "map", action.map, zones)?.let { return it }
             // Prefer the zone of that name closest to here: the current area, then a map linked to it.
             val zone = zones.firstOrNull { world.areaOf(it) === area } ?: zones.first()
-            if (action.x == null || action.y == null) return Resolved.Found(Goal(zone, zoneTarget("map:$zone", world, zone)))
+            if (action.x == null || action.y == null) return Resolved.Found(Goal(zone, zoneTarget(MapName.idForm(zone), world, zone)))
             val targetArea = world.areaOf(zone) ?: return Resolved.Failed(noMap(field))
             val warp = targetArea.warps.firstOrNull { it.zone == zone && it.x == action.x && it.y == action.y }
-            return Resolved.Found(Goal(zone, MovePlans.Target("${action.x},${action.y} on ${context.game.zoneName(zone) ?: "map:$zone"}", action.x, action.y, warp = warp != null, exit = warp?.exitDirection)))
+            return Resolved.Found(Goal(zone, MovePlans.Target("${action.x},${action.y} on ${context.game.mapName(zone)}", action.x, action.y, warp = warp != null, exit = warp?.exitDirection)))
         }
         if (target == null) {
             return MovePlans.resolve(context, null, action.x, action.y)?.let { Resolved.Found(Goal(field.mapId, it)) }
@@ -198,10 +201,17 @@ internal object WorldTravel {
             ?: Resolved.Failed(MovePlans.unknownTarget(context, target))
     }
 
-    /** True when [name] is the current map: its name (as [sameMapName] compares) or `map:<its id>`. */
+    /**
+     * True when [name] is the current map: its own name ([MapName.isNamed], `map:<its id>` too), or its place's name
+     * ([MapName.placeIs]) only when the place names this map as [zonesNamed] resolves it (the place's outdoor map):
+     * a town's buildings share its place, and "Violet City" asked from the Violet Gym is the town outside, another
+     * map (refused like any other while destinations are hidden), not "already here".
+     */
     private fun namesThisMap(context: PlanContext, field: FieldState, name: String): Boolean {
-        if (name.startsWith("map:")) return name.removePrefix("map:").toIntOrNull() == field.mapId
-        return sameMapName(field.mapName, name) || context.game.zoneName(field.mapId)?.let { sameMapName(it, name) } == true
+        if (field.mapName.isNamed(name)) return true
+        if (!field.mapName.placeIs(name)) return false
+        val world = context.game.world ?: return false
+        return field.mapId in zonesNamed(context, world, name)
     }
 
     private fun alreadyHere(field: FieldState) =
@@ -230,7 +240,7 @@ internal object WorldTravel {
         if (direction == null || chosen.isEmpty()) {
             // Destinations hidden: the exits by id only (where they lead is for the agent to find out).
             val allowed = if (context.settings.hideDestinations) connections.map { it.id }.distinct()
-            else connections.map { "${it.id} (${context.game.zoneName(it.toZone) ?: "map:${it.toZone}"})" }.distinct()
+            else connections.map { "${it.id} (${context.game.mapName(it.toZone)})" }.distinct()
             val detail = if (connections.isEmpty()) "${field.mapName} has no edge leading to another map: use its warps (see exits)" else "No exit that way"
             return Resolved.Failed(ActionOutcome.Failed(if (connections.isEmpty()) ActionError.Unavailable(UnavailableReason.NO_PATH, detail) else ActionError.InvalidParameter("target", target, allowed)))
         }
@@ -254,24 +264,32 @@ internal object WorldTravel {
     }
 
     /**
-     * Zones named [name] or `map:<id>`. Our map names, case and punctuation ignored (apostrophes too: "Elm's" =
-     * "Elms"); when none has exactly that name, the looser variants an agent writes ([looseMatch]): without the town
-     * ("Elm's Lab" for "New Bark Elms Lab 1F") or without the floor of a ground floor ("1F"), else its words in order with
-     * some left out ([wordsMatch]: "Seafoam Gym" for "Seafoam Islands Cinnabar Gym"). Among several loose
-     * matches, those around the player (this area, the maps its exits lead to) win; still several: all of them,
-     * which [resolve] reports as ambiguous.
+     * Zones named [name] (the one [MapName] of every game). In order, the first that finds any:
+     * - `map:<id>`, or the map's own name or display form ([MapName.isNamed]; case, punctuation and accents ignored,
+     *   apostrophes too: "Elm's" = "Elms");
+     * - the place's name ([MapName.placeIs]: "Violet City", "Bourg Geon" in French): the place's outdoor map (on an
+     *   area of several zones), else every map of that place;
+     * - the looser variants an agent writes of a map's own name ([looseMatch]): without the town ("Elm's Lab" for
+     *   "New Bark Elms Lab 1F") or without the floor of a ground floor ("1F"), else its words in order with some left
+     *   out ([wordsMatch]: "Seafoam Gym" for "Seafoam Islands Cinnabar Gym"). Among several loose matches, those
+     *   around the player (this area, the maps its exits lead to) win.
+     * Still several: all of them, which [resolve] reports as ambiguous.
      */
     private fun zonesNamed(context: PlanContext, world: WorldSource, name: String, near: Set<Int> = emptySet()): List<Int> {
-        name.removePrefix("map:").toIntOrNull()?.takeIf { name.startsWith("map:") }?.let { id -> return listOfNotNull(id.takeIf { world.areaOf(it) != null }) }
-        if (normalize(name).isEmpty()) return emptyList()
-        val names = (0 until world.zoneCount).mapNotNull { id -> context.game.zoneName(id)?.let { id to it } }
+        MapName.parseIdForm(name)?.let { id -> return listOfNotNull(id.takeIf { world.areaOf(it) != null }) }
+        if (normalizeName(name).isEmpty()) return emptyList()
+        val names = (0 until world.zoneCount).map { context.game.mapName(it) }
         // A possessive is written either way: "Elm's Lab" is "Elms Lab", "Diglett's Cave" is "Diglett Cave".
         val queries = listOf(name, POSSESSIVE.replace(name, "")).distinct()
-        val exact = names.filter { (_, n) -> queries.any { sameMapName(n, it) } }.map { it.first }
-        if (exact.isNotEmpty()) return exact
-        val loose = names.filter { (_, n) -> queries.any { looseMatch(n, it) } }.map { it.first }
+        val exact = names.filter { n -> queries.any(n::isNamed) }
+        if (exact.isNotEmpty()) return exact.map { it.id }
+        val place = names.filter { n -> queries.any(n::placeIs) }
+        if (place.isNotEmpty()) return place.filter { n -> (world.areaOf(n.id)?.zoneBounds?.size ?: 0) > 1 }.ifEmpty { place }.map { it.id }
+        // The map's own name identifies it (the place is shared by a town and its buildings).
+        val own = names.mapNotNull { n -> (n.map ?: n.location)?.let { n.id to it } }
+        val loose = own.filter { (_, n) -> queries.any { looseMatch(n, it) } }.map { it.first }
             // Still nothing: the words of the name in order, some left out ("Seafoam Gym" for "Seafoam Islands Cinnabar Gym").
-            .ifEmpty { names.filter { (_, n) -> queries.any { wordsMatch(n, it) } }.map { it.first } }
+            .ifEmpty { own.filter { (_, n) -> queries.any { wordsMatch(n, it) } }.map { it.first } }
         val nearby = loose.filter { it in near }
         return nearby.ifEmpty { loose }
     }
@@ -280,7 +298,7 @@ internal object WorldTravel {
      * True when every word of [query] (two at least) is a whole word of map [name], in the same order, other words of
      * the name left out: "Seafoam Gym" → "Seafoam Islands Cinnabar Gym" (Blaine's gym, moved into the Seafoam Islands:
      * every other gym is "<Town> Gym", NOTES: refused as an unknown map). Several maps answering (the floors of a store) are
-     * reported as ambiguous by [resolve]. Town and city words are optional like in [sameMapName] ("Viridian City Gym" → "Viridian Gym").
+     * reported as ambiguous by [resolve]. Town and city words are optional like in [MapName.sameMapName] ("Viridian City Gym" → "Viridian Gym").
      */
     internal fun wordsMatch(name: String, query: String): Boolean {
         val wanted = words(query).filterNot { it in TOWN_WORDS }
@@ -295,8 +313,8 @@ internal object WorldTravel {
         return true
     }
 
-    /** The words of a map name, normalized ("Elm's" = "elms"). */
-    private fun words(value: String): List<String> = value.split(' ', '-', '.', '_').map { normalize(it) }.filter { it.isNotEmpty() }
+    /** The words of a map name, normalized ("Elm's" = "elms", [normalizeName]). */
+    private fun words(value: String): List<String> = value.split(' ', '-', '.', '_').map { normalizeName(it) }.filter { it.isNotEmpty() }
 
     /** Words a name may add or leave out ("New Bark Town" is the map "New Bark"). */
     private val TOWN_WORDS = setOf("town", "city")
@@ -309,12 +327,12 @@ internal object WorldTravel {
      * a whole word or more of it ("Elms Lab" → "New Bark Elms Lab 1F", "Dept Store" → "Goldenrod Dept Store 1F").
      */
     internal fun looseMatch(name: String, query: String): Boolean {
-        val q = mapKey(query)
+        val q = MapName.key(query)
         if (q.length < MIN_LOOSE_NAME) return false
         val words = name.split(' ', '-', '.').filter { it.isNotBlank() }
         val variants = listOfNotNull(words, words.takeIf { it.lastOrNull()?.equals(GROUND_FLOOR, ignoreCase = true) == true }?.dropLast(1))
         // A suffix made of whole words of the name: "Lab" matches "Elms Lab", "ab" doesn't.
-        return variants.any { w -> w.indices.any { start -> mapKey(w.drop(start).joinToString(" ")) == q } }
+        return variants.any { w -> w.indices.any { start -> MapName.key(w.drop(start).joinToString(" ")) == q } }
     }
 
     /** "'s" / "’s" ending a word. */
@@ -327,20 +345,12 @@ internal object WorldTravel {
     private const val MIN_LOOSE_NAME = 3
 
     /**
-     * True when [a] and [b] name the same map, ignoring case, spaces and punctuation, and a "Town" / "City" one of
-     * them adds: the town is "New Bark Town" on screen, its map "New Bark".
-     */
-    internal fun sameMapName(a: String, b: String): Boolean = mapKey(a) == mapKey(b)
-
-    private fun mapKey(value: String) = normalize(value).removeSuffix("town").removeSuffix("city")
-
-    /**
      * The INVALID_PARAM for a name several maps of different names answer to loosely ("Pokecenter 1F" in every town),
      * listing them; null when they all share one name (the floors of a map spread over areas) or one is on this area.
      */
     private fun ambiguous(context: PlanContext, world: WorldSource, area: Area, parameter: String, value: String, zones: List<Int>): Resolved? {
         if (zones.any { world.areaOf(it) === area }) return null
-        val names = zones.mapNotNull { context.game.zoneName(it) }.distinct()
+        val names = zones.map { context.game.mapName(it).toString() }.distinct()
         if (names.size <= 1) return null
         return Resolved.Failed(ActionOutcome.Failed(ActionError.InvalidParameter(parameter, value, names.take(MAX_SUGGESTED_NAMES))))
     }
@@ -353,9 +363,7 @@ internal object WorldTravel {
     /** Maps worth suggesting: the neighbours and the destinations of this map's warps and holes. */
     private fun knownMaps(context: PlanContext, world: WorldSource, area: Area, field: FieldState): List<String> =
         (WorldLinks.connections(area, field.mapId).map { it.toZone } + WorldLinks.links(world, area, field.mapId).map { it.targetZone })
-            .distinct().mapNotNull { context.game.zoneName(it) }
-
-    private fun normalize(value: String) = value.lowercase().filter { it.isLetterOrDigit() }
+            .distinct().map { context.game.mapName(it).toString() }
 
     // endregion
 
@@ -390,7 +398,7 @@ internal object WorldTravel {
             if (field == null || state.screen !is Screen.Overworld) return Trip(MovePlans.Walk.Interrupted(state, 0), taken, emptySet())
             val area = world.areaOf(field.mapId)
             val goalArea = world.areaOf(goal.zone)
-            if (area == null || goalArea == null) return Trip(MovePlans.Walk.NoRoute(RouteFailure.StartUnknown, "no map data for ${field.mapName}"), taken, emptySet())
+            if (area == null || goalArea == null) return Trip(MovePlans.Walk.NoRoute(RouteFailure.StartUnknown, noMapDetail(field)), taken, emptySet())
             val triggers = MovePlans.activeTriggers(context, field)
             // The whole route from here, for the progress (and, towards another area, the link to take first).
             val planned = meter?.let { worldRoute(context, world, field, area, goalArea, goal, options).also { route -> it.plan(route?.tiles) } }
@@ -489,7 +497,7 @@ internal object WorldTravel {
         val local = goal.zone == field.mapId
         if (links <= MAX_HOPS && !(local && links > MAX_LOCAL_DETOUR)) return null
         val maps = route.places.mapNotNull { it.zone }.fold(mutableListOf<Int>()) { acc, z -> if (acc.lastOrNull() != z && z != field.mapId) acc += z; acc }
-        val names = maps.map { context.game.zoneName(it) ?: "map:$it" }.fold(mutableListOf<String>()) { acc, n -> if (acc.lastOrNull() != n) acc += n; acc }
+        val names = maps.map { context.game.mapName(it).toString() }.fold(mutableListOf<String>()) { acc, n -> if (acc.lastOrNull() != n) acc += n; acc }
         // Both ends of the way: where it sets off, and the side the destination is reached from.
         val shown = if (names.size <= MAX_DETOUR_NAMES) names.joinToString(" → ")
         else (names.take(MAX_DETOUR_NAMES / 2) + "…" + names.takeLast(MAX_DETOUR_NAMES / 2)).joinToString(" → ")
@@ -513,7 +521,7 @@ internal object WorldTravel {
     ): WorldRouter.WorldRoute? {
         val overlay = MovePlans.overlay(context, field, emptySet()).let { if (crossScenes) it.copy(activeTriggers = emptySet()) else it }
         val router = WorldRouter(world) { _, a -> if (a === area) overlay else WorldRouter.staticOverlay(a) }
-        val start = Node(field.x, field.y, Pathfinder(area).levelAt(field.x, field.y, field.height * MovePlans.HEIGHT_UNITS))
+        val start = Pathfinder(area).nodeOf(field)
         val goalTiles = MovePlans.goalTiles(goalArea, goal.target)
         val enterable = if (goal.target.adjacent) emptySet() else goalTiles
         return router.route(
@@ -523,13 +531,13 @@ internal object WorldTravel {
     }
 
     /**
-     * The route options across zones: the same field moves as a walk on one map ([FieldMoveWalk.usable]: Cut, Surf...
+     * The route options across zones: the same field moves as a walk on one map ([FieldMoveWalk.access]: Cut, Surf...
      * the party can use by itself), so a Cut tree in front of another map's door is cut like one on the way inside a
      * gym (NOTES: "needs Cut" in front of the Vermilion Gym while the walk out cut it).
      */
     internal fun worldRouteOptions(context: PlanContext, field: FieldState, options: MoveOptions): RouteOptions {
         val state = context.state()
-        return MovePlans.routeOptions(field, options, FieldMoveWalk.usable(FieldMoveWalk.access(context, state)), MovePlans.stepWeights(context, state, options))
+        return MovePlans.routeOptions(field, options, FieldMoves.usable(FieldMoveWalk.access(context, state)), MovePlans.stepWeights(context, state, options))
     }
 
     /**
@@ -549,9 +557,9 @@ internal object WorldTravel {
             val pathfinder = if (place.area === area) Pathfinder(area, overlay) else Pathfinder(place.area, WorldRouter.staticOverlay(place.area))
             val failure = pathfinder.blockerAt(place.node.x, place.node.y, routeOptions) ?: continue
             val zone = place.zone
-            val where = if (place.area === area) "" else " on ${zone?.let { context.game.zoneName(it) } ?: "another floor"}"
+            val where = if (place.area === area) "" else " on ${zone?.let { context.game.mapName(it) } ?: "another floor"}"
             val via = if (route.links.isEmpty()) "" else " (the way: " +
-                route.links.joinToString(", ") { it.id + " → " + (context.game.zoneName(it.targetZone) ?: "map:${it.targetZone}") } + ")"
+                route.links.joinToString(", ") { it.id + " → " + context.game.mapName(it.targetZone) } + ")"
             return MovePlans.Walk.NoRoute(failure, "no way to ${goal.target.id} from ${field.x},${field.y}: blocked at ${place.node.x},${place.node.y}$where$via")
         }
         return null
@@ -598,9 +606,6 @@ internal object WorldTravel {
 
     private fun describe(taken: List<ZoneLink>): String =
         if (taken.isEmpty()) "no warp taken" else "via " + taken.joinToString(", ") { l -> l.id + if (l.oneWay) " (fell, one way)" else "" }
-
-    private fun noMap(field: FieldState) =
-        ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "no map data for ${field.mapName}"))
 
     // endregion
 

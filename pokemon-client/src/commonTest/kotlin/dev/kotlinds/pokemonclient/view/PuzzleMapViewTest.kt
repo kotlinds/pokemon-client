@@ -17,6 +17,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.state.MapName
 
 /** The text map draws the live puzzle: lifts (`L`), other teleport tiles (`W`) and closed gates (`G`). */
 class PuzzleMapViewTest {
@@ -32,7 +33,7 @@ class PuzzleMapViewTest {
                 PuzzleTeleport("teleport:0", TeleportKind.PAD, listOf(PuzzleTile(1, 0)), PuzzleTile(4, 0)),
             ),
         )
-        val field = FieldState(7, "gym", 2, 0, 0, Direction.EAST, MovementMode.WALK, moving = false, puzzle = puzzle)
+        val field = FieldState(7, MapName(7, map = "gym"), 2, 0, 0, Direction.EAST, MovementMode.WALK, moving = false, puzzle = puzzle)
         val view = MapView.render(area, field, width = 5, height = 1)
         assertEquals("   0 L W } G .", view.getValue("map").jsonArray[1].jsonPrimitive.content)
         val legend = view.getValue("legend").jsonPrimitive.content

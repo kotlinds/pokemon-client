@@ -6,6 +6,7 @@ import dev.kotlinds.pokemonclient.games.gen4.Gen4Game
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.IntroStage
+import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.state.Screen
 
 /**
@@ -21,28 +22,31 @@ class PlatinumGame(private val version: PlatinumVersion, rom: NdsRom? = null) : 
 
     override val name: String = version.displayName
 
+    override val fieldMoveBadges = PlatinumFieldMoves.BADGES
+
     /** The maps of the ROM, and its text banks (location names, intro text blocks). */
     override val world: PlatinumWorldSource? = rom?.let { PlatinumWorldSource(it, version) }
 
     private val text: PlatinumText? = world?.text
 
-    private val names = HashMap<Int, String?>()
-
-    /** "Twinleaf Town (T01R0202)"-like names would need the internal names: the location name for now. */
-    override fun zoneName(id: Int): String? = names.getOrPut(id) { world?.locationName(id)?.let { "$it #$id" } }
+    /**
+     * The place (from the ROM's text, when a ROM is given) and the map's own name ([PlatinumMapNames]): "Twinleaf Town
+     * (Twinleaf Town Player House 2F)".
+     */
+    override fun mapName(id: Int): MapName = world?.mapName(id) ?: MapName(id, map = PlatinumMapNames.of(id))
 
     override fun state(memory: Memory): GameState {
         val mem = PlatinumMemory(memory, version)
         val top = PlatinumTopApp.read(mem)
         val fs = PlatinumField.fieldSystem(mem, top)
-        val field = fs?.let { PlatinumField.position(mem, it, ::zoneName) }
+        val field = fs?.let { PlatinumField.position(mem, it, ::mapName) }
         val screen = PlatinumIntroScreens.decode(mem, top, text)
             ?: fs?.let { PlatinumField.screen(mem, it, field) }
             ?: when (top.app) {
                 PlatinumApp.NONE, PlatinumApp.LOADING -> Screen.Intro(IntroStage.LOADING, Awaiting.ANIMATION)
                 else -> Screen.Unknown("application not decoded yet for Platinum (main 0x${top.manager?.let { mem.fn(it + 4) }?.toString(16)})", Awaiting.INPUT)
             }
-        return GameState(
+        return withFieldMoves(GameState(
             frame = memory.read32(version.gSystem + dev.kotlinds.pokemonclient.games.gen4.Gen4Structs.SYS_VBLANK_COUNTER),
             screen = screen,
             player = null,
@@ -50,6 +54,6 @@ class PlatinumGame(private val version: PlatinumVersion, rom: NdsRom? = null) : 
             bag = null,
             battle = null,
             field = field?.copy(flyAllowed = world?.flyAllowed(field.mapId), bikeAllowed = world?.bikeAllowed(field.mapId)),
-        )
+        ))
     }
 }

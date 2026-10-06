@@ -1,8 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u16
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u32
-import dev.kotlinds.pokemonclient.games.hgss.HgssRomBytes.u8
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u32
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
 
 /**
  * One entry of `sMapHeaders` (`struct MapHeader`, include/map_header.h): what a zone (map id) is made of.
@@ -12,11 +12,11 @@ data class HgssMapHeader(
     /** Zone (map) id, the index in the table (`MAP_*` of include/constants/maps.h). */
     val zoneId: Int,
     /** Member of the map matrix NARC ([HgssWorldAddresses.MAP_MATRIX_NARC]). */
-    val matrixId: Int,
+    override val matrixId: Int,
     /** Member of the zone event NARC ([HgssWorldAddresses.ZONE_EVENT_NARC]). */
-    val eventsBank: Int,
+    override val eventsBank: Int,
     /** `scr_seq` member holding the zone's scripts (script ids of events index into it). */
-    val scriptsBank: Int,
+    override val scriptsBank: Int,
     val scriptHeaderBank: Int,
     /** `msgdata` bank of the zone's texts. */
     val msgBank: Int,
@@ -27,12 +27,12 @@ data class HgssMapHeader(
     /** Wild encounter bank (`ENCDATA_NA` = 0xFF when none). */
     val wildEncounterBank: Int,
     /** `flyAllowed`: Fly (and Teleport) can be used from this zone (outdoors). */
-    val flyAllowed: Boolean = true,
+    override val flyAllowed: Boolean = true,
     /** `bikeAllowed`: the Bicycle can be ridden in this zone. */
-    val bikeAllowed: Boolean = true,
+    override val bikeAllowed: Boolean = true,
     /** `regionNo`: 0 Johto, 1 Kanto ([HgssMapHeaders.REGION_JOHTO], [HgssMapHeaders.REGION_KANTO]). */
     val region: Int = 0,
-)
+) : dev.kotlinds.pokemonclient.games.gen4.Gen4MapHeader
 
 /** Decodes the map header table from the (decompressed) ARM9 binary. */
 object HgssMapHeaders {

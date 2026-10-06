@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.runtime
 
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.state.BattleKind
@@ -402,31 +403,3 @@ private const val RECENT_INCREASE_FRAMES = 300L
 
 /** Frames a bag increase must last before it is recorded as items received. */
 private const val ITEM_CONFIRM_FRAMES = 8L
-
-/** A short name for the kind of screen, for [GameEvent.ScreenChanged] and logs. */
-val Screen.kind: String
-    get() = when (this) {
-        is Screen.YesNo -> "yes_no"
-        is Screen.ListMenu -> "menu:${kind.name.lowercase()}"
-        is Screen.BattleCommand -> "battle_command"
-        is Screen.MoveSelect -> "move_select:${context.name.lowercase()}"
-        is Screen.TargetSelect -> "target_select"
-        is Screen.PartyGrid -> "party:${purpose.name.lowercase()}"
-        is Screen.ContextMenu -> "context_menu"
-        is Screen.Bag -> "bag"
-        is Screen.Keyboard -> "keyboard"
-        is Screen.PcBox -> "pc_box"
-        is Screen.Shop -> "shop"
-        is Screen.FlyMap -> "fly_map"
-        is Screen.Quantity -> "quantity"
-        is Screen.PressToContinue -> "press_to_continue:${reason.name.lowercase()}"
-        is Screen.Dialogue -> "dialogue:${source.name.lowercase()}"
-        is Screen.Evolution -> "evolution"
-        is Screen.StarterChoice -> "starter_choice"
-        is Screen.Animation -> "animation:${kind.name.lowercase()}"
-        is Screen.Overworld -> "overworld"
-        is Screen.Battle -> "battle"
-        is Screen.Intro -> "intro:${stage.wire}"
-        is Screen.Viewer -> "viewer:${app.name.lowercase()}"
-        is Screen.Unknown -> "unknown"
-    }

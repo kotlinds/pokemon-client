@@ -126,7 +126,7 @@ class HgssKeyboardPcShopScreensTest {
     @Test
     fun numberPadTopologySkipsTheEightSkipCells() {
         // Type UNK4 (naming_screen.c:204): row 0 = SKIP x8, BACK x3, OK x2; rows 1-2 digits, then spaces.
-        val k = HgssKeyboardPcShopAddresses
+        val k = dev.kotlinds.pokemonclient.games.gen4.Gen4NamingKeyboard
         val cells = IntArray(78) { 0x1DE }
         for (x in 0 until 8) cells[x] = k.KEY_SKIP
         for (x in 8 until 11) cells[x] = k.KEY_BACK

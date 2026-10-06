@@ -1,16 +1,28 @@
 package dev.kotlinds.pokemonclient.games.gen4
 
+import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.Memory
+import dev.kotlinds.pokemonclient.state.Awaiting
 
 /**
  * Safe typed reads of a Generation 4 game's main RAM (Diamond / Pearl / Platinum, HeartGold / SoulSilver), shared by
  * the screen decoders: every read outside main RAM returns 0 / null instead of failing, so a decoder reading a stale
  * pointer gets "nothing" rather than garbage.
  *
- * The engine structures read here (`String`, `SysTaskManager`) have the same layout in every Gen 4 game
- * ([Gen4Structs]); only the address of `gSystem` ([gSystem]) differs per ROM.
+ * The engine structures read here (`String`, `SysTask`, `TextPrinter`, `FieldTask`) have the same layout in every Gen 4
+ * game ([Gen4Structs]); what differs per game comes from its version table: the address of `gSystem`, its text
+ * printers ([Gen4TextPrinters]) and how it tells a screen fade ([fading]).
+ *
+ * @param gSystem the address of `gSystem` in the running ROM.
+ * @param textPrinters the running ROM's text printers.
  */
-open class Gen4Memory(val memory: Memory, private val gSystem: Long) {
+abstract class Gen4Memory(val memory: Memory, private val gSystem: Long, private val textPrinters: Gen4TextPrinters) {
+
+    /**
+     * A screen fade runs: the screen ignores input meanwhile and what is drawn is on its way out (or in). Each game
+     * has its own fade managers (HGSS: palette fade and master brightness; Platinum: `sScreenFadeManager`).
+     */
+    abstract val fading: Boolean
 
     fun inRam(addr: Long, size: Long = 1) = addr >= Gen4Structs.MAIN_RAM_START && addr + size <= Gen4Structs.MAIN_RAM_END
 
@@ -47,7 +59,7 @@ open class Gen4Memory(val memory: Memory, private val gSystem: Long) {
         if (magic != Gen4Structs.STRING_MAGIC && !(allowFreed && magic == Gen4Structs.STRING_INVAL)) return null
         val max = u16(strPtr + Gen4Structs.STR_MAXSIZE)
         val size = u16(strPtr + Gen4Structs.STR_SIZE)
-        if (size > max || size > 2048) return null
+        if (size > max || size > MAX_STRING_SIZE) return null
         return Gen4Text.decode(chars(strPtr + Gen4Structs.STR_DATA, size))
     }
 
@@ -77,17 +89,152 @@ open class Gen4Memory(val memory: Memory, private val gSystem: Long) {
     fun mainTaskData(function: Long): Long? = mainTasks().firstOrNull { it.first == function }?.second
 
     /**
-     * The `TextPrinter` of printer [printerId], from the array of printer tasks at [printerTasks] (`sTextPrinterTasks`,
-     * src/text.c: one `SysTask *` per printer id, NULL once the printer is done), or null when it isn't running.
+     * The field task stack from its top task [top] (`FieldSystem.taskman` in HGSS, `FieldSystem.task` in Platinum),
+     * following `prev`: the running task first, then the ones it was started from.
      */
-    fun textPrinter(printerTasks: Long, printerId: Int): Long? =
+    fun fieldTasks(top: Long?): List<Gen4FieldTask> {
+        val out = mutableListOf<Gen4FieldTask>()
+        val seen = HashSet<Long>()
+        var task = top
+        while (task != null && out.size < MAX_FIELD_TASKS && seen.add(task)) {
+            out += Gen4FieldTask(fn(task + Gen4Structs.FIELD_TASK_FUNC), ptr(task + Gen4Structs.FIELD_TASK_ENV))
+            task = ptr(task + Gen4Structs.FIELD_TASK_PREV)
+        }
+        return out
+    }
+
+    /**
+     * The script contexts doing the waits of the script manager at [manager] (`ScriptManager.ctx`, [slots] of them: 3 in
+     * HGSS, 2 in Platinum), innermost first: the active ones (bounded by `numActiveContexts`; without a sane count, every
+     * slot: ended contexts are NULL), the highest index first. A context paused in [waitChild] is left out: it is a
+     * caller parked while the common script it called runs in the next context (HGSS `CallStd` → `ScrNative_WaitStd`,
+     * scrcmd_c.c:348-373; Platinum `CallCommonScript` → `ScriptContext_WaitSubContext`, scrcmd.c:973-992), and only
+     * resumes once that child returns: the child's wait is the one the screen shows. The same rule for every Gen 4 game.
+     */
+    fun waitingScriptContexts(manager: Long, slots: Int, waitChild: Long): List<Long> {
+        val count = u8(manager + Gen4Structs.SM_ACTIVE_CONTEXTS).takeIf { it in 1..slots } ?: slots
+        return (count - 1 downTo 0).mapNotNull { i -> ptr(manager + Gen4Structs.SM_CONTEXTS + 4L * i) }.filter { ctx ->
+            val state = u8(ctx + Gen4Structs.SC_STATE)
+            state != 0 && !(state == Gen4Structs.SC_STATE_NATIVE && fn(ctx + Gen4Structs.SC_NATIVE) == waitChild)
+        }
+    }
+
+    /** The native function context [context] is paused on (`ScriptContext.shouldResume`), null when it runs bytecode. */
+    fun scriptNative(context: Long): Long? =
+        if (u8(context + Gen4Structs.SC_STATE) == Gen4Structs.SC_STATE_NATIVE) fn(context + Gen4Structs.SC_NATIVE) else null
+
+    /**
+     * Where the player is: the live `MapObject` [mapObject] (position, height, facing, and whether it is between two
+     * tiles) when given, i.e. while the field map runs; the saved `Location` at [location] otherwise (height 0, never
+     * moving). Null when the map id isn't a zone's (a stale or garbage `Location`).
+     */
+    fun playerPosition(location: Long, mapObject: Long?): Gen4Position? {
+        val mapId = s32(location + Gen4Structs.LOC_MAP_ID)
+        if (mapId !in 0 until MAX_ZONES) return null
+        if (mapObject == null) {
+            val facing = Gen4Structs.DIRECTIONS.getOrNull(s32(location + Gen4Structs.LOC_DIRECTION))
+            return Gen4Position(mapId, s32(location + Gen4Structs.LOC_X), s32(location + Gen4Structs.LOC_Z), 0, facing, moving = false)
+        }
+        val x = s32(mapObject + Gen4Structs.MO_X)
+        val z = s32(mapObject + Gen4Structs.MO_Z)
+        // At rest the position vector is exactly the tile center (src/map_object.c); the previous tile differs for the
+        // frames of a step. (MapObject's movement flags don't tell: the standing "movement" restarts every frame.)
+        val px = s32(mapObject + Gen4Structs.MO_POSITION_VECTOR)
+        val pz = s32(mapObject + Gen4Structs.MO_POSITION_VECTOR + 8)
+        val moving = px != tileCenter(x) || pz != tileCenter(z) ||
+            s32(mapObject + Gen4Structs.MO_PREVIOUS_X) != x || s32(mapObject + Gen4Structs.MO_PREVIOUS_Z) != z
+        val facing = Gen4Structs.DIRECTIONS.getOrNull(s32(mapObject + Gen4Structs.MO_FACING))
+        return Gen4Position(mapId, x, z, s32(mapObject + Gen4Structs.MO_Y), facing, moving)
+    }
+
+    /** The fixed-point (20.12) coordinate of the center of tile [tile]: 16 units per tile. */
+    private fun tileCenter(tile: Int) = tile * 16 * 4096 + 8 * 4096
+
+    /**
+     * The `TextPrinter` of printer [printerId] (`sTextPrinterTasks[printerId]`, src/text.c: one `SysTask *` per printer
+     * id, NULL once the printer is done), or null when it isn't running or the id isn't a printer's.
+     */
+    fun textPrinter(printerId: Int): Long? =
         if (printerId !in 0 until Gen4Structs.MAX_TEXT_PRINTERS) null
-        else ptr(printerTasks + 4L * printerId)?.let { ptr(it + Gen4Structs.SYSTASK_DATA) }
+        else ptr(textPrinters.tasks + 4L * printerId)?.let { ptr(it + Gen4Structs.SYSTASK_DATA) }
+
+    /** Some text printer is running (printing, scrolling or waiting at a page break). */
+    fun anyTextPrinterRunning(): Boolean = (0 until Gen4Structs.MAX_TEXT_PRINTERS).any { textPrinter(it) != null }
+
+    /** [printer] waits for A at a page break (the game's [Gen4TextPrinters.waitStates]), rather than printing. */
+    fun printerWaitsForInput(printer: Long): Boolean = u8(printer + Gen4Structs.TP_STATE) in textPrinters.waitStates
+
+    /**
+     * The message `String` at [string] as a message box shows it, printed by printer [printerId] (null: no printer,
+     * the text is complete: its last page shows). The printer is only trusted when its current character points inside
+     * that String (the slots are reused by every text). [allowFreed] reads a String freed once printed but still on
+     * screen ([gameString]). Null when [string] isn't a readable String.
+     */
+    fun printedText(string: Long?, printerId: Int?, allowFreed: Boolean = false): Gen4PrintedText? {
+        val full = gameString(string, allowFreed) ?: return null
+        val data = string!! + Gen4Structs.STR_DATA
+        val size = u16(string + Gen4Structs.STR_SIZE).coerceAtMost(MAX_STRING_SIZE)
+        val printer = printerId?.let(::textPrinter)?.takeIf { prints(it, string) }
+        val printed = printer?.let { ((u32(it + Gen4Structs.TP_CURRENT_CHAR) - data) / 2).toInt() }
+        val awaiting = if (printer == null || printerWaitsForInput(printer)) Awaiting.INPUT else Awaiting.TEXT_PRINTING
+        return Gen4PrintedText(full, Gen4Text.visibleLines(chars(data, size), printed), awaiting, printerAlive = printer != null)
+    }
+
+    /** The id of the running printer printing the `String` at [string], for a screen that doesn't keep its printer id. */
+    fun printerIdOf(string: Long): Int? = (0 until Gen4Structs.MAX_TEXT_PRINTERS).firstOrNull { id -> textPrinter(id)?.let { prints(it, string) } == true }
+
+    /** [printer]'s current character lies inside the `String` at [string] (its characters or just past the last one). */
+    private fun prints(printer: Long, string: Long): Boolean {
+        val data = string + Gen4Structs.STR_DATA
+        val size = u16(string + Gen4Structs.STR_SIZE).coerceAtMost(MAX_STRING_SIZE)
+        return u32(printer + Gen4Structs.TP_CURRENT_CHAR) in data..data + 2L * size
+    }
 
     private companion object {
         const val MAX_TASKS = 256
+        const val MAX_FIELD_TASKS = 16
+        /** Above every zone id (HGSS has 540 zones, Platinum 593): a larger map id is garbage. */
+        const val MAX_ZONES = 1000
+        /** Longer "Strings" are garbage (the longest messages are a few hundred characters). */
+        const val MAX_STRING_SIZE = 2048
     }
 }
+
+/**
+ * The text printers of a Gen 4 game, from its version table.
+ *
+ * @param tasks the address of `sTextPrinterTasks` (src/text.c): one `SysTask *` per printer id.
+ * @param waitStates the `TextPrinter.state` values (render_text.c) that wait for A at a page break. They differ per
+ *   game: Platinum waits in RENDER_STATE_CLEAR / RENDER_STATE_START_SCROLL (2, 3); HeartGold / SoulSilver also in its
+ *   two added states 7 and 8 (pokeheartgold src/render_text.c:172-180, 356-370).
+ */
+data class Gen4TextPrinters(val tasks: Long, val waitStates: Set<Int>)
+
+/**
+ * A message as its box shows it ([Gen4Memory.printedText]).
+ *
+ * Text format, the same in every game: [visible] holds the lines of the page on screen separated by `\n`, exactly as
+ * the box breaks them (Gen 4 boxes have 2 lines); [full] is the whole message, every page.
+ */
+data class Gen4PrintedText(
+    /** The whole text (all pages). */
+    val full: String,
+    /** What the box shows now: the lines of the current page printed so far (the whole last page once done). */
+    val visible: String,
+    /** [Awaiting.TEXT_PRINTING] while characters are printed or scrolled, [Awaiting.INPUT] at a page break or once done. */
+    val awaiting: Awaiting,
+    /** A printer still prints this text (printing or waiting at a page break); false once the last page is done. */
+    val printerAlive: Boolean,
+)
+
+/**
+ * The player's position ([Gen4Memory.playerPosition]): zone [mapId], global tile ([x], [z]) (x grows east, z south;
+ * the space of warps and events), [height] (bridges), [facing] (null when unreadable) and [moving] between two tiles.
+ */
+data class Gen4Position(val mapId: Int, val x: Int, val z: Int, val height: Int, val facing: Direction?, val moving: Boolean)
+
+/** One field task (`FieldTask` / `TaskManager`): its function (without the Thumb bit) and environment. */
+data class Gen4FieldTask(val function: Long, val env: Long?)
 
 /**
  * Engine structures with the same layout in every Generation 4 game (NitroSDK / Game Freak engine: overlay manager,
@@ -96,7 +243,8 @@ open class Gen4Memory(val memory: Memory, private val gSystem: Long) {
  */
 object Gen4Structs {
     const val MAIN_RAM_START = 0x02000000L
-    const val MAIN_RAM_END = 0x02400000L // exclusive (4 MB)
+    /** End of main RAM, exclusive (4 MB): game pointers stay below (the bus mirrors it up to 0x02FFFFFF). */
+    const val MAIN_RAM_END = 0x02400000L
     const val THUMB_MASK = 0xFFFFFFFEL
 
     // struct System (include/system.h): gSystem
@@ -134,25 +282,28 @@ object Gen4Structs {
     const val SYSTASK_DATA = 0x10L
     const val SYSTASK_FUNC = 0x14L
 
-    // TextPrinter (include/render_text.h): template.toPrint.raw (+0) points into the String being printed
+    // TextPrinter (include/render_text.h): template.toPrint.raw (+0) points into the String being printed. Which
+    // states wait for A differs per game (Gen4TextPrinters.waitStates).
     const val TP_CURRENT_CHAR = 0x00L
     const val TP_STATE = 0x28L
-    /** RENDER_STATE_CLEAR / RENDER_STATE_START_SCROLL (src/render_text.c): waiting for A at a page break. */
-    val TEXT_PRINTER_WAIT_STATES = setOf(2, 3)
     const val MAX_TEXT_PRINTERS = 8
 
-    // FieldTask / TaskManager (include/field_task.h)
+    // FieldTask (Platinum include/field_task.h) / TaskManager (HGSS include/task.h): {prev, func, state, env...}
+    const val FIELD_TASK_PREV = 0x00L
     const val FIELD_TASK_FUNC = 0x04L
+    const val FIELD_TASK_STATE = 0x08L
     const val FIELD_TASK_ENV = 0x0CL
 
     // ScriptManager / ScriptEnvironment (include/script_manager.h)
     const val SCRIPT_MANAGER_MAGIC = 0x3643FL
     const val SM_MAGIC = 0x00L
     const val SM_MESSAGE_ID = 0x05L        // u8: text printer of the field message
-    const val SM_MSG_BOX_OPEN = 0x08L
+    const val SM_MSG_BOX_OPEN = 0x08L      // u8: 1 while the field message window is open (OpenMsg / CloseMsg)
     const val SM_ACTIVE_CONTEXTS = 0x09L
     const val SM_CONTEXTS = 0x38L          // ScriptContext *[NUM_SCRIPT_CONTEXTS]
     const val SC_STATE = 0x01L             // 0 stopped, 1 bytecode, 2 paused on a native wait
+    /** [SC_STATE] of a context paused on a native wait (its [SC_NATIVE] function runs every frame until it returns TRUE). */
+    const val SC_STATE_NATIVE = 2
     const val SC_NATIVE = 0x04L            // shouldResume / native_ptr
 
     // Location (include/location.h)
@@ -167,13 +318,41 @@ object Gen4Structs {
     const val MO_FACING = 0x28L
     const val MO_PREVIOUS_X = 0x58L
     const val MO_PREVIOUS_Z = 0x60L
-    const val MO_X = 0x64L
-    const val MO_Y = 0x68L
-    const val MO_Z = 0x6CL
+    const val MO_X = 0x64L       // global tile X (matrix-wide, the space of warps and events)
+    const val MO_Y = 0x68L       // height (s32)
+    const val MO_Z = 0x6CL       // global tile Z (north / south)
     /** VecFx32: at rest x = X*16*4096 + 8*4096 (tile center). */
     const val MO_POSITION_VECTOR = 0x70L
 
+    // Party (include/party.h) and Pokemon (include/pokemon_types_def.h / include/struct_defs/pokemon.h): {u32
+    // personality; u16 flags; u16 checksum; 4 shuffled, encrypted 0x20-byte blocks (BoxPokemon) ; PartyPokemon}
+    const val PARTY_MAX_COUNT = 0x00L
+    const val PARTY_CUR_COUNT = 0x04L
+    const val PARTY_MONS = 0x08L
+    const val POKEMON_SIZE = 0xECL
+    const val BOX_PERSONALITY = 0x00L
+    const val BOX_FLAGS = 0x04L              // bit0 partyDecrypted, bit1 boxDecrypted, bit2 checksumFailed
+    const val BOX_CHECKSUM = 0x06L
+    const val BOX_BLOCKS = 0x08L             // 4 x 0x20 bytes, encrypted with LCRNG seeded by checksum
+    const val BOX_BLOCKS_SIZE = 0x80
+    const val PARTY_DATA = 0x88L             // PartyPokemon 0x64 bytes, encrypted with LCRNG seeded by personality
+    const val PARTY_DATA_SIZE = 0x64
+
+    /** Block order table from GetSubstruct (pokeheartgold src/pokemon.c:3951, the same in Platinum): OFFSETS[(pid >> 13) & 31][block] = byte offset of block A/B/C/D. */
+    val POKEMON_BLOCK_OFFSETS: Array<IntArray> = arrayOf(
+        intArrayOf(0x00, 0x20, 0x40, 0x60), intArrayOf(0x00, 0x20, 0x60, 0x40), intArrayOf(0x00, 0x40, 0x20, 0x60),
+        intArrayOf(0x00, 0x60, 0x20, 0x40), intArrayOf(0x00, 0x40, 0x60, 0x20), intArrayOf(0x00, 0x60, 0x40, 0x20),
+        intArrayOf(0x20, 0x00, 0x40, 0x60), intArrayOf(0x20, 0x00, 0x60, 0x40), intArrayOf(0x40, 0x00, 0x20, 0x60),
+        intArrayOf(0x60, 0x00, 0x20, 0x40), intArrayOf(0x40, 0x00, 0x60, 0x20), intArrayOf(0x60, 0x00, 0x40, 0x20),
+        intArrayOf(0x20, 0x40, 0x00, 0x60), intArrayOf(0x20, 0x60, 0x00, 0x40), intArrayOf(0x40, 0x20, 0x00, 0x60),
+        intArrayOf(0x60, 0x20, 0x00, 0x40), intArrayOf(0x40, 0x60, 0x00, 0x20), intArrayOf(0x60, 0x40, 0x00, 0x20),
+        intArrayOf(0x20, 0x40, 0x60, 0x00), intArrayOf(0x20, 0x60, 0x40, 0x00), intArrayOf(0x40, 0x20, 0x60, 0x00),
+        intArrayOf(0x60, 0x20, 0x40, 0x00), intArrayOf(0x40, 0x60, 0x20, 0x00), intArrayOf(0x60, 0x40, 0x20, 0x00),
+        intArrayOf(0x00, 0x20, 0x40, 0x60), intArrayOf(0x00, 0x20, 0x60, 0x40), intArrayOf(0x00, 0x40, 0x20, 0x60),
+        intArrayOf(0x00, 0x60, 0x20, 0x40), intArrayOf(0x00, 0x40, 0x60, 0x20), intArrayOf(0x00, 0x60, 0x40, 0x20),
+        intArrayOf(0x20, 0x00, 0x40, 0x60), intArrayOf(0x20, 0x00, 0x60, 0x40),
+    )
+
     /** `facingDirection` values: DIR_NORTH 0, DIR_SOUTH 1, DIR_WEST 2, DIR_EAST 3. */
-    val DIRECTIONS = listOf(dev.kotlinds.pokemonclient.Direction.NORTH, dev.kotlinds.pokemonclient.Direction.SOUTH,
-        dev.kotlinds.pokemonclient.Direction.WEST, dev.kotlinds.pokemonclient.Direction.EAST)
+    val DIRECTIONS = listOf(Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST)
 }

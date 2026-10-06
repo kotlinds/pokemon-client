@@ -27,10 +27,11 @@ contract, and don't put generic things in `games/gen4/`.
 |---|---|---|
 | `state(memory)` | RAM → `GameState`: the `Screen` on display (with entries, cursor, topology), party, bag, battle, field, story (`StoryState`: open goals, steps completed, blockers) | yes |
 | `inputProbe` | which buttons the game has registered this frame (self-checking taps: hold until the game saw it) | yes (`Gen4Game` gives it) |
-| `world` | the ROM's maps as `Area`s: tiles (`TileKind`, heights), warps, signs, people, triggers | for movement actions |
+| `world` | the ROM's maps as `Area`s: tiles (`TileKind`, heights), warps, signs, people, triggers (Gen 4: extend `Gen4WorldSource` with the header table, NARC paths, tile behaviours, obstacle sprites, hidden item flag base) | for movement actions |
 | `data` | `GameData` from the ROM: species, moves, items, type chart, machines, text | for `lookup` and effectiveness |
 | `scriptVariable(memory, id)` | read a script variable (active triggers, puzzles) | for triggers |
-| `zoneName(id)` | display name of a map | for the map view |
+| `mapName(id)` | the one `MapName` of a map (the place shown in game + the map's own name; `map:<id>` when unknown), shown by the state and the map view, matched by `go_to` and `fly` | for movement actions |
+| `fieldMoveRule(kind)` | the move and badge of each field move, Fly included (Gen 4: give `fieldMoveBadges`) | for field moves and `fly` |
 
 Register the ROM's game code in `PokemonGames` (`pokemon-client`, not the app): the app, the MCP server and the
 bench all detect the game from the ROM (`POKEMON_ROM=roms/<game>.nds`).
@@ -126,7 +127,7 @@ Never compare values that depend on the time of day (the RTC follows the host cl
 
 ## What the shared code still assumes (to know before a non-Gen 4 game)
 
-- `FieldState.height` is in Gen 4 map-object units (`MovePlans.HEIGHT_UNITS = 8` converts it to BDHC heights).
+- `FieldState.height` is in Gen 4 map-object units (`FIELD_HEIGHT_UNITS = 8` converts it to BDHC heights; `Pathfinder.nodeOf` places a player on the level closest to its height).
 - `PlayerInfo.badgeIds`, `StoryCondition`, radio / Pokégear models are documented with HGSS numbering (the types are
   generic, the meaning of the ids is per game).
 - The bench's `raw`, `rawmon`, `box`, `where`, `watch`, `fish`, `world` commands and the music-during-pauses checks

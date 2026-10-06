@@ -2,7 +2,7 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.console.TouchPoint
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
@@ -96,7 +96,7 @@ object MoreActions {
         parameters = listOf(Parameter("entry", ParameterType.STRING, "The start menu entry.", values = START_ENTRIES)),
         modes = assisted,
         availability = { state ->
-            val walking = state.battle == null && (state.screen as? Screen.Overworld)?.awaiting == Awaiting.INPUT
+            val walking = FieldControl.inControl(state)
             val inMenu = (state.screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU
             when {
                 !walking && !inMenu -> Availability.Hidden

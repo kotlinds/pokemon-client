@@ -78,6 +78,39 @@ class ActionRegistryTest {
         assertTrue(registry.available(battleState(Screen.Battle(Awaiting.ANIMATION)), ActionMode.ASSISTED).none { it.name == "attack" })
     }
 
+    // region executeAndSettle: every host's step (the app's sessions, the MCP, the bench)
+
+    /** A fake game busy (animating) until frame [readyAt], then waiting for input. */
+    private fun busyUntil(readyAt: Long) = FakeGame(Screen.Overworld(null, Awaiting.ANIMATION)).apply {
+        onFrame = { frame, _ -> Screen.Overworld(null, if (frame < readyAt) Awaiting.ANIMATION else Awaiting.INPUT) }
+    }
+
+    @Test
+    fun aStepSettlesUntilTheGameWaitsForInput() {
+        val game = busyUntil(300)
+        assertIs<ActionOutcome.Done>(registry.executeAndSettle(GameAction.Wait(frames = 10), game.scope(), game))
+        assertEquals(Awaiting.INPUT, game.screen.awaiting)
+        assertTrue(game.console.frame in 300L until ActionRegistry.STEP_FRAMES, "frame ${game.console.frame}")
+    }
+
+    @Test
+    fun aLongActionStillLeavesTheMinimumToSettle() {
+        // The action used the whole step's budget: the game is still given MIN_SETTLE_FRAMES to settle.
+        val game = busyUntil(ActionRegistry.STEP_FRAMES + 100L)
+        registry.executeAndSettle(GameAction.Wait(frames = ActionRegistry.STEP_FRAMES), game.scope(), game)
+        assertEquals(Awaiting.INPUT, game.screen.awaiting)
+    }
+
+    @Test
+    fun aGameThatNeverSettlesEndsTheStepAtItsBudget() {
+        val game = busyUntil(Long.MAX_VALUE)
+        registry.executeAndSettle(GameAction.Wait(frames = 10), game.scope(), game)
+        assertEquals(Awaiting.ANIMATION, game.screen.awaiting)
+        assertTrue(game.console.frame in ActionRegistry.STEP_FRAMES.toLong()..ActionRegistry.STEP_FRAMES + 10L, "frame ${game.console.frame}")
+    }
+
+    // endregion
+
     @Test
     fun runIsUnavailableInTrainerBattlesWithATypedReason() {
         val unavailable = registry.unavailable(battleState(command, BattleKind.TRAINER), ActionMode.ASSISTED).single { it.name == "run" }

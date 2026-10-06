@@ -27,10 +27,14 @@ interface MovingPlatforms {
 }
 
 /**
- * Plans routes over [MovingPlatforms]: a Dijkstra over (player tile, platform poses), each pose configuration getting
- * its own [Pathfinder] where the platforms' tiles are walkable ([Overlay.openTiles]). Stepping on a trigger tile is an
- * [Edge.Teleport] (step onto the trigger, the platform moves and carries the player to [Edge.Teleport.to]); the walker
- * re-reads the position after each one and plans again when the game disagrees.
+ * Plans routes over [MovingPlatforms]: the routes' [dijkstra] over (player [Heading], platform poses), each pose
+ * configuration getting its own [Pathfinder] where the platforms' tiles are walkable ([Overlay.openTiles]). Stepping on
+ * a trigger tile is an [Edge.Teleport] (step onto the trigger, the platform moves and carries the player to
+ * [Edge.Teleport.to]); the walker re-reads the position after each one and plans again when the game disagrees.
+ *
+ * The rules are the plain routes' ones: the same cost of a turn ([RouteOptions.turnPenalty]; none after a ride, which
+ * leaves the player facing wherever it does), the same ledge rule ([boundedLedgeRule], the way back checked with the
+ * platforms where the route leaves them) and the same warnings ([Pathfinder.describe]).
  */
 class PlatformPlanner(
     private val area: Area,
@@ -39,7 +43,13 @@ class PlatformPlanner(
     private val maxStates: Int = DEFAULT_MAX_STATES,
 ) {
 
-    private data class State(val node: Node, val poses: List<PlatformPose>)
+    /** Where the player is (and arrived from, see [Heading]) and where the platforms are. */
+    private data class State(val heading: Heading, val poses: List<PlatformPose>) {
+        val node: Node get() = heading.node
+
+        /** The state without the direction: what the search bound counts, and where a turn is cut ([dijkstra]). */
+        val place: Pair<Node, List<PlatformPose>> get() = heading.node to poses
+    }
 
     private val pathfinders = HashMap<List<PlatformPose>, Pathfinder>()
 
@@ -52,60 +62,41 @@ class PlatformPlanner(
      * [Pathfinder.route], active triggers are crossed only when there is no other way (the route then warns).
      */
     fun route(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>> = emptySet(), isGoal: (Node) -> Boolean): Route? {
-        search(start, options, goalTiles, isGoal, allowTriggers = false)?.let { return it }
-        val edges = search(start, options, goalTiles, isGoal, allowTriggers = true)?.edges ?: return null
-        val scene = edges.flatMap { it.tiles }.firstOrNull { (it.x to it.y) in overlay.activeTriggers }
-        return Route(edges, listOfNotNull(scene?.let { RouteWarning.StartsScene(it.x, it.y) }))
-    }
-
-    private fun search(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, isGoal: (Node) -> Boolean, allowTriggers: Boolean): Route? {
-        val initial = State(start, platforms.poses)
-        val dist = HashMap<State, Int>()
-        val previous = HashMap<State, Pair<State, Edge>>()
-        val queue = PriorityQueue<Pair<State, Int>> { a, b -> a.second - b.second }
-        dist[initial] = 0
-        queue.add(initial to 0)
-        var expanded = 0
-        while (queue.isNotEmpty()) {
-            val (state, d) = queue.poll()
-            if (d > (dist[state] ?: Int.MAX_VALUE)) continue
-            if (state != initial && isGoal(state.node)) return Route(path(previous, initial, state), emptyList())
-            if (++expanded > maxStates) return null
-            for ((edge, next) in moves(state, options, goalTiles, allowTriggers)) {
-                val cost = d + edge.cost
-                if (cost < (dist[next] ?: Int.MAX_VALUE)) {
-                    dist[next] = cost
-                    previous[next] = state to edge
-                    queue.add(next to cost)
-                }
+        val initial = State(Heading(start, null), platforms.poses)
+        fun plan(allowJumps: Boolean, allowTriggers: Boolean): SearchResult<State, *, Edge> = dijkstra(
+            start = initial,
+            place = { it.place },
+            isGoal = { isGoal(it.node) },
+            maxPlaces = maxStates,
+            turnCost = { pathfinder(it.poses).turnCostAt(it.node, options) },
+        ) { state, turnCost ->
+            moves(state, options, goalTiles, allowJumps, allowTriggers).map { (edge, next) ->
+                SearchMove(next, edge.cost + turn(state.heading.direction, edge, turnCost), edge)
             }
         }
-        return null
+        // The way back is walked with the platforms where the plan leaves them.
+        fun ledges(triggers: Boolean): LedgeChoice? =
+            boundedLedgeRule(options, { plan(it, triggers) }) { end -> pathfinder(end.poses).hasWayBack(end.node, start, options, triggers) }
+        // Active triggers only when there is no other way (as in Pathfinder.route).
+        return when (val choice = ledges(triggers = false) ?: ledges(triggers = true)) {
+            is LedgeChoice.Take -> pathfinder(initial.poses).describe(choice.edges, choice.oneWay)
+            LedgeChoice.OnlyOneWay, null -> null
+        }
     }
 
     /** The plain moves with the platforms where they are; a step onto a trigger tile becomes the ride it starts. */
-    private fun moves(state: State, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, allowTriggers: Boolean): List<Pair<Edge, State>> =
-        pathfinder(state.poses).neighbours(state.node, options, goalTiles, allowJumps = options.acceptOneWay, allowTriggers = allowTriggers).map { edge ->
+    private fun moves(state: State, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, allowJumps: Boolean, allowTriggers: Boolean): List<Pair<Edge, State>> =
+        pathfinder(state.poses).neighbours(state.node, options, goalTiles, allowJumps = allowJumps, allowTriggers = allowTriggers).map { edge ->
             val ride = if (edge is Edge.Step) platforms.ride(state.poses, edge.to.x, edge.to.y) else null
             when {
-                ride == null || !ride.moved -> edge to state.copy(node = edge.to)
+                ride == null || !ride.moved -> edge to State(Heading(edge.to, edge.endDirection), state.poses)
                 else -> {
                     val landing = Node(ride.playerX, ride.playerY, edge.to.level)
-                    Edge.Teleport(landing, edge.direction, edge.to, RIDE_COST) to State(landing, ride.poses)
+                    val teleport = Edge.Teleport(landing, edge.direction, edge.to, RIDE_COST)
+                    teleport to State(Heading(landing, teleport.endDirection), ride.poses)
                 }
             }
         }
-
-    private fun path(previous: Map<State, Pair<State, Edge>>, start: State, end: State): List<Edge> {
-        val edges = ArrayDeque<Edge>()
-        var at = end
-        while (at != start) {
-            val (from, edge) = previous.getValue(at)
-            edges.addFirst(edge)
-            at = from
-        }
-        return edges.toList()
-    }
 
     companion object {
         /** States expanded at most (the Blackthorn Gym needs a few thousand). */

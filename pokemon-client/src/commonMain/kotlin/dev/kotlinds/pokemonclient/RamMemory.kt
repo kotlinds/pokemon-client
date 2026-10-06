@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient
 
+
+
 /**
  * [Memory] over a snapshot of the Nintendo DS main RAM (4 MB, as returned by the emulator).
  *
@@ -9,7 +11,7 @@ package dev.kotlinds.pokemonclient
 class RamMemory(private val ram: ByteArray) : Memory {
 
     private fun offset(addr: Long, size: Int): Int? {
-        if (addr !in MAIN_RAM_START..MAIN_RAM_END) return null
+        if (addr !in MAIN_RAM_START..MAIN_RAM_MIRRORS_LAST) return null
         val offset = ((addr - MAIN_RAM_START) and (ram.size - 1).toLong()).toInt()
         return if (offset + size <= ram.size) offset else null
     }
@@ -39,6 +41,11 @@ class RamMemory(private val ram: ByteArray) : Memory {
 
     private companion object {
         const val MAIN_RAM_START = 0x02000000L
-        const val MAIN_RAM_END = 0x02FFFFFFL
+
+        /**
+         * The last address (inclusive) of the main RAM's mirrors on the ARM9 bus. Not the end of the RAM itself
+         * (0x02400000, exclusive: Gen4Structs.MAIN_RAM_END): game pointers never go past that one.
+         */
+        const val MAIN_RAM_MIRRORS_LAST = 0x02FFFFFFL
     }
 }

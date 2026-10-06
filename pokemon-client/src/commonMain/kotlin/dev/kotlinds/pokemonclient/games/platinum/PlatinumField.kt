@@ -4,6 +4,7 @@ import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldState
+import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.TextSource
@@ -30,37 +31,19 @@ internal object PlatinumField {
 
     /** ScriptManager.msgBuf (Platinum include/script_manager.h:162; HGSS has another field there). */
     private const val SM_MSG_BUF = 0x44L
-    private const val SCRIPT_CONTEXTS = 2
-    private const val CONTEXT_WAITING = 2
 
     /** The field system while the field app runs, else null (`sFieldSystem` stays set after the field app ends). */
     fun fieldSystem(mem: PlatinumMemory, top: PlatinumTopApp): Long? =
         if (top.app == PlatinumApp.FIELD) mem.ptr(mem.version.fieldSystemPtr) else null
 
     /** The player's position: the live `MapObject` when the map runs, the saved `Location` otherwise. */
-    fun position(mem: PlatinumMemory, fs: Long, zoneName: (Int) -> String?): FieldState? {
+    fun position(mem: PlatinumMemory, fs: Long, mapName: (Int) -> MapName): FieldState? {
         val loc = mem.ptr(fs + FS_LOCATION) ?: return null
-        val mapId = mem.s32(loc + S.LOC_MAP_ID)
-        var x = mem.s32(loc + S.LOC_X)
-        var z = mem.s32(loc + S.LOC_Z)
-        var facing = mem.s32(loc + S.LOC_DIRECTION)
-        var height = 0
-        var moving = false
-        val mo = mem.ptr(fs + FS_PLAYER_AVATAR)?.let { mem.ptr(it + S.PA_MAP_OBJECT) }
-        if (mo != null && mem.s32(fs + FS_RUNNING_FIELD_MAP) != 0) {
-            x = mem.s32(mo + S.MO_X)
-            z = mem.s32(mo + S.MO_Z)
-            height = mem.s32(mo + S.MO_Y)
-            facing = mem.s32(mo + S.MO_FACING)
-            // At rest the position vector is exactly the tile center (src/map_object.c).
-            val px = mem.s32(mo + S.MO_POSITION_VECTOR)
-            val pz = mem.s32(mo + S.MO_POSITION_VECTOR + 8)
-            moving = px != x * 16 * 4096 + 8 * 4096 || pz != z * 16 * 4096 + 8 * 4096 ||
-                mem.s32(mo + S.MO_PREVIOUS_X) != x || mem.s32(mo + S.MO_PREVIOUS_Z) != z
-        }
+        val mo = mem.ptr(fs + FS_PLAYER_AVATAR)?.let { mem.ptr(it + S.PA_MAP_OBJECT) }?.takeIf { mem.s32(fs + FS_RUNNING_FIELD_MAP) != 0 }
+        val p = mem.playerPosition(loc, mo) ?: return null
         return FieldState(
-            mapId = mapId, mapName = zoneName(mapId) ?: "zone $mapId", x = x, y = z, height = height,
-            facing = S.DIRECTIONS.getOrNull(facing), movement = MovementMode.WALK, moving = moving,
+            mapId = p.mapId, mapName = mapName(p.mapId), x = p.x, y = p.z, height = p.height,
+            facing = p.facing, movement = MovementMode.WALK, moving = p.moving,
         )
     }
 
@@ -86,27 +69,30 @@ internal object PlatinumField {
         if (mem.fn(task + S.FIELD_TASK_FUNC) != v.fnFieldTaskRunScript) return Screen.Unknown("field task 0x${mem.fn(task + S.FIELD_TASK_FUNC).toString(16)} (start menu, scene...)", Awaiting.INPUT)
         val sm = mem.ptr(task + S.FIELD_TASK_ENV)?.takeIf { mem.u32(it + S.SM_MAGIC) == S.SCRIPT_MANAGER_MAGIC }
             ?: return Screen.Animation(AnimationKind.CUTSCENE)
-        val waits = (0 until SCRIPT_CONTEXTS).mapNotNull { i ->
-            mem.ptr(sm + S.SM_CONTEXTS + 4L * i)?.takeIf { mem.u8(it + S.SC_STATE) == CONTEXT_WAITING }?.let { mem.fn(it + S.SC_NATIVE) }
-        }
+        // The waits of the contexts that really wait (a caller parked on its common script's run left out).
+        val waits = mem.waitingScriptContexts(sm, v.scriptContexts, v.fnScrWaitSubContext).mapNotNull(mem::scriptNative)
         val boxOpen = mem.u8(sm + S.SM_MSG_BOX_OPEN) != 0
         if (v.fnScrWaitForYesNoResult in waits) return Screen.Unknown("a script's yes / no (not decoded yet for Platinum)", Awaiting.INPUT)
         // Signs (and tips like "The X Button opens the menu!") print in a signpost window, not the message box
         // (ScrCmd_GetSignpostInput / WaitScrollingSignpostInput, src/scrcmd.c).
         if (v.fnScrSignpostInput in waits || v.fnScrSignpostPrinting in waits) {
-            val printer = mem.textPrinter(v.textPrinterTasks, mem.u8(sm + S.SM_MESSAGE_ID))
-            val awaiting = if (v.fnScrSignpostInput in waits || printer?.let { mem.u8(it + S.TP_STATE) in S.TEXT_PRINTER_WAIT_STATES } == true) Awaiting.INPUT else Awaiting.TEXT_PRINTING
-            return Screen.Dialogue(TextSource.SIGN, null, visiblePage(mem, mem.ptr(sm + SM_MSG_BUF), printer), awaiting)
+            val printer = mem.textPrinter(mem.u8(sm + S.SM_MESSAGE_ID))
+            val awaiting = if (v.fnScrSignpostInput in waits || printer?.let(mem::printerWaitsForInput) == true) Awaiting.INPUT else Awaiting.TEXT_PRINTING
+            return Screen.Dialogue(TextSource.SIGN, null, message(mem, sm), awaiting)
         }
         if (!boxOpen) return Screen.Animation(AnimationKind.CUTSCENE, "script running (waits ${waits.joinToString { "0x" + it.toString(16) }})")
-        val printer = mem.textPrinter(v.textPrinterTasks, mem.u8(sm + S.SM_MESSAGE_ID))
-        val text = visiblePage(mem, mem.ptr(sm + SM_MSG_BUF), printer)
+        val printer = mem.textPrinter(mem.u8(sm + S.SM_MESSAGE_ID))
+        val text = message(mem, sm)
         val awaitsA = waits.any { it == v.fnScrCheckABPress || it == v.fnScrCheckABXPadPress || it == v.fnScrCheckABPadPress || it == v.fnScrDecrementABPressTimer }
         val awaiting = when {
             awaitsA -> Awaiting.INPUT
-            printer != null -> if (mem.u8(printer + S.TP_STATE) in S.TEXT_PRINTER_WAIT_STATES) Awaiting.INPUT else Awaiting.TEXT_PRINTING
+            printer != null -> if (mem.printerWaitsForInput(printer)) Awaiting.INPUT else Awaiting.TEXT_PRINTING
             else -> Awaiting.ANIMATION
         }
         return Screen.Dialogue(TextSource.FIELD, null, text, awaiting)
     }
+
+    /** The page of the script's message (`ScriptManager.msgBuf`) the box shows, "" when unreadable. */
+    private fun message(mem: PlatinumMemory, sm: Long): String =
+        mem.printedText(mem.ptr(sm + SM_MSG_BUF), mem.u8(sm + S.SM_MESSAGE_ID), allowFreed = true)?.visible.orEmpty()
 }

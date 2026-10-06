@@ -15,8 +15,14 @@ object HgssTextBanks {
     /** Species names, index = species id (src/message_format.c BufferSpeciesName). */
     val SPECIES_NAMES = TextBankId(237)
 
+    /** The whiteout texts (msg_0203): [HgssFieldNoticeScreens], lines `BLACKOUT_LINE_*`. */
+    val BLACKOUT = TextBankId(203)
+
     /** Map section (location) names, index = mapsec id. */
     val MAP_SECTION_NAMES = TextBankId(279)
+
+    /** The main menu's labels (msg_0442): [HgssIntroScreens]. */
+    val MAIN_MENU_LABELS = TextBankId(442)
 
     /** Ability names, index = ability id (BufferAbilityName). */
     val ABILITY_NAMES = TextBankId(720)

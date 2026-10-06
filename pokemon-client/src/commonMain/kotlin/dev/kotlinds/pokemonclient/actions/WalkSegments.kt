@@ -3,11 +3,9 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.InputFrame
-import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MovementMode
-import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.world.Area
 import dev.kotlinds.pokemonclient.world.Edge
 import dev.kotlinds.pokemonclient.world.Node
@@ -80,7 +78,10 @@ internal object WalkSegments {
                 is Held.Released -> Unit
             }
             // Let go: wait for the player to stand still (a bike may still take one more tile), then check.
-            val end = settleStill(context) ?: return Result.Stopped(context.state())
+            val end = when (val still = FieldControl.awaitStill(context, stopOn = FieldControl.Motion.WALK)) {
+                is FieldControl.Still.TakenOver -> return Result.Stopped(still.state)
+                is FieldControl.Still.Settled, is FieldControl.Still.TimedOut -> still.state.field ?: return Result.Stopped(still.state)
+            }
             val at = remaining.indexOfFirst { it.x == end.x && it.y == end.y }
             when {
                 at == remaining.lastIndex -> return Result.Reached(end)
@@ -117,7 +118,7 @@ internal object WalkSegments {
             val field = state.field
             // A trainer's "!" keeps the overworld on screen (an animation) and ignores the held direction: without this,
             // the walk would read it as a refused step (an invisible wall) and plan again.
-            if (field == null || field.trainerEncounter || (state.screen !is Screen.Overworld && state.screen.awaiting != Awaiting.ANIMATION)) {
+            if (field == null || FieldControl.takenOver(state, FieldControl.Motion.WALK)) {
                 val walked = next + if (tiles.getOrNull(next)?.let { it.x == field?.x && it.y == field.y } == true) 1 else 0
                 return Held.Stopped(state, walked, tiles.getOrNull(next))
             }
@@ -143,33 +144,7 @@ internal object WalkSegments {
         }
     }
 
-    /** Steps without input until the player has stood still for a few frames in a row; null when it never does. */
-    private fun settleStill(context: PlanContext): FieldState? {
-        var still = 0
-        var waited = 0
-        while (waited < SETTLE_FRAMES) {
-            context.scope.step(1)
-            waited++
-            val state = context.state()
-            val field = state.field ?: return null
-            if (field.trainerEncounter || (state.screen !is Screen.Overworld && state.screen.awaiting != Awaiting.ANIMATION)) return null
-            still = if (field.moving) 0 else still + 1
-            if (still >= STILL_FRAMES) return field
-        }
-        return context.state().field
-    }
-
-    private val Direction.button
-        get() = when (this) {
-            Direction.NORTH -> Button.UP
-            Direction.SOUTH -> Button.DOWN
-            Direction.WEST -> Button.LEFT
-            Direction.EAST -> Button.RIGHT
-        }
-
     /** No new tile for this long while holding (and not moving): the game refuses the step (turning included). */
     private const val REFUSED_FRAMES = 24
-    private const val SETTLE_FRAMES = 64
-    private const val STILL_FRAMES = 6
     private const val MAX_ROUNDS = 8
 }

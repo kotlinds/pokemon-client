@@ -1,24 +1,19 @@
 package dev.kotlinds.pokemonclient.games.platinum
 
+import dev.kotlinds.pokemonclient.data.TextBankId
 import dev.kotlinds.NarcArchive
 import dev.kotlinds.NdsRom
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.games.gen4.Gen4LandData
-import dev.kotlinds.pokemonclient.games.gen4.Gen4MapMatrix
+import dev.kotlinds.pokemonclient.games.gen4.Gen4MapHeader
 import dev.kotlinds.pokemonclient.games.gen4.Gen4MessageFile
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
-import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs
-import dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents
-import dev.kotlinds.pokemonclient.world.Area
-import dev.kotlinds.pokemonclient.world.PersonTemplate
-import dev.kotlinds.pokemonclient.world.Sign
-import dev.kotlinds.pokemonclient.world.TileInfo
+import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldFiles
+import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldSource
+import dev.kotlinds.pokemonclient.state.MapName
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.TileKind
-import dev.kotlinds.pokemonclient.world.Trigger
-import dev.kotlinds.pokemonclient.world.Warp
-import dev.kotlinds.pokemonclient.world.WorldSource
 
 /**
  * The text banks of Platinum (`msgdata/pl_msg.narc`, member = `TEXT_BANK_*` of the decomp's generated
@@ -29,42 +24,42 @@ class PlatinumText(private val rom: NdsRom) {
     private val files: List<ByteArray> by lazy { NarcArchive.unpack(rom.files[MESSAGE_NARC] ?: error("missing $MESSAGE_NARC")) }
 
     /** Line [line] of bank [bank], control codes removed; null when out of range. */
-    fun line(bank: Int, line: Int): String? = files.getOrNull(bank)?.let { Gen4MessageFile(it).line(line) }
+    fun line(bank: TextBankId, line: Int): String? = files.getOrNull(bank.value)?.let { Gen4MessageFile(it).line(line) }
 
     companion object {
         const val MESSAGE_NARC = "msgdata/pl_msg.narc"
 
         /** TEXT_BANK_MAIN_MENU_ALERTS: line 5 is the new game warning. */
-        const val MAIN_MENU_ALERTS = 14
+        val MAIN_MENU_ALERTS = TextBankId(14)
         const val MAIN_MENU_ALERT_NEW_GAME = 5
 
         /** TEXT_BANK_ROWAN_INTRO (res/text/rowan_intro.json). */
-        const val ROWAN_INTRO = 389
+        val ROWAN_INTRO = TextBankId(389)
 
         /** TEXT_BANK_LOCATION_NAMES: index = `MapHeader.mapLabelTextID`. */
-        const val LOCATION_NAMES = 433
+        val LOCATION_NAMES = TextBankId(433)
 
         /** TEXT_BANK_MAIN_MENU_OPTIONS (MainMenuOptions_Text_*). */
-        const val MAIN_MENU_OPTIONS = 550
+        val MAIN_MENU_OPTIONS = TextBankId(550)
 
         /** TEXT_BANK_ROWAN_INTRO_TV_APP: line 0 is the TV programme. */
-        const val ROWAN_INTRO_TV = 607
+        val ROWAN_INTRO_TV = TextBankId(607)
     }
 }
 
 /** One entry of Platinum's `sMapHeaders` (include/map_header.h): only what the world decoder needs. */
 data class PlatinumMapHeader(
     val zoneId: Int,
-    val matrixId: Int,
-    val scriptsBank: Int,
-    val eventsBank: Int,
+    override val matrixId: Int,
+    override val scriptsBank: Int,
+    override val eventsBank: Int,
     /** `mapLabelTextID`: the location name's line in [PlatinumText.LOCATION_NAMES]. */
     val locationName: Int,
     /** `mapType` (7 bits). */
     val mapType: Int,
-    val bikeAllowed: Boolean,
-    val flyAllowed: Boolean,
-)
+    override val bikeAllowed: Boolean,
+    override val flyAllowed: Boolean,
+) : Gen4MapHeader
 
 /** Decodes Platinum's map header table from the (decompressed) ARM9 binary. */
 object PlatinumMapHeaders {
@@ -153,114 +148,57 @@ object PlatinumTileBehaviors {
 }
 
 /**
- * The static world of Platinum from the ROM: zone → map header ([PlatinumMapHeaders]) → map matrix
- * ([Gen4MapMatrix], `fielddata/mapmatrix/map_matrix.narc`) → land data of each block ([Gen4LandData],
- * `fielddata/land_data/land_data.narc`: 0x10-byte header, no 0x1234 marker) + zone events ([Gen4ZoneEvents],
- * `fielddata/eventdata/zone_event.narc`). The file formats are the Gen 4 ones HGSS uses; only the header table, the
- * NARC paths and the tile behaviours differ.
+ * The static world of Platinum, decoded from the ROM by the Gen 4 decoder ([Gen4WorldSource]: map matrices, land
+ * data, zone events, the same file formats as HGSS). Platinum's own: the header table ([PlatinumMapHeaders]), the NARC
+ * paths, the tile behaviours ([PlatinumTileBehaviors]), the obstacle sprites, the hidden item flags and the names.
  *
- * Basic support: tiles (collision, behaviour, BDHC heights), warps, signs, people and coordinate triggers. Not done
- * yet: hidden items, script warps, trigger warps, region / dynamic matrices (the Distortion World...).
+ * Not done yet: what needs Platinum's script bytecode (its commands are not HGSS's): triggers that do nothing, script
+ * warps and holes ([Gen4WorldSource.scriptWarps], [Gen4WorldSource.triggerWarps]); region / dynamic matrices (the
+ * Distortion World...).
  */
-class PlatinumWorldSource(private val rom: NdsRom, private val version: PlatinumVersion) : WorldSource {
+class PlatinumWorldSource(rom: NdsRom, private val version: PlatinumVersion) : Gen4WorldSource<PlatinumMapHeader>(rom) {
 
-    val headers: List<PlatinumMapHeader> by lazy {
+    override val headers: List<PlatinumMapHeader> by lazy {
         PlatinumMapHeaders.decode(Gen4RomBytes.arm9Code(rom.arm9), version.mapHeaders)
     }
 
     val text = PlatinumText(rom)
 
-    private val matrixFiles by lazy { narc(MAP_MATRIX_NARC) }
-    private val landFiles by lazy { narc(LAND_DATA_NARC) }
-    private val eventFiles by lazy { narc(ZONE_EVENT_NARC) }
-    private val areas = HashMap<Pair<Int, Int?>, Area>()
-    private val lands = HashMap<Int, Gen4LandData>()
+    override val files = Gen4WorldFiles(
+        mapMatrix = "fielddata/mapmatrix/map_matrix.narc",
+        landData = "fielddata/land_data/land_data.narc",
+        zoneEvents = "fielddata/eventdata/zone_event.narc",
+    )
 
-    fun header(zoneId: Int): PlatinumMapHeader? = headers.getOrNull(zoneId)
+    /** `FLAG_OFFSET_HIDDEN_ITEMS` (include/script_manager.h). */
+    override val hiddenItemFlagBase: Int = 730
 
-    override val zoneCount: Int get() = headers.size
+    override val overworldName: String = "Sinnoh"
 
-    override fun flyAllowed(zoneId: Int): Boolean? = header(zoneId)?.flyAllowed
+    /** The place shown in game (the ROM's text) and the map's own name ([PlatinumMapNames]). */
+    override fun readMapName(zoneId: Int): MapName = MapName(zoneId, locationName(zoneId), PlatinumMapNames.of(zoneId))
 
-    override fun bikeAllowed(zoneId: Int): Boolean? = header(zoneId)?.bikeAllowed
+    override fun tileKind(behavior: Int, blocked: Boolean): TileKind = PlatinumTileBehaviors.kind(behavior, blocked)
 
-    fun matrix(matrixId: Int): Gen4MapMatrix? = matrixFiles.getOrNull(matrixId)?.let { Gen4MapMatrix.parse(matrixId, it) }
+    override fun warpDirection(behavior: Int): Direction? = PlatinumTileBehaviors.warpDirection(behavior)
 
-    fun landData(landId: Int): Gen4LandData? =
-        lands[landId] ?: landFiles.getOrNull(landId)?.let { Gen4LandData.parse(it) }?.also { lands[landId] = it }
-
-    fun events(zoneId: Int): Gen4ZoneEvents? = header(zoneId)?.eventsBank?.let { eventFiles.getOrNull(it) }?.let { Gen4ZoneEvents.parse(it) }
+    /**
+     * `OBJ_EVENT_GFX_STRENGTH_BOULDER`, `_ROCK_SMASH`, `_CUT_TREE` (enum ObjectEventGfx, the pokeplatinum decomp's
+     * generated/object_events_gfx.txt, from 0).
+     */
+    override fun obstacle(sprite: Int): FieldMoveKind? = when (sprite) {
+        SPRITE_STRENGTH_BOULDER -> FieldMoveKind.STRENGTH
+        SPRITE_ROCK_SMASH -> FieldMoveKind.ROCK_SMASH
+        SPRITE_CUT_TREE -> FieldMoveKind.CUT
+        else -> null
+    }
 
     /** The location name of zone [zoneId] (e.g. "Twinleaf Town"), null when unknown. */
     fun locationName(zoneId: Int): String? = header(zoneId)?.let { text.line(PlatinumText.LOCATION_NAMES, it.locationName) }
 
-    override fun areaOf(zoneId: Int): Area? {
-        val header = header(zoneId) ?: return null
-        val matrix = matrix(header.matrixId) ?: return null
-        val key = header.matrixId to (if (matrix.zones != null) null else zoneId)
-        return areas[key] ?: buildArea(matrix, zoneId).also { areas[key] = it }
-    }
-
-    private fun narc(path: String): List<ByteArray> = NarcArchive.unpack(rom.files[path] ?: error("missing $path in the ROM"))
-
-    private fun buildArea(matrix: Gen4MapMatrix, zoneId: Int): Area {
-        val b = Gen4MapMatrix.BLOCK_TILES
-        val width = matrix.width * b
-        val height = matrix.height * b
-        val tiles = arrayOfNulls<TileInfo>(width * height)
-        val zones = IntArray(width * height) { -1 }
-        val interned = HashMap<TileInfo, TileInfo>()
-        for (bz in 0 until matrix.height) for (bx in 0 until matrix.width) {
-            val landId = matrix.landAt(bx, bz)
-            if (landId == Gen4MapMatrix.NO_LAND) continue
-            val land = landData(landId) ?: continue
-            val heights = land.bdhc?.tileHeights()
-            val blockZone = matrix.zoneAt(bx, bz)?.takeIf { it != EVERYWHERE } ?: if (matrix.zones == null) zoneId else -1
-            for (lz in 0 until b) for (lx in 0 until b) {
-                val attr = land.attribute(lx, lz)
-                val blocked = attr and COLLISION_BIT != 0
-                val info = TileInfo(blocked, PlatinumTileBehaviors.kind(attr and 0xFF, blocked), heights?.get(lz * b + lx) ?: emptyList())
-                val i = (bz * b + lz) * width + bx * b + lx
-                tiles[i] = interned.getOrPut(info) { info }
-                zones[i] = blockZone
-            }
-        }
-        fun behaviorAt(x: Int, z: Int): Int? =
-            if (x in 0 until width && z in 0 until height) {
-                matrix.landAt(x / b, z / b).takeIf { it != Gen4MapMatrix.NO_LAND }?.let { landData(it)?.attribute(x % b, z % b)?.and(0xFF) }
-            } else null
-        val zoneIds = matrix.zones?.let { all -> (all.filter { it != EVERYWHERE }.toSortedSet() + zoneId).toList() } ?: listOf(zoneId)
-        val warps = mutableListOf<Warp>()
-        val signs = mutableListOf<Sign>()
-        val people = mutableListOf<PersonTemplate>()
-        val triggers = mutableListOf<Trigger>()
-        for (zone in zoneIds) {
-            val ev = events(zone) ?: continue
-            ev.warps.forEachIndexed { i, w ->
-                warps += Warp(zone, i, w.x, w.z, w.header, w.anchor, behaviorAt(w.x, w.z)?.let(PlatinumTileBehaviors::warpDirection))
-            }
-            ev.bgs.forEachIndexed { i, bg -> signs += Sign(zone, i, bg.x, bg.z, bg.script) }
-            ev.objects.forEach { o ->
-                people += PersonTemplate(
-                    zone = zone, id = o.id, sprite = o.sprite, x = o.x, y = o.z, facing = Gen4Structs.DIRECTIONS.getOrNull(o.facing),
-                    sightRange = if (o.isTrainer) o.params[0] else 0, script = o.script, hiddenByFlag = o.eventFlag,
-                )
-            }
-            ev.coords.forEachIndexed { i, c -> triggers += Trigger(zone, i, c.x, c.z, c.width, c.height, c.script, c.variable, c.value) }
-        }
-        val name = if (matrix.zones != null) "Sinnoh" else locationName(zoneId) ?: "zone $zoneId"
-        return Area(matrix.id, name, 0, 0, width, height, tiles, warps, signs, people, triggers, zones)
-    }
-
     companion object {
-        const val MAP_MATRIX_NARC = "fielddata/mapmatrix/map_matrix.narc"
-        const val LAND_DATA_NARC = "fielddata/land_data/land_data.narc"
-        const val ZONE_EVENT_NARC = "fielddata/eventdata/zone_event.narc"
-
-        /** Bit 15 of a terrain attribute: the tile cannot be entered (same in every Gen 4 game). */
-        const val COLLISION_BIT = 0x8000
-
-        /** MAP_EVERYWHERE: the zone of overworld blocks that belong to no route or town. */
-        const val EVERYWHERE = 0
+        const val SPRITE_STRENGTH_BOULDER = 84
+        const val SPRITE_ROCK_SMASH = 85
+        const val SPRITE_CUT_TREE = 86
     }
 }

@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.state.MoveOffer
@@ -38,7 +39,7 @@ internal object HgssPartyBagScreens : HgssScreenDecoder {
             APP_PARTY_MENU, APP_BAG -> subApp(mem) ?: return null
             else -> return null
         }
-        if (mem.s32(app + A.OM_EXEC_STATE) != OM_EXEC_MAIN) return null
+        if (mem.s32(app + S.OM_EXEC_STATE) != S.OM_EXEC_MAIN) return null
         return when (state.modeDetail) {
             APP_PARTY_MENU -> HgssPartyMenuScreen.decode(mem, state, app)
             else -> HgssBagScreen.decode(mem, state, app)
@@ -56,7 +57,6 @@ internal object HgssPartyBagScreens : HgssScreenDecoder {
     private const val APP_BAG = "bag"
 
     /** `OverlayManager_Run` exec state of an app running its main function (src/overlay_manager.c). */
-    private const val OM_EXEC_MAIN = 2
 }
 
 // =====================================================================================================================
@@ -67,10 +67,10 @@ internal object HgssPartyBagScreens : HgssScreenDecoder {
 internal object HgssPartyMenuScreen {
 
     fun decode(mem: HgssMemory, state: HgssState, app: Long): Screen? {
-        val pm = mem.ptr(app + A.OM_DATA) ?: return null
+        val pm = mem.ptr(app + S.OM_DATA) ?: return null
         val args = mem.ptr(pm + P.PM_ARGS) ?: return null
         val context = PartyContext.of(mem.u8(args + P.ARGS_CONTEXT))
-        val procState = mem.s32(app + A.OM_PROC_STATE)
+        val procState = mem.s32(app + S.OM_PROC_STATE)
         // A pressed / touched button plays its animation first: input is ignored meanwhile (party_menu.c:1504).
         if (mem.u32(pm + P.PM_BUTTON_ANIM_ACTIVE) != 0L) return Screen.Animation(AnimationKind.TRANSITION)
         return when (procState) {
@@ -84,7 +84,7 @@ internal object HgssPartyMenuScreen {
             // An item's effect (HP bar, then "X's HP was restored..."): the message is shown while its printer runs; A
             // ends it at once (else the menu waits for the text's own delay before closing, ~2-3 s).
             P.STATE_ITEM_USE_CB -> levelUpPanel(mem, state, pm)
-                ?: if (HgssScreenMemory.textPrinting(mem)) message(mem, pm) else Screen.Animation(AnimationKind.TRANSITION)
+                ?: if (mem.anyTextPrinterRunning()) message(mem, pm) else Screen.Animation(AnimationKind.TRANSITION)
             in P.MESSAGE_STATES -> message(mem, pm)
             // Sacred Ash revives every fainted Pokémon in turn (PartyMenu_Subtask_SacredAsh): an HP bar filling one
             // point a frame, then "X regained health." waiting for A, then the next one.
@@ -224,7 +224,7 @@ internal object HgssPartyMenuScreen {
         val entries = (0 until count).map { i ->
             val label = mem.gameString(mem.ptr(items + P.LIST_ITEM_SIZE * i + P.LIST_ITEM_TEXT)).orEmpty()
             val value = mem.u32(items + P.LIST_ITEM_SIZE * i + P.LIST_ITEM_VALUE)
-            val id = if (value == P.LIST_CANCEL) ID_QUIT else functions?.idOf(value and A.THUMB_MASK) ?: functionId(value and A.THUMB_MASK)
+            val id = if (value == P.LIST_CANCEL) ID_QUIT else functions?.idOf(value and S.THUMB_MASK) ?: functionId(value and S.THUMB_MASK)
             Entry(id, label)
         }
         val slot = mem.u8(pm + P.PM_PARTY_MON_INDEX)
@@ -310,7 +310,7 @@ internal object HgssPartyMenuScreen {
         val text = mem.gameString(string).orEmpty().trimEnd()
         // While its printer prints (or waits for the heal sound effect), A does nothing: only a printer waiting for a
         // key, or gone, waits for A (verified live: A ~20 frames after "X's HP was restored" is ignored).
-        val printed = string?.let { HgssTextPrinter.read(mem, it, mem.u8(pm + P.PM_TEXT_PRINTER_ID)) }
+        val printed = string?.let { mem.printedText(it, mem.u8(pm + P.PM_TEXT_PRINTER_ID)) }
         val awaiting = if (printed != null && printed.printerAlive) printed.awaiting else Awaiting.INPUT
         return Screen.Dialogue(TextSource.MENU, speaker = null, text = text, awaiting = awaiting)
     }
@@ -350,9 +350,9 @@ internal object HgssBagScreen {
     }
 
     fun decode(mem: HgssMemory, state: HgssState, app: Long): Screen? {
-        val work = mem.ptr(app + A.OM_DATA) ?: return null
+        val work = mem.ptr(app + S.OM_DATA) ?: return null
         val view = mem.ptr(work + P.BAG_VIEW) ?: return null
-        return when (mem.s32(app + A.OM_PROC_STATE)) {
+        return when (mem.s32(app + S.OM_PROC_STATE)) {
             in P.BAG_MAIN_STATES -> main(mem, work, view)
             P.BAG_STATE_ACTION_MENU -> actionMenu(mem, work, view)
             P.BAG_STATE_MESSAGE -> message(mem, work)

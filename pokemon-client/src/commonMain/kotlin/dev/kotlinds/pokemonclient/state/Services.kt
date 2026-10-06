@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.state
 
+
+
 /**
  * The Pokémon storage system (PC boxes), read from the save data in RAM like the party: known everywhere, not only
  * while the PC is open.
@@ -25,9 +27,7 @@ data class PcBoxContents(
     val mons: List<BoxMon>,
     /** Slots in a box (30 in Generation 4). */
     val capacity: Int,
-) {
-    val isFull: Boolean get() = mons.size >= capacity
-}
+)
 
 /** A Pokémon stored in a PC box. */
 data class BoxMon(

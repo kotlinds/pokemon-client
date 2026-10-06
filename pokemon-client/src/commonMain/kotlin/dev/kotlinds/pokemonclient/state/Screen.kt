@@ -185,6 +185,11 @@ sealed interface Screen {
     data class Dialogue(
         val source: TextSource,
         val speaker: String?,
+        /**
+         * What the box shows, in the same format in every game: the lines of the page on screen (printed so far)
+         * separated by `\n`, exactly where the box breaks them; earlier pages are gone, as on screen. (Entry labels,
+         * single lines, have their line breaks turned into spaces.)
+         */
         val text: String,
         override val awaiting: Awaiting,
     ) : Screen
@@ -532,3 +537,31 @@ enum class ViewerApp {
 
 /** How to leave a [Screen.Viewer]: a [button] (pressed until the viewer is left), or a [touch] of the bottom screen. */
 data class ViewerExit(val button: Button? = null, val touch: TouchPoint? = null)
+
+/** A short name for the kind of screen, for [GameEvent.ScreenChanged] and logs. */
+val Screen.kind: String
+    get() = when (this) {
+        is Screen.YesNo -> "yes_no"
+        is Screen.ListMenu -> "menu:${kind.name.lowercase()}"
+        is Screen.BattleCommand -> "battle_command"
+        is Screen.MoveSelect -> "move_select:${context.name.lowercase()}"
+        is Screen.TargetSelect -> "target_select"
+        is Screen.PartyGrid -> "party:${purpose.name.lowercase()}"
+        is Screen.ContextMenu -> "context_menu"
+        is Screen.Bag -> "bag"
+        is Screen.Keyboard -> "keyboard"
+        is Screen.PcBox -> "pc_box"
+        is Screen.Shop -> "shop"
+        is Screen.FlyMap -> "fly_map"
+        is Screen.Quantity -> "quantity"
+        is Screen.PressToContinue -> "press_to_continue:${reason.name.lowercase()}"
+        is Screen.Dialogue -> "dialogue:${source.name.lowercase()}"
+        is Screen.Evolution -> "evolution"
+        is Screen.StarterChoice -> "starter_choice"
+        is Screen.Animation -> "animation:${kind.name.lowercase()}"
+        is Screen.Overworld -> "overworld"
+        is Screen.Battle -> "battle"
+        is Screen.Intro -> "intro:${stage.wire}"
+        is Screen.Viewer -> "viewer:${app.name.lowercase()}"
+        is Screen.Unknown -> "unknown"
+    }

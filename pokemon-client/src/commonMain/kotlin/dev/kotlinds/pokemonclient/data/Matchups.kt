@@ -54,7 +54,9 @@ data class PartyMatchups(val mon: PartyMon, val matchups: List<MoveMatchup>) {
  * - the foe's ability when it is known ([BattleKnowledge]: revealed, or the only one its species can have) — Flash
  *   Fire, Levitate, Volt Absorb... make a type do nothing; when it is only possible (two abilities, not revealed), the
  *   move says "no effect if <ability>";
- * - in double battles, spread moves hitting everyone (Earthquake, Surf, Discharge) also show their effect on the ally.
+ * - in double battles, spread moves hitting everyone (Earthquake, Surf, Discharge) also show their effect on the ally;
+ * - a foe identified by Foresight / Odor Sleuth, or an attacker with Scrappy, takes Normal and Fighting moves despite
+ *   being a Ghost ([TypeChart.ignoredByForesight]).
  * Items and weather are left out.
  */
 object Matchups {
@@ -68,15 +70,17 @@ object Matchups {
         val foes = battle.battlers.filter { !it.ref.isPlayerSide && it.hp > 0 }
         if (foes.isEmpty()) return emptyList()
         return party.filter { it.id !in battling && !it.fainted && !it.isEgg }.map { mon ->
-            PartyMatchups(mon, mon.moves.flatMap { known -> movesAgainst(known, foes, null, data, knowledge) })
+            // A party Pokémon's ability is only known by id when its species has a single one.
+            val ability = data.species(mon.species.id)?.abilities?.singleOrNull()
+            PartyMatchups(mon, mon.moves.flatMap { known -> movesAgainst(known, ability, foes, null, data, knowledge) })
         }
     }
 
-    private fun movesAgainst(known: KnownMove, foes: List<BattlerState>, ally: BattlerState?, data: GameData, knowledge: BattleKnowledge?): List<MoveMatchup> {
+    private fun movesAgainst(known: KnownMove, attackerAbility: AbilityId?, foes: List<BattlerState>, ally: BattlerState?, data: GameData, knowledge: BattleKnowledge?): List<MoveMatchup> {
         val info = data.move(known.move.id) ?: return emptyList()
         if (info.category == MoveCategory.STATUS || info.power == 0) return emptyList()
         val targets = foes + listOfNotNull(ally?.takeIf { info.target == MoveTarget.ALL_OTHERS })
-        return targets.mapNotNull { target -> matchup(known.move.name, info, target, data, knowledge, isAlly = target == ally) }
+        return targets.mapNotNull { target -> matchup(known.move.name, info, attackerAbility, target, data, knowledge, isAlly = target == ally) }
     }
 
     fun estimate(battle: BattleState, data: GameData, knowledge: BattleKnowledge? = null): List<MoveMatchup> {
@@ -84,10 +88,10 @@ object Matchups {
         val actor = battle.battlers.firstOrNull { it.ref == actorRef } ?: return emptyList()
         val foes = battle.battlers.filter { !it.ref.isPlayerSide && it.hp > 0 }
         val ally = if (battle.isDouble) battle.battlers.firstOrNull { it.ref.isPlayerSide && it.ref != actorRef && it.hp > 0 } else null
-        return actor.moves.flatMap { known -> movesAgainst(known, foes, ally, data, knowledge) }
+        return actor.moves.flatMap { known -> movesAgainst(known, actor.ability?.id, foes, ally, data, knowledge) }
     }
 
-    private fun matchup(move: String, info: MoveInfo, target: BattlerState, data: GameData, knowledge: BattleKnowledge?, isAlly: Boolean): MoveMatchup? {
+    private fun matchup(move: String, info: MoveInfo, attackerAbility: AbilityId?, target: BattlerState, data: GameData, knowledge: BattleKnowledge?, isAlly: Boolean): MoveMatchup? {
         val types = target.types.mapNotNull(::typeOf)
         if (types.isEmpty()) return null
         val notes = mutableListOf<String>()
@@ -95,7 +99,11 @@ object Matchups {
         // What the foe set up: knocking it out costs something.
         if (!isAlly && VolatileStatus.DestinyBond in target.volatile) notes += "Destiny Bond: knocking it out takes your Pokémon down too"
         if (!isAlly && VolatileStatus.Grudge in target.volatile) notes += "Grudge: the move that knocks it out loses all its PP"
-        val chart = data.typeChart.multiplier(info.type, types)
+        val identified = VolatileStatus.Foresight in target.volatile || attackerAbility?.value == SCRAPPY
+        val chart = data.typeChart.multiplier(info.type, types, identified)
+        if (identified && types.any { (info.type to it) in data.typeChart.ignoredByForesight }) {
+            notes += if (attackerAbility?.value == SCRAPPY) "Scrappy" else "identified (Foresight)"
+        }
         var multiplier = if (info.fixedDamage) {
             if (chart != 0.0) notes += "fixed damage: types don't matter"
             if (chart == 0.0) 0.0 else 1.0
@@ -146,6 +154,7 @@ object Matchups {
     private const val MOTOR_DRIVE = 78
     private const val HEATPROOF = 85
     private const val DRY_SKIN = 87
+    private const val SCRAPPY = 113
 
     private fun typeOf(label: String): PokemonType? =
         PokemonType.entries.firstOrNull { it.label.equals(label, ignoreCase = true) || it.name.equals(label, ignoreCase = true) }

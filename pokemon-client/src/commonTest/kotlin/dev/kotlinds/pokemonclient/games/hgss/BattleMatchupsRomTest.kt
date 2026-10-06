@@ -14,6 +14,7 @@ import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.SpeciesId
+import dev.kotlinds.pokemonclient.state.VolatileStatus
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.ItemId
 import kotlin.test.Test
@@ -57,6 +58,24 @@ class BattleMatchupsRomTest {
         assertEquals(1.0, vsTentacool.multiplier)
         val vsGastly = Matchups.estimate(battle(battler(BattlerRef.PLAYER_LEFT, 66, listOf("Fighting"), listOf(toss)), battler(BattlerRef.FOE_LEFT, 92, listOf("Ghost", "Poison"))), data).single()
         assertEquals(0.0, vsGastly.multiplier)
+    }
+
+    @Test
+    fun normalMovesHitAnIdentifiedGhostOrWithScrappy() {
+        val data = HgssWorldRom.requireData()
+        val tackle = move(33, "Tackle")
+        val gastly = battler(BattlerRef.FOE_LEFT, 92, listOf("Ghost", "Poison"))
+        // Plain type chart: Normal doesn't touch a Ghost.
+        assertEquals(0.0, Matchups.estimate(battle(battler(BattlerRef.PLAYER_LEFT, 155, listOf("Fire"), listOf(tackle)), gastly), data).single().multiplier)
+        // Foresight / Odor Sleuth on the foe: the game skips the Normal / Fighting -> Ghost pairs.
+        val identified = gastly.copy(volatile = setOf(VolatileStatus.Foresight))
+        val afterForesight = Matchups.estimate(battle(battler(BattlerRef.PLAYER_LEFT, 155, listOf("Fire"), listOf(tackle)), identified), data).single()
+        assertEquals(1.0, afterForesight.multiplier)
+        assertTrue(afterForesight.label.contains("Foresight"), afterForesight.label)
+        // Scrappy (113) on the attacker (Kangaskhan) does the same.
+        val scrappy = Matchups.estimate(battle(battler(BattlerRef.PLAYER_LEFT, 115, listOf("Normal"), listOf(tackle), ability = 113), gastly), data).single()
+        assertEquals(1.0, scrappy.multiplier)
+        assertTrue(scrappy.label.contains("Scrappy"), scrappy.label)
     }
 
     @Test

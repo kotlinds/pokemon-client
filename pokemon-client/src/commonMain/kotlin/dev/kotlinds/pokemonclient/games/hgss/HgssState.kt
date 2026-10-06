@@ -23,11 +23,11 @@ enum class GameMode {
     /** Overworld with a field task running that is not a script / menu (warp, door animation, encounter start...). */
     FIELD_BUSY,
 
-    /** A field script is running without a visible message box (cutscene, NPC walking...). */
+    /**
+     * A field script runs (or the following Pokémon's message): its message boxes, sign banners and menus are decoded
+     * from the script environment by [HgssTextScreens]; without one of them it is a cutscene (NPC walking...).
+     */
     SCRIPT,
-
-    /** A field script is showing a message box (dialogue / sign / item pickup text). */
-    DIALOGUE,
 
     /** Start menu (X) opened on the overworld. */
     START_MENU,
@@ -45,7 +45,7 @@ data class HgssState(
     /** gSystem.vblankCounter, monotonic frame counter. */
     val frame: Long,
     val mode: GameMode,
-    /** Extra info for the mode: application name, "yes_no", "waiting_a_button", overlay ids... */
+    /** Extra info for the mode: application name, "follower", the task running, overlay ids... */
     val modeDetail: String? = null,
     /** True when the player can walk (FieldSystem_IsPlayerMovementAllowed && no sub-application). */
     val playerControllable: Boolean = false,
@@ -57,10 +57,9 @@ data class HgssState(
     val scenePending: Boolean = false,
     val player: PlayerInfo? = null,
     val location: LocationInfo? = null,
-    val dialogue: DialogueInfo? = null,
+    /** Trainer id of the trainer who saw the player (its approach / intro script runs), null otherwise. */
+    val engagedTrainer: Int? = null,
     val startMenu: StartMenuInfo? = null,
-    /** A script menu waiting for a choice (yes/no, multichoice), on either screen. */
-    val menu: MenuInfo? = null,
     /** The full-screen application in front of the map (bag, Pokégear, starter selection, mailbox...). */
     val app: AppInfo? = null,
     /** Story flags and vars (see [HgssProgress]). */
@@ -100,11 +99,8 @@ data class PlayerInfo(
 
 @Serializable
 data class LocationInfo(
+    /** The map (zone) id: its name is the game's [dev.kotlinds.pokemonclient.state.MapName] ([HgssData.mapName]). */
     val mapId: Int,
-    /** From the MAP_ constant, e.g. "New Bark Player House 2F". */
-    val mapName: String,
-    /** In-game location name (map header mapsec), e.g. "New Bark Town". */
-    val locationName: String? = null,
     /** Global tile coordinates (the same space as warp/NPC coordinates). x grows east, z grows south. */
     val x: Int,
     val z: Int,
@@ -119,36 +115,6 @@ data class LocationInfo(
     val standingOn: String? = null,
     val facingTile: String? = null,
     val facingTileBlocked: Boolean? = null,
-)
-
-@Serializable
-data class DialogueInfo(
-    /** Full expanded text of the current message (all pages; lines separated by \n). */
-    val text: String? = null,
-    /** What the message box shows now: the (up to 2) lines of the current page printed so far. */
-    val visibleText: String? = null,
-    /** The text printer is still printing (or scrolling) this message. */
-    val printing: Boolean = false,
-    val messageBoxOpen: Boolean,
-    /** printing / waiting_button / yes_no / multichoice / waiting_movement / waiting_app / running / pause */
-    val waitingFor: String,
-    val scriptId: Int? = null,
-    /** Trainer id of the trainer who saw the player (its approach / intro script runs), null otherwise. */
-    val engagedTrainer: Int? = null,
-)
-
-@Serializable
-data class MenuInfo(
-    /** yes_no, multichoice */
-    val kind: String,
-    val options: List<String>,
-    val cursor: Int? = null,
-    /** Columns of the grid; options are listed row by row (index = row * columns + column). */
-    val columns: Int = 1,
-    /** "touch" (bottom screen, also works with the D-pad) or "top". */
-    val screen: String = "touch",
-    /** True while the menu accepts input (not opening / closing). */
-    val waiting: Boolean = true,
 )
 
 @Serializable

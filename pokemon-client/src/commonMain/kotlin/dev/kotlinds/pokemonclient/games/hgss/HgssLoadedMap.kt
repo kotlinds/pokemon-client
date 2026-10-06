@@ -1,5 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
+import dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents
+import dev.kotlinds.pokemonclient.games.gen4.Gen4MapMatrix
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.games.hgss.HgssAddresses as A
 
@@ -49,11 +52,11 @@ class HgssLoadedMap(memory: Memory, version: HgssVersion) {
             }
         }
         matrixWidth = width
-        zoneId = fs?.let { m.ptr(it + A.FS_LOCATION) }?.let { m.s32(it + A.LOC_MAP_ID) }?.takeIf { it in 0 until 1000 }
-        val mo = fs?.let { m.ptr(it + A.FS_PLAYER_AVATAR) }?.let { m.ptr(it + A.PA_MAP_OBJECT) }
-        playerX = mo?.let { m.s32(it + A.MO_X) }
-        playerZ = mo?.let { m.s32(it + A.MO_Z) }
-        playerHeight = mo?.let { m.s32(it + A.MO_Y) }
+        zoneId = fs?.let { m.ptr(it + A.FS_LOCATION) }?.let { m.s32(it + S.LOC_MAP_ID) }?.takeIf { it in 0 until 1000 }
+        val mo = fs?.let { m.ptr(it + A.FS_PLAYER_AVATAR) }?.let { m.ptr(it + S.PA_MAP_OBJECT) }
+        playerX = mo?.let { m.s32(it + S.MO_X) }
+        playerZ = mo?.let { m.s32(it + S.MO_Z) }
+        playerHeight = mo?.let { m.s32(it + S.MO_Y) }
     }
 
     /** Matrix block indices currently loaded. */
@@ -62,7 +65,7 @@ class HgssLoadedMap(memory: Memory, version: HgssVersion) {
     /** Raw attribute (bit 15 collision, low byte behavior) of global tile (x, z), or null when not loaded. */
     fun attribute(x: Int, z: Int): Int? {
         if (x < 0 || z < 0 || matrixWidth == 0) return null
-        val b = HgssMapMatrix.BLOCK_TILES
+        val b = Gen4MapMatrix.BLOCK_TILES
         if (x / b >= matrixWidth) return null
         val buf = buffers[(z / b) * matrixWidth + x / b] ?: return null
         return m.u16(buf + 2L * ((z % b) * b + x % b))
@@ -70,9 +73,9 @@ class HgssLoadedMap(memory: Memory, version: HgssVersion) {
 
     /**
      * The events of the current zone (`FieldSystem.mapEvents`, include/map_events_internal.h): the four counts and
-     * arrays, re-serialized in the ROM file layout and parsed by [HgssZoneEvents.parse]. Null outside the field.
+     * arrays, re-serialized in the ROM file layout and parsed by [Gen4ZoneEvents.parse]. Null outside the field.
      */
-    fun events(): HgssZoneEvents? {
+    fun events(): Gen4ZoneEvents? {
         val me = fieldSystem?.let { m.ptr(it + A.FS_MAP_EVENTS) } ?: return null
         val sections = listOf(
             Triple(A.ME_NUM_BG, A.ME_BG, A.BG_SIZE),
@@ -88,7 +91,7 @@ class HgssLoadedMap(memory: Memory, version: HgssVersion) {
             val array = m.ptr(me + arrayOffset, 2) ?: return null
             file += m.bytes(array, (count * size).toInt())?.toList() ?: return null
         }
-        return HgssZoneEvents.parse(file.toByteArray())
+        return Gen4ZoneEvents.parse(file.toByteArray())
     }
 
     private companion object {

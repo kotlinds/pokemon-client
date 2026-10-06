@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.state.PuzzleBarrier
 import dev.kotlinds.pokemonclient.state.PuzzleIndicator
 import dev.kotlinds.pokemonclient.state.PuzzleKind
@@ -75,7 +76,7 @@ object HgssGymPuzzles {
      */
     fun unmodeled(reads: HgssPuzzles.Reads): String? {
         val gymmick = reads.gymmick() ?: return null
-        return when (u32(gymmick, 0)) {
+        return when (Gen4RomBytes.s32(gymmick, 0)) {
             GYMMICK_BLACKTHORN -> "three moving and rotating platforms (Blackthorn Gym): pushing one moves or turns it, and only " +
                 "their positions decide which ways are open"
             GYMMICK_FUCHSIA -> "invisible walls (Fuchsia Gym): some floor tiles are blocked by walls you can't see"
@@ -100,8 +101,8 @@ object HgssGymPuzzles {
             "whichever floor you're on; the upper floor with Falkner is only reached this way). Routes use it by themselves."
 
     private fun violetGym(reads: HgssPuzzles.Reads): PuzzleState? {
-        val gymmick = reads.gymmick()?.takeIf { u32(it, 0) == GYMMICK_VIOLET } ?: return null
-        val up = u32(gymmick, DATA) != 0
+        val gymmick = reads.gymmick()?.takeIf { Gen4RomBytes.s32(it, 0) == GYMMICK_VIOLET } ?: return null
+        val up = Gen4RomBytes.s32(gymmick, DATA) != 0
         val rides = listOf(
             PuzzleTeleport("lift:up", TeleportKind.LIFT, listOf(LIFT), LIFT, fromHeight = LIFT_DOWN, toHeight = LIFT_UP),
             PuzzleTeleport("lift:down", TeleportKind.LIFT, listOf(LIFT), LIFT, fromHeight = LIFT_UP, toHeight = LIFT_DOWN),
@@ -126,7 +127,7 @@ object HgssGymPuzzles {
             "back at the entrance (16,49); routes avoid them. Each Medium carries a candle (candle:N), blown out when she is beaten; they are lit again on each entry."
 
     private fun ecruteakGym(reads: HgssPuzzles.Reads, area: Area?): PuzzleState {
-        val gymmick = reads.gymmick()?.takeIf { u32(it, 0) == GYMMICK_ECRUTEAK }
+        val gymmick = reads.gymmick()?.takeIf { Gen4RomBytes.s32(it, 0) == GYMMICK_ECRUTEAK }
         val candles = (0 until 4).mapNotNull { i ->
             val medium = area?.people?.firstOrNull { it.zone == ECRUTEAK_GYM && it.id == FIRST_MEDIUM + i } ?: return@mapNotNull null
             val out = gymmick?.let { (it[DATA + i].toInt() and 0xFF) != 0 } ?: return@mapNotNull null
@@ -153,7 +154,7 @@ object HgssGymPuzzles {
             "interact sign:0 facing north, answer yes) to stop it. It flows again each time you enter. The waterfall blocks no tile."
 
     private fun cianwoodGym(reads: HgssPuzzles.Reads): PuzzleState {
-        val winch = reads.gymmick()?.takeIf { u32(it, 0) == GYMMICK_CIANWOOD }?.let { u32(it, DATA) != 0 } ?: false
+        val winch = reads.gymmick()?.takeIf { Gen4RomBytes.s32(it, 0) == GYMMICK_CIANWOOD }?.let { Gen4RomBytes.s32(it, DATA) != 0 } ?: false
         val stopped = winch || reads.flag(FLAG_WATERFALL_DISABLE) == true
         return PuzzleState(
             PuzzleKind.WATERFALL_WINCH, CIANWOOD_RULE,
@@ -178,7 +179,7 @@ object HgssGymPuzzles {
             "second can closes gate:0 again and hides both switches elsewhere."
 
     private fun vermilionGym(reads: HgssPuzzles.Reads): PuzzleState? {
-        val gymmick = reads.gymmick()?.takeIf { u32(it, 0) == GYMMICK_VERMILION } ?: return null
+        val gymmick = reads.gymmick()?.takeIf { Gen4RomBytes.s32(it, 0) == GYMMICK_VERMILION } ?: return null
         val cans = (0 until 2).map { gymmick[DATA + it].toInt() and 0xFF }
         val open = (0 until 2).map { (gymmick[DATA + 2 + it].toInt() and 0xFF) != 0 }
         val solved = open.all { it }
@@ -198,6 +199,4 @@ object HgssGymPuzzles {
 
     // endregion
 
-    private fun u32(b: ByteArray, o: Int): Int =
-        (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
 }

@@ -1,6 +1,6 @@
 package dev.kotlinds.pokemonclient.actions
 
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.state.StartMenuFeature
 import dev.kotlinds.pokemonclient.state.Awaiting
@@ -174,19 +174,11 @@ internal object PartyBagPlans {
         // Ash: one HP bar and one message per fainted Pokémon) takes longer, but never more than [EFFECT_MAX_FRAMES]:
         // the agent's call must answer in time.
         val effectStart = context.scope.frame
-        effect@ for (press in 0 until EFFECT_PRESSES) {
-            if (context.scope.frame - effectStart > EFFECT_MAX_FRAMES) {
-                return ActionOutcome.Failed(ActionError.Timeout("${use.item.raw}'s effect still runs after ${EFFECT_MAX_FRAMES / 60} s: call get_state, then go on"))
-            }
-            val state = context.navigator.settle(maxFrames = EFFECT_SETTLE_FRAMES)
-            when (val screen = state.screen) {
-                is Screen.Dialogue, is Screen.PressToContinue -> {
-                    context.scope.tap(Button.A)
-                    context.navigator.awaitChange(screen, maxFrames = 60)
-                }
-                is Screen.Animation -> context.scope.step(4)
-                else -> break@effect
-            }
+        context.navigator.advanceUntil(EFFECT_PRESSES, maxFrames = EFFECT_MAX_FRAMES, settleFrames = EFFECT_SETTLE_FRAMES, waitOn = { it is Screen.Animation }) { state ->
+            state.screen !is Screen.Dialogue && state.screen !is Screen.PressToContinue && state.screen !is Screen.Animation
+        }
+        if (context.scope.frame - effectStart > EFFECT_MAX_FRAMES) {
+            return ActionOutcome.Failed(ActionError.Timeout("${use.item.raw}'s effect still runs after ${EFFECT_MAX_FRAMES / 60} s: call get_state, then go on"))
         }
         val countAfter = quantity(context.state(), use.item)
         return when {

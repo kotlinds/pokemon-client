@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+
+
 /**
  * RAM layout used by [HgssKeyboardPcShopScreens]: naming keyboard, PC storage, Poké Mart, touch save app, trade and
  * egg hatch. Offsets come from pret/pokeheartgold (file:line in each comment) and were checked live on HeartGold (USA)
@@ -8,56 +10,6 @@ package dev.kotlinds.pokemonclient.games.hgss
  * Absolute addresses differ per ROM and live in [HgssKeyboardPcShopVersion].
  */
 object HgssKeyboardPcShopAddresses {
-
-    // region gSystem (include/system.h:21)
-
-    /** `void (*vBlankIntr)(void *)`: the naming screen installs its own (naming_screen.c:504), cleared on exit (:745). */
-    const val SYS_VBLANK_INTR = 0x00L
-
-    // endregion
-
-    // region Naming screen: NamingScreenAppData (src/naming_screen.c:83, size 0x5D4)
-
-    /** `NameScreenType` (include/launch_application.h:50), see [NameScreenType]. */
-    const val NS_TYPE = 0x00L
-    /** Species, for the Pokémon nickname prompt. */
-    const val NS_SPECIES = 0x04L
-    /** Max characters: 7 player / rival, 10 Pokémon, 8 box. */
-    const val NS_MAX_LEN = 0x0CL
-    const val NS_CURSOR_X = 0x1CL
-    const val NS_CURSOR_Y = 0x20L
-    /** TRUE for a few frames once the buffer is full, until the cursor is moved to OK by the game (:1892). */
-    const val NS_IGNORE_INPUT = 0x34L
-    /** `u16 keyboard[6][13]`: the live layout of the current page, row 0 = tabs / BACK / OK. */
-    const val NS_KEYBOARD = 0x3AL
-    /** `u16 entryBuf[32]`: typed characters, valid in `[0, textCursorPos)`. */
-    const val NS_ENTRY_BUF = 0xD8L
-    const val NS_TEXT_CURSOR_POS = 0x158L
-    /** 0..3 page slide animation, 4 idle, 5..7 "transferred to the PC" message (battle catch, full party). */
-    const val NS_PAGE_SWITCH_STATE = 0x45CL
-    /** 0 UPPER, 1 lower, 2 Others, 3 JP (unused), 4 number pad. */
-    const val NS_PAGE = 0x460L
-
-    const val NS_PAGE_SWITCH_IDLE = 4
-    /** The capture's "transferred to the PC" message printing / shown before the fade out. */
-    const val NS_PAGE_SWITCH_WAIT_BATTLE_MESSAGE = 6
-    const val NS_PAGE_SWITCH_DELAY_AND_FADE_OUT = 7
-    /** `String *battleMsgString`: that message (NamingScreenAppData, src/naming_screen.c:106). */
-    const val NS_BATTLE_MSG_STRING = 0x180L
-    const val KEYBOARD_COLUMNS = 13
-    const val KEYBOARD_ROWS = 6
-    const val ENTRY_BUF_SIZE = 32
-
-    /** Codes of the non-character cells of `keyboard` (naming_screen.c:36-48). */
-    const val KEY_SKIP = 0xD004
-    const val KEY_BUTTON_START = 0xE001
-    const val KEY_PAGE_UPPER = 0xE002
-    const val KEY_PAGE_LOWER = 0xE003
-    const val KEY_PAGE_OTHERS = 0xE004
-    const val KEY_BACK = 0xE007
-    const val KEY_OK = 0xE008
-
-    // endregion
 
     // region Sub-applications launched from the field (OverlayManager.template.ovy_id)
 
@@ -179,7 +131,6 @@ object HgssKeyboardPcShopAddresses {
 
     // region Bottom screen manager (FieldSystem+0xD8 -> SysTask -> data)
 
-    const val SYSTASK_FUNC = 0x14L
     const val BOTTOM_APP_SAVE = 1
     const val BOTTOM_APP_MART = 2
 

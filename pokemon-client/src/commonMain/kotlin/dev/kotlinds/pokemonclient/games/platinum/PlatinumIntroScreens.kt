@@ -4,7 +4,6 @@ import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.games.gen4.Gen4NamingKeyboard
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
-import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.CancelBehavior
@@ -286,16 +285,16 @@ internal object PlatinumIntroScreens {
      */
     private fun message(mem: PlatinumMemory, data: Long): Screen {
         if (mem.s32(data + R.DISPLAY_MESSAGE_STATE) != R.DM_PRINT) return Screen.Animation(AnimationKind.TRANSITION)
-        val printer = mem.textPrinter(mem.version.textPrinterTasks, mem.s32(data + R.TEXT_PRINTER_ID))
-            ?: return Screen.Animation(AnimationKind.TRANSITION)
-        val awaiting = if (mem.u8(printer + S.TP_STATE) in S.TEXT_PRINTER_WAIT_STATES) Awaiting.INPUT else Awaiting.TEXT_PRINTING
-        val text = visiblePage(mem, mem.ptr(data + R.STRING), printer)
+        val printerId = mem.s32(data + R.TEXT_PRINTER_ID)
+        val printer = mem.textPrinter(printerId) ?: return Screen.Animation(AnimationKind.TRANSITION)
+        val awaiting = if (mem.printerWaitsForInput(printer)) Awaiting.INPUT else Awaiting.TEXT_PRINTING
+        val text = mem.printedText(mem.ptr(data + R.STRING), printerId, allowFreed = true)?.visible.orEmpty()
         return Screen.Dialogue(TextSource.INTRO, null, text, awaiting)
     }
 
     /** The intro's child application: the naming keyboard, or the TV programme that ends the intro. */
     private fun childApp(mem: PlatinumMemory, data: Long, text: PlatinumText?): Screen {
-        Gen4NamingKeyboard.decode(mem, mem.version.gSystem, mem.version.naming, mem.fading)?.let { return it }
+        Gen4NamingKeyboard.decode(mem, mem.version.gSystem, mem.version.naming)?.let { return it }
         val child = mem.ptr(data + R.CHILD_APP) ?: return Screen.Animation(AnimationKind.TRANSITION)
         if (mem.fn(child + S.OM_MAIN) == mem.version.fnRowanIntroTvMain && mem.s32(child + S.OM_EXEC_STATE) == S.OM_EXEC_MAIN) {
             val tv = mem.ptr(child + S.OM_DATA)
@@ -305,16 +304,4 @@ internal object PlatinumIntroScreens {
         }
         return Screen.Animation(AnimationKind.TRANSITION)
     }
-}
-
-/**
- * The page of [strPtr] a message box shows: up to the text printer's current character while it prints (or waits at
- * a page break), the whole last page once done. Reads a freed string too (the intro frees it once printed).
- */
-internal fun visiblePage(mem: PlatinumMemory, strPtr: Long?, printer: Long?): String {
-    if (strPtr == null || mem.gameString(strPtr, allowFreed = true) == null) return ""
-    val size = mem.u16(strPtr + S.STR_SIZE).coerceAtMost(2048)
-    val chars = mem.chars(strPtr + S.STR_DATA, size)
-    val printed = printer?.let { ((mem.u32(it + S.TP_CURRENT_CHAR) - (strPtr + S.STR_DATA)) / 2).toInt().takeIf { n -> n in 0..size } }
-    return Gen4Text.visibleLines(chars, printed).replace('\n', ' ')
 }

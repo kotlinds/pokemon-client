@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Text
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -10,23 +11,23 @@ class HgssTextTest {
         val reverse = HgssData.charmap.entries.filter { it.value.length == 1 }.associate { it.value[0] to it.key }
         return text.map {
             when (it) {
-                '\n' -> HgssText.NEWLINE
-                '\r' -> HgssText.SCROLL
-                '\u000C' -> HgssText.NEW_PAGE
+                '\n' -> Gen4Text.NEWLINE
+                '\r' -> Gen4Text.SCROLL
+                '\u000C' -> Gen4Text.NEW_PAGE
                 else -> reverse.getValue(it)
             }
-        }.toIntArray() + HgssText.EOS
+        }.toIntArray() + Gen4Text.EOS
     }
 
     @Test
     fun visibleLinesFollowPagesAndScrolls() {
         val chars = encode("Hi!\nYou are awake.\u000CYour friend was here.\rShe played.\nWith MARILL.")
-        assertEquals("Hi!\nYou are awake.", HgssText.visibleLines(chars, 18))
+        assertEquals("Hi!\nYou are awake.", Gen4Text.visibleLines(chars, 18))
         // At the page break the old page is still shown, until the next page's first character prints.
-        assertEquals("Hi!\nYou are awake.", HgssText.visibleLines(chars, 19))
-        assertEquals("Y", HgssText.visibleLines(chars, 20))
-        assertEquals("Your friend was here.\nShe played.", HgssText.visibleLines(chars, 52))
-        assertEquals("She played.\nWith MARILL.", HgssText.visibleLines(chars, null))
+        assertEquals("Hi!\nYou are awake.", Gen4Text.visibleLines(chars, 19))
+        assertEquals("Y", Gen4Text.visibleLines(chars, 20))
+        assertEquals("Your friend was here.\nShe played.", Gen4Text.visibleLines(chars, 52))
+        assertEquals("She played.\nWith MARILL.", Gen4Text.visibleLines(chars, null))
     }
 
     @Test

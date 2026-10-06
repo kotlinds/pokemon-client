@@ -14,6 +14,11 @@ import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.runtime.InputProbe
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.games.gen4.Gen4FieldMoves
+import dev.kotlinds.pokemonclient.games.hgss.HgssFieldMoves
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.FieldMoveRule
+import dev.kotlinds.pokemonclient.world.FieldMoves
 
 /**
  * A scripted game for testing recipes without an emulator: the current [screen] reacts to button presses through
@@ -50,7 +55,13 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
 
     /** The game's data, when a test needs some (see [StubGameData]). */
     override var data: GameData? = null
-    override fun state(memory: Memory): GameState = state(screen)
+    /** The game's field move rules (none by default); [hgssFieldMoves] for the real HeartGold / SoulSilver table. */
+    var fieldMoveRules: (FieldMoveKind) -> FieldMoveRule? = { null }
+
+    override fun fieldMoveRule(move: FieldMoveKind): FieldMoveRule? = fieldMoveRules(move)
+
+    /** The scripted state, with the access to the field moves like a real game reads it ([GameState.fieldMoves]). */
+    override fun state(memory: Memory): GameState = state(screen).let { it.copy(fieldMoves = FieldMoves.access(it, fieldMoveRules)) }
 
     /** Held buttons as the game sees them (updated by the console every frame). */
     var held: Set<Button> = emptySet()
@@ -87,3 +98,10 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
     fun scope() = ActionScope(console, inputProbe)
     fun context() = PlanContext(scope(), this)
 }
+
+/** HeartGold / SoulSilver's field move rules (the real table, [HgssFieldMoves]), for fakes standing in for it. */
+val hgssFieldMoves: (FieldMoveKind) -> FieldMoveRule? = { Gen4FieldMoves.rule(it, HgssFieldMoves.BADGES) }
+
+/** [state] with its field moves under [rules], as a real game reads it ([GameState.fieldMoves]). */
+fun withFieldMoves(state: GameState, rules: (FieldMoveKind) -> FieldMoveRule? = hgssFieldMoves): GameState =
+    state.copy(fieldMoves = FieldMoves.access(state, rules))

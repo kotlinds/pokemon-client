@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents
 import dev.kotlinds.pokemonclient.state.Blocker
 import dev.kotlinds.pokemonclient.state.BlockerCause
 import dev.kotlinds.pokemonclient.state.RadioStation
@@ -79,7 +80,7 @@ object HgssBlockers {
                 // A door object slid aside is open.
                 if (known.closedAt != null && (o.x to o.z) !in known.closedAt) continue
                 if (known.liftedWhen?.holds(story) != true) out += Blocker(HgssObjectIds.idOf(o, mapId), known.reason, known.cause?.toBlockerCause(story))
-            } else if (zone == mapId && o.eventFlag != 0 && o.type !in HgssZoneEvents.TRAINER_TYPES && !battlesWhenTalkedTo(zone, o) &&
+            } else if (zone == mapId && o.eventFlag != 0 && o.type !in Gen4ZoneEvents.TRAINER_TYPES && !battlesWhenTalkedTo(zone, o) &&
                 standsInPassage(around.grid, o.x, o.z)
             ) {
                 out += Blocker(

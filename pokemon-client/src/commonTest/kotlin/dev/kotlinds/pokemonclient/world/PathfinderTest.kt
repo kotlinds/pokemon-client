@@ -214,9 +214,9 @@ class PathfinderTest {
     @Test
     fun iceSlidesToTheFirstTileThatIsNotIce() {
         val map = area(
-            "#######",
+            "#####.",
             ".****..",
-            "#######",
+            "#####.",
         )
         val found = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(5, 1, Node(0, 1)))
         val slide = assertIs<Edge.Slide>(found.route.edges.single())
@@ -459,6 +459,79 @@ class PathfinderTest {
         assertEquals(Node(5, 1), route.end)
         // Without Strength, no plan.
         assertEquals(null, PushPlanner(map, boulder).route(Node(2, 3), RouteOptions()) { it.x == 5 && it.y == 1 })
+    }
+
+    /**
+     * The push planner follows the plain routes' rules: a route with no way back (a ledge jumped after the push) only
+     * with [RouteOptions.acceptOneWay], and then with the same warnings ([RouteWarning.OneWay], the grass crossed).
+     */
+    @Test
+    fun pushRoutesFollowTheLedgeRuleAndWarnLikePlainRoutes() {
+        val map = area(
+            "##.###",
+            "....\".",
+            "##.##v",
+            "##.##.",
+        )
+        val boulder = Overlay(listOf(LiveObject(2, 1, null, clearedBy = FieldMoveKind.STRENGTH)))
+        val options = RouteOptions(fieldMoves = setOf(FieldMoveKind.STRENGTH))
+        // Below the ledge there is no way back: refused unless one-way routes are accepted.
+        assertEquals(null, PushPlanner(map, boulder).route(Node(2, 3), options) { it.x == 5 && it.y == 3 })
+        val route = assertIs<Route>(PushPlanner(map, boulder).route(Node(2, 3), options.copy(acceptOneWay = true)) { it.x == 5 && it.y == 3 })
+        assertTrue(route.edges.any { it is Edge.Jump })
+        assertTrue(RouteWarning.OneWay in route.warnings, route.warnings.toString())
+        assertTrue(RouteWarning.CrossesTallGrass(1) in route.warnings, route.warnings.toString())
+        // Above the ledge, the way back exists: no one-way warning.
+        val back = assertIs<Route>(PushPlanner(map, boulder).route(Node(2, 3), options) { it.x == 5 && it.y == 1 })
+        assertTrue(RouteWarning.OneWay !in back.warnings, back.warnings.toString())
+    }
+
+    /**
+     * A search reaching its bound with ledges isn't "no plan": ledges open a wide field below (no way back), which
+     * fills the bound before the goal at the end of the corridor is reached; the search without ledges, smaller, still
+     * finds the corridor. Same rule in the push and the platform planners (both bounded searches).
+     */
+    @Test
+    fun overTheBoundWithLedgesTheBoundedPlannersTryWithout() {
+        val map = area(
+            "..........",
+            "v#########",
+            *Array(8) { ".........." },
+        )
+        val goal = { n: Node -> n.x == 9 && n.y == 0 }
+        val noPlatforms = object : MovingPlatforms {
+            override val poses = emptyList<PlatformPose>()
+            override fun walkTiles(poses: List<PlatformPose>) = emptySet<Pair<Int, Int>>()
+            override fun ride(poses: List<PlatformPose>, x: Int, y: Int): PlatformRide? = null
+        }
+        // The corridor is 10 places: within a bound of 12 without ledges, not with the field below the ledge.
+        val pushed = assertIs<Route>(PushPlanner(map, Overlay(), maxStates = 12).route(Node(0, 0), RouteOptions(), isGoal = goal))
+        assertEquals(Node(9, 0), pushed.end)
+        assertTrue(pushed.edges.none { it is Edge.Jump })
+        val ridden = assertIs<Route>(PlatformPlanner(map, Overlay(), noPlatforms, maxStates = 12).route(Node(0, 0), RouteOptions(), isGoal = goal))
+        assertEquals(Node(9, 0), ridden.end)
+        // A goal beyond the bound either way: still no plan.
+        assertEquals(null, PushPlanner(map, Overlay(), maxStates = 12).route(Node(0, 0), RouteOptions()) { it.x == 9 && it.y == 9 })
+    }
+
+    /** The platform planner follows the plain routes' ledge rule too: a route with no way back only when accepted. */
+    @Test
+    fun platformRoutesFollowTheLedgeRule() {
+        val map = area(
+            "......",
+            "#####v",
+            "#####.",
+        )
+        val noPlatforms = object : MovingPlatforms {
+            override val poses = emptyList<PlatformPose>()
+            override fun walkTiles(poses: List<PlatformPose>) = emptySet<Pair<Int, Int>>()
+            override fun ride(poses: List<PlatformPose>, x: Int, y: Int): PlatformRide? = null
+        }
+        val planner = PlatformPlanner(map, Overlay(), noPlatforms)
+        assertEquals(null, planner.route(Node(0, 0), RouteOptions()) { it.x == 5 && it.y == 2 })
+        val route = assertIs<Route>(planner.route(Node(0, 0), RouteOptions(acceptOneWay = true)) { it.x == 5 && it.y == 2 })
+        assertTrue(route.edges.any { it is Edge.Jump })
+        assertTrue(RouteWarning.OneWay in route.warnings, route.warnings.toString())
     }
 
     @Test

@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4TextPrinters
+
 /**
  * Structure offsets for Pokémon HeartGold / SoulSilver, taken from the pret/pokeheartgold
  * decompilation (matching build, `build/heartgold.us/main.elf.xMAP`).
@@ -16,23 +18,12 @@ package dev.kotlinds.pokemonclient.games.hgss
  */
 object HgssAddresses {
 
-    const val MAIN_RAM_START = 0x02000000L
-    const val MAIN_RAM_END = 0x02400000L // exclusive (4 MB)
-    const val THUMB_MASK = 0xFFFFFFFEL
-
     /** Offsets inside `_02111868` (struct UnkStruct_02111868, src/main.c:31), see [HgssVersion.mainAppState]. */
     const val MAIN_APP_OVERLAY_ID = 0x0L         // FSOverlayID mainOverlayId (overlay of the running top-level app, -1 = none)
     const val MAIN_APP_OVERLAY_MANAGER = 0x4L    // OverlayManager *overlayManager
     const val MAIN_APP_QUEUED_OVERLAY_ID = 0x8L
     const val MAIN_APP_QUEUED_TEMPLATE = 0xCL
     const val MAIN_APP_SAVE_DATA = 0x18L         // unk_10.saveData (same pointer as sSaveDataPtr) include/main.h:7
-
-    /** Offsets inside `gSystem` (struct System, include/system.h:21), see [HgssVersion.gSystem]. */
-    const val SYS_VBLANK_COUNTER = 0x2CL
-    /** `int heldKeysRaw`: the buttons physically held, as read by the game this frame (PAD_* bits). */
-    const val SYS_HELD_KEYS_RAW = 0x38L
-    const val SYS_HELD_KEYS = 0x44L
-    const val SYS_NEW_KEYS = 0x48L
 
     /** `sOverlayRegions[3][8]` entries {FSOverlayID id; BOOL active;} (src/poke_overlay.c:19), see [HgssVersion.loadedOverlays]. */
     const val LOADED_OVERLAY_ENTRY_SIZE = 8
@@ -61,15 +52,11 @@ object HgssAddresses {
     )
 
     // ------------------------------------------------------------------------------------------------
-    // OverlayManager (include/overlay_manager.h) — size 0x28
+    // OverlayManager (include/overlay_manager.h) — size 0x28. The Gen 4 shared fields (init, states, args, data)
+    // are in Gen4Structs (OM_*); only the HGSS template fields are here.
     // ------------------------------------------------------------------------------------------------
-    const val OM_INIT = 0x00L        // template.init (thumb ptr)
     const val OM_EXEC = 0x04L
     const val OM_OVY_ID = 0x0CL      // template.ovy_id
-    const val OM_EXEC_STATE = 0x10L  // 0 load, 1 init, 2 main, 3 exit (src/overlay_manager.c OverlayManager_Run)
-    const val OM_PROC_STATE = 0x14L  // app-private state machine (*state)
-    const val OM_ARGS = 0x18L
-    const val OM_DATA = 0x1CL
 
     // ------------------------------------------------------------------------------------------------
     // FieldSystem (include/field_system.h) — size 0x128 (asm✓ 0x2C/0x30/0x5C/0x60 in asm/unk_02054648.s)
@@ -104,13 +91,9 @@ object HgssAddresses {
     const val FSS0_IS_PAUSED = 0x08L
 
     // ------------------------------------------------------------------------------------------------
-    // Location (include/field_types_def.h)
+    // Location (include/field_types_def.h): map id, x, z, direction are Gen 4 shared (Gen4Structs.LOC_*)
     // ------------------------------------------------------------------------------------------------
-    const val LOC_MAP_ID = 0x00L
     const val LOC_WARP_ID = 0x04L
-    const val LOC_X = 0x08L
-    const val LOC_Z = 0x0CL
-    const val LOC_DIRECTION = 0x10L
 
     // ------------------------------------------------------------------------------------------------
     // PlayerAvatar (include/player_avatar.h) — size 0x40
@@ -121,15 +104,14 @@ object HgssAddresses {
     const val PA_PLAYER_MOVE_STATE = 0x14L   // enum PlayerMoveState (0 none, 1 start, 2 moving, 3 end) [medium]
     const val PA_STATE = 0x18L               // PLAYER_STATE_* (0 walking, 1 cycling, 2 surfing, ...) include/constants/global_fieldmap.h
     const val PA_GENDER = 0x1CL
-    const val PA_MAP_OBJECT = 0x30L          // LocalMapObject *
     const val PA_PLAYER_SAVE_DATA = 0x38L    // PlayerSaveData * {u16 hasRunningShoes; u16 lock; s32 state}
 
     // ------------------------------------------------------------------------------------------------
-    // LocalMapObject (include/map_object.h, offsets in comments there) — size 0x12C (asm✓ 75*4 in map_object.o)
+    // LocalMapObject (include/map_object.h, offsets in comments there) — size 0x12C (asm✓ 75*4 in map_object.o).
+    // Id, facing, position and previous position are Gen 4 shared (Gen4Structs.MO_*).
     // ------------------------------------------------------------------------------------------------
     const val MO_SIZE = 0x12CL
     const val MO_FLAGS = 0x00L               // bit0 ACTIVE, bit9 "VISIBLE" (actually set = hidden, see ScrCmd_374)
-    const val MO_ID = 0x08L
     const val MO_MAP_ID = 0x0CL
     const val MO_SPRITE_ID = 0x10L
     const val MO_MOVEMENT = 0x14L
@@ -139,14 +121,7 @@ object HgssAddresses {
 
     /** [MO_SCRIPT_ID] of an object carried over from the zone just left ([MO_EVENT_FLAG] then holds that zone). */
     const val MO_SCRIPT_CARRIED = 0xFFFF
-    const val MO_FACING = 0x28L              // DIR_NORTH 0, SOUTH 1, WEST 2, EAST 3
     const val MO_PARAM0 = 0x38L              // param[0]: for a trainer (type 1), its sight range in tiles
-    const val MO_PREVIOUS_X = 0x58L
-    const val MO_PREVIOUS_Z = 0x60L
-    const val MO_X = 0x64L                   // global tile X (matrix-wide)
-    const val MO_Y = 0x68L                   // height (s32)
-    const val MO_Z = 0x6CL                   // global tile Z (north/south)
-    const val MO_POSITION_VECTOR = 0x70L     // VecFx32 {x,y,z}; at rest x = X*16*4096 + 8*4096 (src/map_object.c:525)
     const val MO_FLAG_ACTIVE = 1L shl 0
     const val MO_FLAG_HIDDEN = 1L shl 9
 
@@ -245,48 +220,21 @@ object HgssAddresses {
     const val TA_MAX_BLOCKS = 16
 
     // ------------------------------------------------------------------------------------------------
-    // TaskManager (include/task.h), ScriptEnvironment / ScriptContext (include/script.h)
+    // ScriptEnvironment (include/script.h): the fields shared with Platinum's ScriptManager (magic, message box,
+    // text printer, contexts) and the TaskManager / ScriptContext layouts are in Gen4Structs (SM_*, FIELD_TASK_*, SC_*).
     // ------------------------------------------------------------------------------------------------
-    const val TM_PREV = 0x00L
-    const val TM_FUNC = 0x04L
-    const val TM_STATE = 0x08L
-    const val TM_ENV = 0x0CL
-
-    const val SE_CHECK = 0x00L               // == SCRIPT_ENV_MAGIC while alive
-    const val SCRIPT_ENV_MAGIC = 222271L     // Unk80_10_C_MAGIC include/script.h:34
-    const val SE_TEXT_PRINTER = 0x05L
-    const val SE_MSGBOX_OPEN = 0x08L         // u8 unk_8 (SCRIPTENV_FIELD_08): 1 while the field message window is open (ScrCmd_OpenMsg/CloseMsg)
-    const val SE_ACTIVE_CONTEXTS = 0x09L
     const val SE_ACTIVE_SCRIPT = 0x0AL       // u16 activeScriptNumber
     const val SE_LIST_MENU_2D = 0x24L        // yes/no menu while shown
     const val SE_LAST_INTERACTED = 0x2CL
-    const val SE_SCRIPT_CONTEXTS = 0x38L     // ScriptContext *[3]
     const val SE_STRING_BUFFER_0 = 0x48L     // String *: fully expanded message currently printed (ovFieldMain_ReadAndExpandMsgDataViaBuffer)
     const val SE_ENGAGED_TRAINER_0_ID = 0x60L // int engagedTrainers[0].trainerId (EngagedTrainer[2] at 0x54, 0x1C each): set when a trainer sees the player
     const val SE_SPECIAL_VARS = 0x8CL        // u16[] VAR_SPECIAL 0x8000..
-
-    const val SC_MODE = 0x01L                // 0 stopped, 1 bytecode, 2 native
-    const val SC_NATIVE = 0x04L              // ScrCmdFunc native_ptr
-
-    // String (include/pm_string.h)
-    // TextPrinter (include/font_types_def.h): template.currentChar.raw (+0) points into the String being printed
-    const val TP_CURRENT_CHAR = 0x00L
-    const val TP_STATE = 0x28L               // 0/1/4/5/6 printing/scrolling, 2/3/7/8 waiting at a page break for A
-    val TEXT_PRINTER_WAIT_STATES = setOf(2, 3, 7, 8)
-
-    const val STR_MAXSIZE = 0x00L
-    const val STR_SIZE = 0x02L
-    const val STR_MAGIC = 0x04L
-    const val STR_DATA = 0x08L
-    const val STRING_MAGIC = 0xB6F8D2ECL     // src/pm_string.c:9
-    const val STRING_INVAL = 0xB6F8D2EDL     // src/pm_string.c:10: set by String_Delete
 
     // StartMenuTaskData (include/start_menu.h) — TaskManager.env of Task_StartMenu
     const val SE_FIELD_MENU = 0x10L          // FieldMenu * of top-screen multichoice menus (ScrCmd_064..067)
 
     // Bottom-screen manager: FieldSystem.unkD8 -> SysTask (data at +0x10) -> {u8 appId; u8 state; SysTask *app}
     const val FS_BOTTOM_SCREEN_TASK = 0xD8L
-    const val SYSTASK_DATA = 0x10L
     const val BSM_APP_ID = 0x00L             // 0 = start menu icons, 3 = script menu (yes/no, multichoice)
     const val BSM_APP_TASK = 0x04L
     const val BOTTOM_APP_SCRIPT_MENU = 3
@@ -363,20 +311,6 @@ object HgssAddresses {
     const val VAR_BASE = 0x4000
     const val SPECIAL_VAR_BASE = 0x8000
     const val NUM_VARS = 0x170
-
-    // Party (include/pokemon_types_def.h)
-    const val PARTY_MAX_COUNT = 0x00L
-    const val PARTY_CUR_COUNT = 0x04L
-    const val PARTY_MONS = 0x08L
-    const val POKEMON_SIZE = 0xECL
-    // BoxPokemon
-    const val BOX_PERSONALITY = 0x00L
-    const val BOX_FLAGS = 0x04L              // bit0 partyDecrypted, bit1 boxDecrypted, bit2 checksumFailed
-    const val BOX_CHECKSUM = 0x06L
-    const val BOX_BLOCKS = 0x08L             // 4 x 0x20 bytes, encrypted with LCRNG seeded by checksum
-    const val BOX_BLOCKS_SIZE = 0x80
-    const val PARTY_DATA = 0x88L             // PartyPokemon 0x64 bytes, encrypted with LCRNG seeded by personality
-    const val PARTY_DATA_SIZE = 0x64
 
     // Bag (include/bag_types_def.h): ItemSlot {u16 id; u16 quantity}
     val BAG_POCKETS: List<Triple<String, Long, Int>> = listOf(
@@ -485,25 +419,8 @@ object HgssAddresses {
         "SAVING", "HEAL", "LADDER", "ROCKET_HEAL", "APRICORN_SHAKE", "ROCKET_SAVING",
     )
 
-    val DIRECTIONS = listOf("north", "south", "west", "east")
-
     /** Sprite id of the invisible camera-focus object created by scripts (include/constants/sprites.h). */
     const val SPRITE_CAMERA_FOCUS = 8192
-
-    /** Block order table from GetSubstruct (src/pokemon.c:3951): OFFSETS[(pid >> 13) & 31][block] = byte offset of block A/B/C/D. */
-    val POKEMON_BLOCK_OFFSETS: Array<IntArray> = arrayOf(
-        intArrayOf(0x00, 0x20, 0x40, 0x60), intArrayOf(0x00, 0x20, 0x60, 0x40), intArrayOf(0x00, 0x40, 0x20, 0x60),
-        intArrayOf(0x00, 0x60, 0x20, 0x40), intArrayOf(0x00, 0x40, 0x60, 0x20), intArrayOf(0x00, 0x60, 0x40, 0x20),
-        intArrayOf(0x20, 0x00, 0x40, 0x60), intArrayOf(0x20, 0x00, 0x60, 0x40), intArrayOf(0x40, 0x00, 0x20, 0x60),
-        intArrayOf(0x60, 0x00, 0x20, 0x40), intArrayOf(0x40, 0x00, 0x60, 0x20), intArrayOf(0x60, 0x00, 0x40, 0x20),
-        intArrayOf(0x20, 0x40, 0x00, 0x60), intArrayOf(0x20, 0x60, 0x00, 0x40), intArrayOf(0x40, 0x20, 0x00, 0x60),
-        intArrayOf(0x60, 0x20, 0x00, 0x40), intArrayOf(0x40, 0x60, 0x00, 0x20), intArrayOf(0x60, 0x40, 0x00, 0x20),
-        intArrayOf(0x20, 0x40, 0x60, 0x00), intArrayOf(0x20, 0x60, 0x40, 0x00), intArrayOf(0x40, 0x20, 0x60, 0x00),
-        intArrayOf(0x60, 0x20, 0x40, 0x00), intArrayOf(0x40, 0x60, 0x20, 0x00), intArrayOf(0x60, 0x40, 0x20, 0x00),
-        intArrayOf(0x00, 0x20, 0x40, 0x60), intArrayOf(0x00, 0x20, 0x60, 0x40), intArrayOf(0x00, 0x40, 0x20, 0x60),
-        intArrayOf(0x00, 0x60, 0x20, 0x40), intArrayOf(0x00, 0x40, 0x60, 0x20), intArrayOf(0x00, 0x60, 0x40, 0x20),
-        intArrayOf(0x20, 0x00, 0x40, 0x60), intArrayOf(0x20, 0x00, 0x60, 0x40),
-    )
 }
 
 /**
@@ -564,13 +481,15 @@ data class HgssVersion(
     val fnScrYesNo: Long,              // sub_020416E4 (ScrCmd_YesNo)
     val fnScrMenuWait1: Long,          // sub_020418B4 (ScrCmd_067, multichoice)
     val fnScrMenuWait2: Long,          // sub_02041900 (ScrCmd_585, multichoice)
-    val fnScrWaitMovement: Long,       // IsAllMovementFinished
-    val fnScrWaitApp: Long,            // ScrNative_WaitApplication
-    val fnScrWaitAppDestroy: Long,     // ScrNative_WaitApplication_DestroyTaskData
-    val fnScrPauseTimer: Long,         // RunPauseTimer (ScrCmd_Wait)
     val fnScrWaitTextPrint: Long,      // ov01_021EF348 (field overlay 1, scrcmd_message.o): waits for the text printer
-    /** `sTextPrinterTasks` (src/text.c): SysTask *[8], one per text printer id; NULL when the printer is done. */
-    val textPrinterTasks: Long,
+    /**
+     * `sTextPrinterTasks` (src/text.c: SysTask *[8], one per text printer id, NULL when done) and HGSS's wait states:
+     * the `TextPrinter.state` values waiting for A at a page break (src/render_text.c), 2 / 3 as in every Gen 4 game
+     * and HGSS's own 7 / 8 (:172-180); 0/1/4/5/6 print or scroll.
+     */
+    val textPrinters: Gen4TextPrinters,
+    /** Slots of `ScriptEnvironment.scriptContexts` (`NUM_SCRIPT_CONTEXTS`, include/script.h): 3 in HGSS (2 in Platinum). */
+    val scriptContexts: Int,
     /** u16 at `_021D1034+0xC` (unk_0200FA24.o): non-zero while a palette fade / screen wipe runs (IsPaletteFadeFinished). */
     val paletteFadeActive: Long,
     /** BrightnessData.transitionActive of the sub and main screens (master brightness fades). */
@@ -629,12 +548,9 @@ data class HgssVersion(
             fnScrYesNo = 0x020416E4L,
             fnScrMenuWait1 = 0x020418B4L,
             fnScrMenuWait2 = 0x02041900L,
-            fnScrWaitMovement = 0x02041CA8L,
-            fnScrWaitApp = 0x020429F8L,
-            fnScrWaitAppDestroy = 0x02042974L,
-            fnScrPauseTimer = 0x020408D8L,
             fnScrWaitTextPrint = 0x021EF348L,
-            textPrinterTasks = 0x021D1F74L,
+            textPrinters = Gen4TextPrinters(0x021D1F74L, waitStates = setOf(2, 3, 7, 8)),
+            scriptContexts = 3,
             paletteFadeActive = 0x021D1040L,
             brightnessSubActive = 0x021D0ED0L,
             brightnessMainActive = 0x021D0EF0L,

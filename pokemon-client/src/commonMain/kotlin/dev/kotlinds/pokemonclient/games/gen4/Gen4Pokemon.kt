@@ -1,9 +1,13 @@
-package dev.kotlinds.pokemonclient.games.hgss
+package dev.kotlinds.pokemonclient.games.gen4
 
-import dev.kotlinds.pokemonclient.games.hgss.HgssAddresses as A
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u32
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 
 /**
- * Gen 4 Pokémon structure decryption (src/pokemon.c, src/math_util.c).
+ * Gen 4 Pokémon structure decryption (src/pokemon.c, src/math_util.c), the same in Diamond / Pearl / Platinum and
+ * HeartGold / SoulSilver ([Gen4Structs] PARTY_* / BOX_*).
  *
  * Layout of a party `Pokemon` (0xEC bytes):
  *  0x00 u32 personality, 0x04 u16 flags (bit0 partyDecrypted, bit1 boxDecrypted, bit2 checksumFailed),
@@ -11,7 +15,7 @@ import dev.kotlinds.pokemonclient.games.hgss.HgssAddresses as A
  *  with the LCRNG seeded by the checksum), 0x88..0xEB PartyPokemon (encrypted with the LCRNG seeded by pid).
  * LCRNG: seed = seed * 1103515245 + 24691; key = seed >> 16 (MonEncryptionLCRNG).
  */
-object HgssPokemon {
+object Gen4Pokemon {
 
     class Decoded(
         val personality: Long,
@@ -51,10 +55,6 @@ object HgssPokemon {
         val spDef get() = party?.let { u16(it, 0x12) } ?: 0
     }
 
-    fun u8(b: ByteArray, o: Int) = b[o].toInt() and 0xFF
-    fun u16(b: ByteArray, o: Int) = (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
-    fun u32(b: ByteArray, o: Int): Long = (u16(b, o).toLong() or (u16(b, o + 2).toLong() shl 16)) and 0xFFFFFFFFL
-
     /** XORs `data[off until off+len]` in place with the Gen 4 LCRNG stream. */
     fun crypt(data: ByteArray, off: Int, len: Int, seed: Long) {
         var s = seed and 0xFFFFFFFFL
@@ -71,7 +71,7 @@ object HgssPokemon {
 
     private fun blockSum(data: ByteArray, off: Int): Int {
         var sum = 0
-        for (i in 0 until A.BOX_BLOCKS_SIZE / 2) sum = (sum + u16(data, off + 2 * i)) and 0xFFFF
+        for (i in 0 until S.BOX_BLOCKS_SIZE / 2) sum = (sum + u16(data, off + 2 * i)) and 0xFFFF
         return sum
     }
 
@@ -90,8 +90,8 @@ object HgssPokemon {
      * Read only: RAM is never written.
      */
     private fun boxCandidates(raw: ByteArray, off: Int, checksum: Int, flaggedPlain: Boolean): List<ByteArray> {
-        val words = A.BOX_BLOCKS_SIZE / 2
-        val asIs = raw.copyOfRange(off, off + A.BOX_BLOCKS_SIZE)
+        val words = S.BOX_BLOCKS_SIZE / 2
+        val asIs = raw.copyOfRange(off, off + S.BOX_BLOCKS_SIZE)
         val decrypted = asIs.copyOf().also { crypt(it, 0, it.size, checksum.toLong()) }
         val whole = (if (flaggedPlain) listOf(asIs, decrypted) else listOf(decrypted, asIs)).filter { blockSum(it, 0) == checksum }
         if (whole.isNotEmpty()) return whole
@@ -112,7 +112,7 @@ object HgssPokemon {
      * so later splits give the same values as the whole states.
      */
     private fun partyCandidates(raw: ByteArray, off: Int, pid: Long, flaggedPlain: Boolean): Sequence<ByteArray> {
-        val asIs = raw.copyOfRange(off, off + A.PARTY_DATA_SIZE)
+        val asIs = raw.copyOfRange(off, off + S.PARTY_DATA_SIZE)
         val decrypted = asIs.copyOf().also { crypt(it, 0, it.size, pid) }
         val whole = if (flaggedPlain) sequenceOf(asIs, decrypted) else sequenceOf(decrypted, asIs)
         val torn = (1 until PARTY_CHECKED_WORDS).asSequence().flatMap { split ->
@@ -129,31 +129,31 @@ object HgssPokemon {
      * slots.
      *
      * The structure may be caught while the game encrypts or decrypts it (see [boxCandidates]): every way it can be
-     * is tried, and the first one [accept] takes is returned (the plausibility check of the caller, see
-     * [HgssMonCheck]). When none is accepted, the most likely reading is returned as is (the caller then rejects it);
+     * is tried, and the first one [accept] takes is returned (the plausibility check of the caller, e.g. HGSS's
+     * `HgssMonCheck`). When none is accepted, the most likely reading is returned as is (the caller then rejects it);
      * its [Decoded.checksumOk] is false when no box reading matched the checksum.
      */
     fun decode(raw: ByteArray, accept: (Decoded) -> Boolean = { it.checksumOk }): Decoded? {
-        if (raw.size < 0x88) return null
+        if (raw.size < S.PARTY_DATA) return null
         val pid = u32(raw, 0)
-        val flags = u16(raw, A.BOX_FLAGS.toInt())
-        val checksum = u16(raw, A.BOX_CHECKSUM.toInt())
-        val blocksOff = A.BOX_BLOCKS.toInt()
+        val flags = u16(raw, S.BOX_FLAGS.toInt())
+        val checksum = u16(raw, S.BOX_CHECKSUM.toInt())
+        val blocksOff = S.BOX_BLOCKS.toInt()
         val boxes = boxCandidates(raw, blocksOff, checksum, flaggedPlain = flags and 2 != 0)
         if (pid == 0L && checksum == 0 && boxes.isNotEmpty()) return null // empty slot (zeroed then encrypted)
-        val order = A.POKEMON_BLOCK_OFFSETS[((pid shr 13) and 31).toInt()]
+        val order = S.POKEMON_BLOCK_OFFSETS[((pid shr 13) and 31).toInt()]
         fun decoded(box: ByteArray, party: ByteArray?, checksumOk: Boolean): Decoded {
             fun block(which: Int) = box.copyOfRange(order[which], order[which] + 0x20)
             return Decoded(pid, block(0), block(1), block(2), block(3), party, checksumOk)
         }
-        val parties = if (raw.size >= 0xEC) partyCandidates(raw, A.PARTY_DATA.toInt(), pid, flaggedPlain = flags and 1 != 0) else sequenceOf(null)
+        val parties = if (raw.size >= S.POKEMON_SIZE) partyCandidates(raw, S.PARTY_DATA.toInt(), pid, flaggedPlain = flags and 1 != 0) else sequenceOf(null)
         for (box in boxes) for (party in parties) {
             val mon = decoded(box, party, checksumOk = true)
             if (accept(mon)) return mon
         }
         // Nothing plausible: the most likely reading, for the caller's diagnostics.
         val box = boxes.firstOrNull()
-            ?: raw.copyOfRange(blocksOff, blocksOff + A.BOX_BLOCKS_SIZE).also { if (flags and 2 == 0) crypt(it, 0, it.size, checksum.toLong()) }
+            ?: raw.copyOfRange(blocksOff, blocksOff + S.BOX_BLOCKS_SIZE).also { if (flags and 2 == 0) crypt(it, 0, it.size, checksum.toLong()) }
         return decoded(box, parties.first(), checksumOk = boxes.isNotEmpty())
     }
 
@@ -178,10 +178,12 @@ object HgssPokemon {
         }
     }
 
-    /** Max PP of a move with PP Ups (pp + pp * 20 * ppUps / 100, ppUps clamped to 3: GetMoveMaxPP in src/move.c:19). */
-    fun maxPp(moveId: Int, ppUps: Int): Int {
-        val base = HgssData.moveData[moveId]?.pp ?: return 0
+    /**
+     * Max PP of a move of [basePp] PP (the game's move data) with [ppUps] PP Ups: pp + pp * 20 * ppUps / 100, ppUps
+     * clamped to 3 (GetMoveMaxPP, pokeheartgold src/move.c:19).
+     */
+    fun maxPp(basePp: Int, ppUps: Int): Int {
         val ups = ppUps.coerceIn(0, 3)
-        return base + base * 20 * ups / 100
+        return basePp + basePp * 20 * ups / 100
     }
 }

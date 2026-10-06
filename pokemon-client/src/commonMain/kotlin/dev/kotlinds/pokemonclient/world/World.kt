@@ -178,8 +178,8 @@ enum class ClimbAxis(val directions: Set<Direction>) {
 }
 
 /**
- * The field moves that open a way on the map: what a route needs when the map alone has none
- * ([RouteFailure.NeedsFieldMove]).
+ * The field moves a game checks outside battle ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]): those that
+ * open a way on the map (what a route needs when the map alone has none, [RouteFailure.NeedsFieldMove]), and [FLY].
  */
 enum class FieldMoveKind {
     SURF,
@@ -191,6 +191,9 @@ enum class FieldMoveKind {
     WHIRLPOOL,
     WATERFALL,
     ROCK_CLIMB,
+
+    /** Flies to a town already visited (the `fly` action): opens no way on a map, routes never use it. */
+    FLY,
 }
 
 /** A warp: stepping on (x, y) (and, for edge mats, pressing [exitDirection]) leads to [targetZone]. */

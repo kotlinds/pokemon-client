@@ -190,3 +190,13 @@ enum class UnavailableReason {
 
 /** What interrupted an action. */
 enum class InterruptionCause { WILD_BATTLE, TRAINER_SIGHT, PHONE_CALL, SCRIPT, UNKNOWN_SCREEN, HUMAN }
+
+/**
+ * Why a walk can't be planned on [field]'s map: the game gives no map data for it (no ROM loaded, a zone the world
+ * decoder doesn't know). The one wording of every walk, `go_to` and puzzle action.
+ */
+internal fun noMapDetail(field: dev.kotlinds.pokemonclient.state.FieldState): String = "no map data for ${field.mapName}"
+
+/** The refusal of an action that needs [field]'s map when there is none ([noMapDetail]). */
+internal fun noMap(field: dev.kotlinds.pokemonclient.state.FieldState): ActionOutcome.Failed =
+    ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, noMapDetail(field)))

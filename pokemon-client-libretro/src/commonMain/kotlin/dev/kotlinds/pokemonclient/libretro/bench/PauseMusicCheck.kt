@@ -6,8 +6,11 @@ import dev.kotlinds.pokemonclient.console.MemoryRegion
 import dev.kotlinds.pokemonclient.libretro.ConsoleRole
 import dev.kotlinds.pokemonclient.libretro.LibretroConsole
 import dev.kotlinds.pokemonclient.libretro.LibretroCoreSpec
+import dev.kotlinds.pokemonclient.libretro.sound.PauseStart
 import dev.kotlinds.pokemonclient.libretro.sound.ResyncDecision
+import dev.kotlinds.pokemonclient.libretro.sound.ResyncRefusal
 import dev.kotlinds.pokemonclient.libretro.sound.ResyncResult
+import dev.kotlinds.pokemonclient.libretro.sound.SampleBuffer
 import dev.kotlinds.pokemonclient.libretro.sound.ShadowEnd
 import dev.kotlinds.pokemonclient.libretro.sound.ShadowRun
 import dev.kotlinds.pokemonclient.libretro.sound.SoundDriverLayout
@@ -16,11 +19,7 @@ import dev.kotlinds.pokemonclient.libretro.sound.SoundFixtures
 import dev.kotlinds.pokemonclient.libretro.sound.SoundResync
 import dev.kotlinds.pokemonclient.libretro.Files
 import dev.kotlinds.pokemonclient.libretro.fmt
-import kotlinx.io.Buffer
 import kotlinx.io.files.Path
-import kotlinx.io.readByteArray
-import kotlinx.io.writeIntLe
-import kotlinx.io.writeShortLe
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 import kotlin.math.abs
@@ -30,7 +29,7 @@ import kotlin.math.sqrt
 /** Collects the audio of a console while [target] is set (bench only). */
 class AudioTap {
     /** Where samples go now (null: dropped). */
-    var target: ShortList? = null
+    var target: SampleBuffer? = null
 
     /** Drops the samples while set (priming frames). */
     var muted = false
@@ -40,30 +39,10 @@ class AudioTap {
     }
 }
 
-/** A growable list of interleaved stereo samples. */
-class ShortList {
-    var data = ShortArray(1 shl 16)
-        private set
-    var size = 0
-        private set
-
-    fun add(samples: ShortArray, count: Int) {
-        if (size + count > data.size) data = data.copyOf(maxOf(data.size * 2, size + count))
-        samples.copyInto(data, size, 0, count)
-        size += count
-    }
-
-    fun addSilence(count: Int) = add(ShortArray(count), count)
-
-    fun addAll(other: ShortList) = add(other.data, other.size)
-
-    /** Stereo frames. */
-    val frames: Int get() = size / 2
-}
-
 /**
  * Bench checks of music during pauses, on the real implementation ([ShadowRun] on a [ConsoleRole.SHADOW] console,
- * [SoundResync] on the bench's console), headless and unpaced:
+ * [SoundResync] on the bench's console), headless and unpaced. Every command starts its pauses with the app's own rule
+ * ([PauseStart], with the limits the command is given):
  * - `pausemusic:<name>[:<play s>,<pause s>,<resume s>[,<max song wait>]]` (default 5,5,10,0): plays, pauses (up to
  *   `max song wait` frames later while the game is about to change its song, [SoundResync.songChangePending], as the
  *   app does; the game runs on meanwhile, heard), the shadow plays, resumes
@@ -111,14 +90,12 @@ class PauseMusicCheck(
         val params = arg.substringAfter(':', "5,5,10").split(',').map { it.toDouble() }
         val (play, pause, resume) = params
         val maxSongWait = params.getOrElse(3) { 0.0 }.toInt()
-        val played = ShortList().also { mainTap.target = it }
+        val played = SampleBuffer().also { mainTap.target = it }
         main.step(seconds(play))
-        var songWait = 0
-        while (songWait < maxSongWait && resync.songChangePending(main.saveState(), afterFadeOut = songWait > 0)) {
-            main.step(1)
-            songWait++
-        }
-        if (maxSongWait > 0) println("  pause put off by $songWait frames for a song change")
+        // As the app does, the song-change wait only (no delay for frames a pause can't be resynced from).
+        val pauseStart = PauseStart(resync, maxSongChangeWait = maxSongWait, maxPauseDelay = 0)
+        startPause(pauseStart) { main.step(1) }
+        if (maxSongWait > 0) println("  pause put off by ${pauseStart.songChangeWait} frames for a song change")
         mainTap.target = null
 
         // Pause: the main console stays frozen at P; the shadow plays from P.
@@ -127,7 +104,7 @@ class PauseMusicCheck(
         val tSave = ms(t)
         val pausedRam = mainRam()
         val run = ShadowRun(shadow, resync, silence = { shadowTap.muted = it })
-        val during = ShortList().also { shadowTap.target = it }
+        val during = SampleBuffer().also { shadowTap.target = it }
         t = TimeSource.Monotonic.markNow()
         check(run.begin(paused)) { "shadow rejected the paused state" }
         val tLoad = ms(t)
@@ -143,7 +120,7 @@ class PauseMusicCheck(
         println("  shadow end: ${(end as? ShadowEnd.Safe)?.let { "frame ${it.frames}, " + describe(it.state) } ?: end}")
 
         // The ideal reference: the shadow simply goes on from where it stopped (as if the game had never paused).
-        val ideal = ShortList().also { shadowTap.target = it }
+        val ideal = SampleBuffer().also { shadowTap.target = it }
         if (end is ShadowEnd.Safe) shadow.step(seconds(resume))
         shadowTap.target = null
 
@@ -156,20 +133,20 @@ class PauseMusicCheck(
         check(result is ResyncResult.Resynced || mainRam().contentEquals(pausedRam)) { "main RAM changed although nothing was loaded" }
         if (result is ResyncResult.Resynced) check(mainRam().contentEquals(pausedRam)) { "main RAM changed by the resync" }
 
-        val resumed = ShortList().also { mainTap.target = it }
+        val resumed = SampleBuffer().also { mainTap.target = it }
         main.step(seconds(resume))
         mainTap.target = null
         val mainAfter = mainRam()
 
         // "Today" reference, on the shadow: the game resumes from P.
-        val today = ShortList().also { shadowTap.target = it }
+        val today = SampleBuffer().also { shadowTap.target = it }
         shadow.loadState(paused)
         shadow.step(seconds(resume))
         val todayRam = shadowRam()
         shadowTap.target = null
 
         writeWav("${name}_app", played, during, resumed)
-        writeWav("${name}_today", played, ShortList().also { it.addSilence(during.size) }, today)
+        writeWav("${name}_today", played, SampleBuffer().also { it.addSilence(during.size) }, today)
         writeWav("${name}_ideal", played, during, ideal)
         if (end is ShadowEnd.Safe) {
             val lag = rate / 100 // 10 ms
@@ -253,21 +230,16 @@ class PauseMusicCheck(
         val continuityLag = mutableListOf<Double>()
         val spectralSimilarity = mutableListOf<Double>()
         val run = ShadowRun(shadow, resync, silence = { shadowTap.muted = it })
+        // As the app does: the pause starts up to maxDelay frames later when this frame can't be resynced.
+        val pauseStart = PauseStart(resync, maxSongChangeWait = 0, maxPauseDelay = maxDelay)
         repeat(pauses) { n ->
             runMain(7)
-            var paused = main.saveState()
-            // As the app does: the pause starts up to maxDelay frames later when this frame can't be resynced.
-            var delay = 0
-            while (delay < maxDelay && resync.pauseRefusal(paused) != null) {
-                runMain(1)
-                paused = main.saveState()
-                delay++
-            }
-            delays[delay]++
+            val paused = startPause(pauseStart) { runMain(1) }
+            delays[pauseStart.pauseDelay]++
             run.begin(paused)
             repeat(pauseFrames) { run.step() }
             val end = run.end(settleFrames = ShadowRun.SETTLE_FRAMES) // as the app does
-            val ideal = ShortList().also { shadowTap.target = it }
+            val ideal = SampleBuffer().also { shadowTap.target = it }
             shadow.step(30)
             shadowTap.target = null
             val result = resync.resume(main, paused, end)
@@ -282,7 +254,7 @@ class PauseMusicCheck(
                     ((end as? ShadowEnd.Safe)?.let { " | end (+${it.frames - pauseFrames}): ${describe(it.state)} ${players(it.state)}" } ?: " | end: $end"))
             }
             if (result is ResyncResult.Resynced && end is ShadowEnd.Safe) {
-                val after = ShortList().also { mainTap.target = it }
+                val after = SampleBuffer().also { mainTap.target = it }
                 runMain(30)
                 mainTap.target = null
                 continuity += correlation(after, ideal, 0, rate / 4)
@@ -306,7 +278,7 @@ class PauseMusicCheck(
      * tall grass, UP,A walks to a trainer and talks) until a sequence player
      * gets paused (HeartGold pauses the field music when the battle music starts: the encounter, frame E), then
      * replays the same inputs from the start and, from E - before to E + after, every `every` frames, pauses like the
-     * app (up to 3 frames later when the frame is refused by [SoundResync.pauseRefusal]), plays the shadow for
+     * app (up to [PauseStart.MAX_PAUSE_DELAY_FRAMES] frames later when the frame is refused by [SoundResync.pauseRefusal]), plays the shadow for
      * `pause frames`, resumes with the real resync and prints the outcome, why, the screen, and the continuity. Inputs
      * stop at E (the battle intro runs by itself) unless `keep input` is 1. With `pause frames` 0, only the pause guards
      * of every frame (no shadow). `here`: no inputs, E is the current frame. `settle frames`: see [ShadowRun.end]. `measure menu` 1: after
@@ -351,6 +323,7 @@ class PauseMusicCheck(
         for (i in 0 until from) main.step(1, input(i, encounter))
 
         val run = ShadowRun(shadow, resync, silence = { shadowTap.muted = it })
+        val pauseStart = PauseStart(resync, maxSongChangeWait = 0)
         val outcomes = HashMap<String, Int>()
         val continuity = mutableListOf<Double>()
         val spectralSimilarity = mutableListOf<Double>()
@@ -364,19 +337,15 @@ class PauseMusicCheck(
                     // Pause guards only, no shadow: which frames a pause can't start at.
                     val key = raw?.let { it::class.simpleName!! } ?: "ok"
                     outcomes[key] = (outcomes[key] ?: 0) + 1
-                    if (raw != null && raw != dev.kotlinds.pokemonclient.libretro.sound.ResyncRefusal.SoundThreadRunningAtPause) {
+                    if (raw != null && raw != ResyncRefusal.SoundThreadRunningAtPause) {
                         println("  %+5d %-40s %s | %s".fmt(offset, screen().take(40), raw.message, commandQueue(atFrame)))
                     }
                     main.step(1, input(f, encounter))
                     continue
                 }
-                var paused = atFrame
-                var delay = 0
-                while (delay < 3 && resync.pauseRefusal(paused) != null) {
-                    main.step(1, input(f + delay, encounter))
-                    paused = main.saveState()
-                    delay++
-                }
+                // The input of the frame each frame put off emulates, as if the pause had been asked then.
+                val paused = startPause(pauseStart, atFrame) { putOff -> main.step(1, input(f + putOff - 1, encounter)) }
+                val delay = pauseStart.pauseDelay
                 val ram = mainRam()
                 val where = screen()
                 check(run.begin(paused))
@@ -384,7 +353,7 @@ class PauseMusicCheck(
                 val end = run.end(settleFrames = settleFrames)
                 val waited = ((end as? ShadowEnd.Safe)?.frames ?: pauseFrames) - pauseFrames
                 waitedFrames += waited
-                val ideal = ShortList().also { shadowTap.target = it }
+                val ideal = SampleBuffer().also { shadowTap.target = it }
                 if (end is ShadowEnd.Safe) shadow.step(30)
                 shadowTap.target = null
                 val result = resync.resume(main, paused, end)
@@ -397,7 +366,7 @@ class PauseMusicCheck(
                 var detail = ""
                 if (result is ResyncResult.Resynced && end is ShadowEnd.Safe) {
                     check(mainRam().contentEquals(ram)) { "main RAM changed by the resync" }
-                    val resumed = ShortList().also { mainTap.target = it }
+                    val resumed = SampleBuffer().also { mainTap.target = it }
                     main.step(30)
                     mainTap.target = null
                     val c = correlation(resumed, ideal, 0, rate / 4, rate / 100)
@@ -419,7 +388,7 @@ class PauseMusicCheck(
                     detail = result.reason.message
                     val endState = (end as? ShadowEnd.Safe)?.state
                     detail += " | P: " + players(paused) + (endState?.let { " | end: " + players(it) } ?: "")
-                    if (result.reason is dev.kotlinds.pokemonclient.libretro.sound.ResyncRefusal.UnreadableCommands) detail += " | " + commandQueue(paused)
+                    if (result.reason is ResyncRefusal.UnreadableCommands) detail += " | " + commandQueue(paused)
                 }
                 println("  %+5d %-40s raw %-26s delay %d -> %-22s %s".fmt(offset, where.take(40), raw?.let { it::class.simpleName } ?: "ok", delay, key, (if (waited > 0) "(end +$waited frames) " else "") + detail))
                 check(main.loadState(atFrame))
@@ -435,7 +404,7 @@ class PauseMusicCheck(
      * `pausemusicmenu:<button>,<button>...:<pause s>,<pause s>...[:<keep input>[:<awaiting input>]]`: from walking like `pausemusicintro`
      * (the same buttons, 16 frames each) to the battle, the first frame the battle command menu awaits input
      * (with `awaiting input` 1: the first frame its cursor shows; saved as `menu_first.state`); then, for each pause length and with the shadow's end settle frames 0 and
-     * [ShadowRun.SETTLE_FRAMES], pauses there like the app (up to 3 frames later if refused), resumes with the real
+     * [ShadowRun.SETTLE_FRAMES], pauses there like the app (up to [PauseStart.MAX_PAUSE_DELAY_FRAMES] frames later if refused, [PauseStart]), resumes with the real
      * resync and prints the outcome, the players, and the continuity with the uninterrupted music.
      */
     fun menu(arg: String, screen: () -> String) {
@@ -464,23 +433,23 @@ class PauseMusicCheck(
         println("  encounter at frame $encounter, command menu at frame $i (+${i - encounter}): ${screen()}")
         println("  P: ${describe(first)} | ${players(first)}")
         val run = ShadowRun(shadow, resync, silence = { shadowTap.muted = it })
+        val pauseStart = PauseStart(resync, maxSongChangeWait = 0)
         for (settle in listOf(0, ShadowRun.SETTLE_FRAMES)) for (seconds in pauses) {
             check(main.loadState(first))
-            var paused = first
-            var delay = 0
-            while (delay < 3 && resync.pauseRefusal(paused) != null) { main.step(1); paused = main.saveState(); delay++ }
+            val paused = startPause(pauseStart, first) { main.step(1) }
+            val delay = pauseStart.pauseDelay
             val ram = mainRam()
             check(run.begin(paused))
             repeat(seconds(seconds)) { run.step() }
             val end = run.end(settleFrames = settle)
-            val ideal = ShortList().also { shadowTap.target = it }
+            val ideal = SampleBuffer().also { shadowTap.target = it }
             if (end is ShadowEnd.Safe) shadow.step(30)
             shadowTap.target = null
             val result = resync.resume(main, paused, end)
             var detail = ""
             if (result is ResyncResult.Resynced && end is ShadowEnd.Safe) {
                 check(mainRam().contentEquals(ram)) { "main RAM changed by the resync" }
-                val resumed = ShortList().also { mainTap.target = it }
+                val resumed = SampleBuffer().also { mainTap.target = it }
                 main.step(30)
                 mainTap.target = null
                 detail = "corr %+.3f spectral %.3f, ended during the pause %d".fmt(correlation(resumed, ideal, 0, rate / 4, rate / 100), spectral(resumed, ideal, 0, rate / 2), result.endedDuringPause)
@@ -517,28 +486,23 @@ class PauseMusicCheck(
         val saveRefused = params.getOrElse(5) { 0 } == 1
         fun input(i: Int) = InputFrame(dirs[(i / 16) % dirs.size])
         val run = ShadowRun(shadow, resync, silence = { shadowTap.muted = it })
+        val pauseStart = PauseStart(resync, maxSongChangeWait = maxSongWait, maxPauseDelay = maxDelay)
         val outcomes = LinkedHashMap<String, Int>()
         val continuity = mutableListOf<Double>()
         for (f in 0 until frames) {
             if (f % every == 0) {
                 val atFrame = main.saveState()
                 val raw = resync.pauseRefusal(atFrame)
-                var paused = atFrame
-                var delay = 0
-                var songWait = 0
-                while (true) {
-                    if (songWait < maxSongWait && resync.songChangePending(paused, afterFadeOut = songWait > 0)) songWait++
-                    else if (delay < maxDelay && resync.pauseRefusal(paused) != null) delay++
-                    else break
-                    main.step(1, input(f + delay + songWait))
-                    paused = main.saveState()
-                }
+                // The input of the frame each frame put off emulates (frame f first: see startPause).
+                val paused = startPause(pauseStart, atFrame) { putOff -> main.step(1, input(f + putOff - 1)) }
+                val delay = pauseStart.pauseDelay
+                val songWait = pauseStart.songChangeWait
                 val ram = mainRam()
                 val place = where()
                 check(run.begin(paused))
                 repeat(pauseFrames) { run.step() }
                 val end = run.end(settleFrames = ShadowRun.SETTLE_FRAMES)
-                val ideal = ShortList().also { shadowTap.target = it }
+                val ideal = SampleBuffer().also { shadowTap.target = it }
                 if (end is ShadowEnd.Safe) shadow.step(30)
                 shadowTap.target = null
                 val result = resync.resume(main, paused, end)
@@ -552,7 +516,7 @@ class PauseMusicCheck(
                 var detail = "P: ${players(paused)}" + (endState?.let { " | end (+${(end as ShadowEnd.Safe).frames - pauseFrames}): ${players(it)}" } ?: " | end: $end")
                 if (result is ResyncResult.Resynced && end is ShadowEnd.Safe) {
                     check(mainRam().contentEquals(ram)) { "main RAM changed by the resync" }
-                    val resumed = ShortList().also { mainTap.target = it }
+                    val resumed = SampleBuffer().also { mainTap.target = it }
                     main.step(30)
                     mainTap.target = null
                     val c = correlation(resumed, ideal, 0, rate / 4, rate / 100)
@@ -647,11 +611,11 @@ class PauseMusicCheck(
      * [from]: the sequencer ticks of the resumed game keep the paused game's timer phase, so notes may start up to one
      * tick (~5 ms) apart from the ideal continuation, which a plain correlation punishes although it isn't audible.
      */
-    private fun correlation(x: ShortList, y: ShortList, from: Int, length: Int, maxLag: Int = 0): Double =
+    private fun correlation(x: SampleBuffer, y: SampleBuffer, from: Int, length: Int, maxLag: Int = 0): Double =
         (-(maxLag / 4) * 4..maxLag step 4).maxOf { lag -> if (from + lag < 0) -2.0 else correlationAt(x, y, from, length, lag).takeUnless { it.isNaN() } ?: -2.0 }
             .takeIf { it > -2.0 } ?: Double.NaN
 
-    private fun correlationAt(x: ShortList, y: ShortList, from: Int, length: Int, lag: Int): Double {
+    private fun correlationAt(x: SampleBuffer, y: SampleBuffer, from: Int, length: Int, lag: Int): Double {
         var xy = 0.0; var xx = 0.0; var yy = 0.0
         val end = minOf(from + length, x.frames - maxOf(lag, 0), y.frames)
         for (i in from until end) {
@@ -666,7 +630,7 @@ class PauseMusicCheck(
      * Spectral similarity of [x] and [y] over [length] samples from [from]: the mean, over 2048-sample windows, of the
      * correlation of their magnitude spectra (phase-blind, closer to what is heard than the waveform correlation).
      */
-    private fun spectral(x: ShortList, y: ShortList, from: Int, length: Int): Double {
+    private fun spectral(x: SampleBuffer, y: SampleBuffer, from: Int, length: Int): Double {
         val n = 2048
         val values = (from until minOf(from + length, x.frames, y.frames) - n step n).map { start ->
             val a = magnitudes(x, start, n)
@@ -680,7 +644,7 @@ class PauseMusicCheck(
     }
 
     /** Magnitude spectrum (Hann window, radix-2 FFT) of [n] mono samples of [x] from [start]. */
-    private fun magnitudes(x: ShortList, start: Int, n: Int): DoubleArray {
+    private fun magnitudes(x: SampleBuffer, start: Int, n: Int): DoubleArray {
         val re = DoubleArray(n) { i -> (x.data[2 * (start + i)] + x.data[2 * (start + i) + 1]) / 2.0 * (0.5 - 0.5 * kotlin.math.cos(2 * Math.PI * i / n)) }
         val im = DoubleArray(n)
         var j = 0
@@ -705,33 +669,48 @@ class PauseMusicCheck(
         return DoubleArray(n / 2) { kotlin.math.ln(1 + sqrt(re[it] * re[it] + im[it] * im[it])) }
     }
 
-    private fun rms(x: ShortList, length: Int): Double {
+    private fun rms(x: SampleBuffer, length: Int): Double {
         val n = minOf(length * 2, x.size)
         return sqrt((0 until n).sumOf { x.data[it].toDouble() * x.data[it] } / maxOf(n, 1))
     }
 
-    private fun jump(before: ShortList, after: ShortList): Int =
+    private fun jump(before: SampleBuffer, after: SampleBuffer): Int =
         if (before.size < 2 || after.size < 2) 0
         else (abs(before.data[before.size - 2] - after.data[0]) + abs(before.data[before.size - 1] - after.data[1])) / 2
 
-    private fun medianStep(x: ShortList): Int {
+    private fun medianStep(x: SampleBuffer): Int {
         val n = minOf(x.frames - 1, rate)
         if (n <= 0) return 0
         val from = x.frames - 1 - n
         return (from until from + n).map { abs(x.data[2 * it + 2] - x.data[2 * it]) }.sorted()[n / 2]
     }
 
-    private fun writeWav(name: String, vararg parts: ShortList) {
-        val all = ShortList().also { list -> parts.forEach(list::addAll) }
-        val pcmSize = all.size * 2
-        val wav = Buffer().apply {
-            write("RIFF".encodeToByteArray()); writeIntLe(36 + pcmSize); write("WAVEfmt ".encodeToByteArray()); writeIntLe(16)
-            writeShortLe(1); writeShortLe(2); writeIntLe(rate); writeIntLe(rate * 4); writeShortLe(4); writeShortLe(16)
-            write("data".encodeToByteArray()); writeIntLe(pcmSize)
-            for (i in 0 until all.size) writeShortLe(all.data[i])
-        }.readByteArray()
-        Files.writeBytes(Path(out, "$name.wav"), wav)
+    /** Writes [parts] one after the other as `<name>.wav` in the out dir. */
+    private fun writeWav(name: String, vararg parts: SampleBuffer) {
+        val all = SampleBuffer().also { list -> parts.forEach(list::addAll) }
+        Files.writeBytes(Path(out, "$name.wav"), all.toWav(rate))
         println("  wrote $name.wav (${"%.1f".fmt(all.frames.toDouble() / rate)} s)")
+    }
+
+    /**
+     * Pauses like the app: from the main console at [from] (its current state), each frame [pauseStart] puts the pause
+     * off is emulated by [stepFrame] (given the frames put off so far, this one included); returns the state the pause
+     * starts at. [pauseStart]'s counters then tell how long it was put off.
+     *
+     * [from] is the state before frame `f` is emulated (the loops take it, test, then step frame `f` with its input):
+     * the first frame put off is frame `f` itself, so the n-th one (putOff = n) emulates frame `f + putOff − 1`, with
+     * that frame's input, as if the pause had been asked then. Like the app ([dev.kotlinds.pokemonclient.libretro.sound.PauseStart]
+     * in its `ShadowAudio`), where a pause put off lets the game emulate the very frame it was about to, with the input
+     * held then.
+     */
+    private fun startPause(pauseStart: PauseStart, from: ByteArray = main.saveState(), stepFrame: (putOff: Int) -> Unit): ByteArray {
+        pauseStart.reset()
+        var paused = from
+        while (pauseStart.putOff(paused) != null) {
+            stepFrame(pauseStart.songChangeWait + pauseStart.pauseDelay)
+            paused = main.saveState()
+        }
+        return paused
     }
 
     private fun ms(start: TimeMark) = start.elapsedNow().inWholeMicroseconds / 1000.0

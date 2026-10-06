@@ -7,7 +7,7 @@ import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.ShopItem
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 
 /**
  * Recipes of buying at a Poké Mart: get to the shop list (talk to the clerk and pick BUY — the first entry of the

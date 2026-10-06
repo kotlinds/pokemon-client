@@ -62,11 +62,7 @@ class HgssIlexFarfetchdTest {
     @Test
     fun theForestPuzzleListsTheBirdsWithTheirLiveTwigs() {
         val vars = mapOf(0x4099 to 1, 0x409B to 2, 0x409A to 2, 0x409C to 2, 0x409D to 2, 0x409E to 1)
-        val reads = object : HgssPuzzles.Reads {
-            override fun variable(id: Int) = vars[id] ?: 0
-            override fun flag(id: Int) = false
-            override fun gymmick(): ByteArray? = null
-        }
+        val reads = FakePuzzleReads(vars)
         val puzzle = assertNotNull(
             HgssPuzzles.read(117, reads, null, listOf(HgssIlexFarfetchd.ObjectAt(0, 25, 62), HgssIlexFarfetchd.ObjectAt(2, 41, 54))),
         )

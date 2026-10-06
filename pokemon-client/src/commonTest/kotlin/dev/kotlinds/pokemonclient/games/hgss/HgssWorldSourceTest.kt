@@ -17,6 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldSource
 
 /**
  * [HgssWorldSource] on the real HeartGold (USA) ROM (skipped without `POKEMON_ROM`, see [HgssWorldRom]).
@@ -79,7 +80,8 @@ class HgssWorldSourceTest {
 
         val gymArea = assertNotNull(w.areaOf(80))
         assertEquals(90, gymArea.id)
-        assertEquals("Ecruteak Gym", gymArea.name)
+        // An area of one zone is named like the zone ([HgssData.mapName]: the place, then the map).
+        assertEquals("Ecruteak City (Ecruteak Gym)", gymArea.name)
         assertEquals(32 to 64, gymArea.width to gymArea.height)
         assertEquals(80, gymArea.zoneAt(16, 49))
         assertEquals(null, w.areaOf(-1))
@@ -240,7 +242,7 @@ class HgssWorldSourceTest {
             assertEquals(warps.size, ev.warps.size, "$file warps")
             warps.zip(ev.warps).forEach { (j, wp) ->
                 assertEquals(listOf(j.int("x"), j.int("z"), j.int("anchor"), j.int("y")), listOf(wp.x, wp.z, wp.anchor, wp.y.toInt()), "$file warp")
-                assertEquals(j.str("header"), "MAP_" + HgssData.mapName(wp.header).uppercase().replace(' ', '_'), "$file warp target")
+                assertEquals(j.str("header"), "MAP_" + HgssData.internalMapName(wp.header)!!.uppercase().replace(' ', '_'), "$file warp target")
             }
             val coords = list("coords")
             assertEquals(coords.size, ev.coords.size, "$file coords")
@@ -281,7 +283,7 @@ class HgssWorldSourceTest {
                 val land = w.landData(matrix.landAt(x / 32, z / 32))!!
                 assertEquals(land.attribute(x % 32, z % 32), attr, "$name ($x,$z)")
                 val tile = area.tile(x, z)!!
-                assertEquals(attr and HgssWorldSource.COLLISION_BIT != 0, tile.blocked, "$name ($x,$z)")
+                assertEquals(attr and Gen4WorldSource.COLLISION_BIT != 0, tile.blocked, "$name ($x,$z)")
                 assertEquals(HgssTileBehaviors.kind(attr and 0xFF, tile.blocked), tile.kind, "$name ($x,$z)")
                 compared++
             }

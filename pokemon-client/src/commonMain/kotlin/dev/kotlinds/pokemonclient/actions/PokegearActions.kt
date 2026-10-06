@@ -2,7 +2,7 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.console.TouchPoint
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
@@ -63,7 +63,7 @@ object PokegearActions {
         val radio = (screen as? Screen.Viewer)?.radio
         val onGear = screen is Screen.Viewer && screen.app in GEAR_VIEWERS ||
             (screen as? Screen.ListMenu)?.kind == MenuKind.PHONE_CONTACTS
-        val walking = state.battle == null && (screen as? Screen.Overworld)?.awaiting == Awaiting.INPUT
+        val walking = FieldControl.inControl(state)
         if (!onGear && !walking) return Availability.Hidden
         if (state.player?.pokegearCards?.contains(PokegearCard.RADIO) == false) {
             return Availability.Unavailable(UnavailableReason.NOT_UNLOCKED_YET, "The Pokégear has no Radio Card yet", "the Goldenrod Radio Tower's quiz gives it")

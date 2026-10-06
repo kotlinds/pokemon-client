@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
+import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -17,14 +19,14 @@ class HgssPartyReadTest {
 
     /** The reading the flags announce, without trying the other states: what the old decoder showed. */
     private fun naive(name: String, slot: Int) =
-        HgssPokemon.decode(HgssReader(HgssFixtures.load(name), HgssVersion.HEARTGOLD_US).partyRaw()[slot]) { true }!!
+        Gen4Pokemon.decode(HgssReader(HgssFixtures.load(name), HgssVersion.HEARTGOLD_US).partyRaw()[slot]) { true }!!
 
     /** True when the blocks, decrypted as the flags say, match the checksum (false: the old decoder showed garbage). */
     private fun flagsReadingMatches(name: String, slot: Int): Boolean {
         val raw = HgssReader(HgssFixtures.load(name), HgssVersion.HEARTGOLD_US).partyRaw()[slot]
-        val checksum = HgssPokemon.u16(raw, 6)
-        val blocks = raw.copyOfRange(8, 0x88).also { if (HgssPokemon.u16(raw, 4) and 2 == 0) HgssPokemon.crypt(it, 0, it.size, checksum.toLong()) }
-        return (0 until 0x40).sumOf { HgssPokemon.u16(blocks, 2 * it) } and 0xFFFF == checksum
+        val checksum = Gen4RomBytes.u16(raw, 6)
+        val blocks = raw.copyOfRange(8, 0x88).also { if (Gen4RomBytes.u16(raw, 4) and 2 == 0) Gen4Pokemon.crypt(it, 0, it.size, checksum.toLong()) }
+        return (0 until 0x40).sumOf { Gen4RomBytes.u16(blocks, 2 * it) } and 0xFFFF == checksum
     }
 
     private fun assertRealParty(name: String) {

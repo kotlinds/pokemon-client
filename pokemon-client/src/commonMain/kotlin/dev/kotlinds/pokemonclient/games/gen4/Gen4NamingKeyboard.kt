@@ -96,10 +96,8 @@ object Gen4NamingKeyboard {
         return mem.ptr(addresses.appData)
     }
 
-    /**
-     * The keyboard's screen when it runs, else null. [fading]: a screen fade is running (the keyboard ignores keys).
-     */
-    fun decode(mem: Gen4Memory, gSystem: Long, addresses: Gen4NamingAddresses, fading: Boolean): Screen? {
+    /** The keyboard's screen when it runs, else null. It ignores keys during a screen fade ([Gen4Memory.fading]). */
+    fun decode(mem: Gen4Memory, gSystem: Long, addresses: Gen4NamingAddresses): Screen? {
         val data = data(mem, gSystem, addresses) ?: return null
         val O = Offsets
         // After a capture with a full party: "X was transferred to BOX 1 in Bill's PC!" printed on the keyboard,
@@ -112,7 +110,12 @@ object Gen4NamingKeyboard {
             }
         }
         val delaying = addresses.delayCounterOffset?.let { mem.s32(data + it) != 0 } == true
-        val ready = pageSwitch == STATE_IDLE && mem.s32(data + O.IGNORE_INPUT) == 0 && !fading && !delaying
+        // Any screen fade counts ([Gen4Memory.fading]), on HGSS a master-brightness transition too although the
+        // keyboard itself only waits for its palette fades (naming_screen.c IsPaletteFadeFinished): a brightness
+        // transition is stepped by the main loop every frame until it ends (main.c DoAllScreenBrightnessTransitionStep,
+        // brightness.c), so it never stays set over an interactive keyboard; at worst the few frames of one running as
+        // the keyboard opens read as the transition they are.
+        val ready = pageSwitch == STATE_IDLE && mem.s32(data + O.IGNORE_INPUT) == 0 && !mem.fading && !delaying
         if (!ready) return Screen.Animation(AnimationKind.TRANSITION)
 
         val cells = IntArray(COLUMNS * ROWS) { mem.u16(data + O.KEYBOARD + 2L * it) }

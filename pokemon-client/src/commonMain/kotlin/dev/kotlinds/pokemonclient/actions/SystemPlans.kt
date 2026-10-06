@@ -3,7 +3,7 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.console.TouchPoint
-import dev.kotlinds.pokemonclient.runtime.kind
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.ContinueReason
 import dev.kotlinds.pokemonclient.state.FieldState
