@@ -68,14 +68,24 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
             ?: return Result.failure(ActionException(ActionError.InvalidParameter("type", "missing", byName.keys.toList())))
         val def = byName[type]?.takeIf { mode in it.spec.modes }
             ?: return Result.failure(ActionException(ActionError.InvalidParameter("type", type, definitions.filter { mode in it.spec.modes }.map { it.spec.name })))
-        // A misspelled parameter would otherwise be ignored silently (e.g. `count` for `tiles`): refuse it, listing the valid ones.
-        val known = def.spec.parameters.map { it.name }
-        json.keys.firstOrNull { it != "type" && it !in known }?.let { unknown ->
-            return Result.failure(ActionException(ActionError.InvalidParameter("parameter", unknown, known)))
+        // A misspelled parameter would otherwise be ignored silently (e.g. `count` for `tiles`): refuse it, saying
+        // which parameter to use (NOTES: `option` given twice to open_menu / choose, which take `entry`).
+        json.keys.firstOrNull { it != "type" && def.spec.parameters.none { p -> p.name == it } }?.let { unknown ->
+            return Result.failure(ActionException(unknownParameter(def.spec, unknown, json.keys)))
         }
         return runCatching { def.spec.parse(json) }.recoverCatching { error ->
             throw (error as? ActionException) ?: ActionException(ActionError.InvalidParameter(type, json.toString()))
         }
+    }
+
+    /**
+     * The error for parameter [unknown] of [spec]: the parameters not [given] are suggested, the required ones alone
+     * when some are missing (`option` for open_menu → `entry`), else every optional one left.
+     */
+    private fun unknownParameter(spec: ActionSpec<*>, unknown: String, given: Set<String>): ActionError.UnknownParameter {
+        val left = spec.parameters.filter { it.name !in given }
+        val suggested = left.filter { it.required }.ifEmpty { left }
+        return ActionError.UnknownParameter(spec.name, unknown, suggested.map { it.name to it.description }, spec.parameters.map { it.name })
     }
 
     /**

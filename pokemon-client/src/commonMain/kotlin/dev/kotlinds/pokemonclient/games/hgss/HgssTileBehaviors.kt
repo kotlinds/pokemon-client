@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.games.hgss
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.world.ClimbAxis
 import dev.kotlinds.pokemonclient.world.TileKind
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 
 /**
  * HeartGold / SoulSilver tile behaviors (low byte of a terrain attribute) and their meaning for the common
@@ -180,14 +181,17 @@ object HgssTileBehaviors {
     private val EXAMINABLE_WALLS = setOf(HEADBUTT, 0x83, 0x85, 0x86, 0xE0, 0xE1, 0xE2, 0xE4, 0xE5, 0xEA, 0xEB, 0xEC)
 
     /**
-     * The direction to press on a warp tile to use it (exit mats, side stairs, ladders), or null when stepping on it
-     * is enough (doors, warp panels, escalators).
+     * What takes a warp on a tile of [behavior] (src/field/field_control.c): the end of a step onto it for north
+     * entrances, warp panels, ladders down and escalators (`FieldSystem_CheckTransition`), a door walked into from next
+     * to it, a press towards its own direction standing on a mat, side stairs or a ladder
+     * (`FieldSystem_CheckMapTransition`); nothing on any other tile.
      */
-    fun warpDirection(behavior: Int): Direction? = when (behavior) {
-        WARP_ENTRANCE_EAST, WARP_EAST, WARP_STAIRS_EAST -> Direction.EAST
-        WARP_ENTRANCE_WEST, WARP_WEST, WARP_STAIRS_WEST -> Direction.WEST
-        WARP_ENTRANCE_NORTH, WARP_NORTH, LADDER_NORTH -> Direction.NORTH
-        WARP_ENTRANCE_SOUTH, WARP_SOUTH, LADDER_SOUTH -> Direction.SOUTH
-        else -> null
+    fun warpTrigger(behavior: Int): WarpTrigger = when (behavior) {
+        WARP_ENTRANCE_EAST, WARP_EAST, WARP_STAIRS_EAST -> WarpTrigger.Press(Direction.EAST)
+        WARP_ENTRANCE_WEST, WARP_WEST, WARP_STAIRS_WEST -> WarpTrigger.Press(Direction.WEST)
+        WARP_ENTRANCE_SOUTH, WARP_SOUTH, LADDER_SOUTH -> WarpTrigger.Press(Direction.SOUTH)
+        LADDER_NORTH -> WarpTrigger.Press(Direction.NORTH)
+        DOOR, WARP_ENTRANCE_NORTH, WARP_NORTH, WARP_PANEL, LADDER_DOWN, ESCALATOR, ESCALATOR_FLIP_FACE -> WarpTrigger.Enter
+        else -> WarpTrigger.Never
     }
 }

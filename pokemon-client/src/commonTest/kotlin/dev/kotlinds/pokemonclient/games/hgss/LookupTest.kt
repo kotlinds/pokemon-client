@@ -15,6 +15,31 @@ class LookupTest {
 
     private fun lookup(level: KnowledgeLevel = KnowledgeLevel.POKEDEX) = Lookup(HgssWorldRom.requireData(), level)
 
+    /** `lookup encounters` standing on Route 1 (zone 9) with a Pokédex that has seen [seen]. */
+    private fun encounters(level: KnowledgeLevel, seen: Set<Int>?, id: String = "here"): kotlinx.serialization.json.JsonObject {
+        val world = HgssWorldRom.require()
+        val context = dev.kotlinds.pokemonclient.data.EncounterContext(world, world::mapName, currentZone = 9, seen = seen?.map { dev.kotlinds.pokemonclient.state.SpeciesId(it) }?.toSet())
+        return Lookup(HgssWorldRom.requireData(), level, context).lookup(LookupKind.ENCOUNTERS, id).getOrThrow()
+    }
+
+    private fun kotlinx.serialization.json.JsonObject.dayLand() = this["maps"]!!.jsonArray.single().jsonObject["groups"]!!.jsonArray.map { it.jsonObject }
+        .single { it["method"]!!.jsonPrimitive.content == "walk" && it["time"]?.jsonPrimitive?.content == "day" }
+
+    @Test
+    fun encountersNameOnlyTheSpeciesSeenAtThePokedexLevel() {
+        // Seen Pidgey (16) only: Rattata, Sentret and Furret are counted, not named.
+        val pokedex = encounters(KnowledgeLevel.POKEDEX, seen = setOf(16)).dayLand()
+        assertEquals(listOf("species:16 PIDGEY 45% Lv2-4"), pokedex["species"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals("3 species not seen yet (55% of these encounters)", pokedex["unseen"]!!.jsonPrimitive.content)
+        assertEquals(20, pokedex["rate"]!!.jsonPrimitive.content.toInt())
+        // A walkthrough names them all; Route 1 by name gives the same map.
+        val all = encounters(KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH, seen = null, id = "Route 1").dayLand()
+        assertEquals(4, all["species"]!!.jsonArray.size)
+        assertTrue("unseen" !in all)
+        // Below the Pokédex level: refused.
+        assertTrue(Lookup(HgssWorldRom.requireData(), KnowledgeLevel.NONE).lookup(LookupKind.ENCOUNTERS, "here").isFailure)
+    }
+
     @Test
     fun speciesByIdAndByNameGiveTheSameSheet() {
         val byId = lookup().lookup(LookupKind.SPECIES, "species:1").getOrThrow()

@@ -271,6 +271,10 @@ object StateView {
             }
         }
         state.field?.radioMusic?.let { put("radio_music", "${it.wire} (the Pokégear radio keeps playing it)") }
+        // The Repel's counter as the game keeps it (one step per tile moved, walking, running, cycling or surfing alike;
+        // checked on the bench): without it the agent could only guess when it wears off (NOTES: "Max Repel stops
+        // after ~100-150 steps", which was the agent's own count of the tiles of its trips).
+        state.field?.repelSteps?.takeIf { it > 0 }?.let { put("repel_steps", it) }
         if (state.warnings.isNotEmpty()) put("warnings", JsonArray(state.warnings.map { JsonPrimitive(it.detail) }))
     }
 
@@ -324,7 +328,8 @@ object StateView {
     fun puzzle(puzzle: PuzzleState, showHidden: Boolean = true): JsonObject = buildJsonObject {
         fun tiles(tiles: List<PuzzleTile>) = JsonArray(tiles.map { JsonPrimitive("${it.x},${it.y}") })
         put("kind", puzzle.kind.name.lowercase())
-        put("rule", puzzle.rule)
+        // What only a walkthrough shows (shown with [showHidden] only): the puzzle's rule says how to read it only then.
+        put("rule", puzzle.walkthroughRule?.takeIf { showHidden }?.let { "${puzzle.rule} $it" } ?: puzzle.rule)
         val switches = puzzle.switches.filter { showHidden || !it.hidden }
         if (switches.isNotEmpty()) putJsonArray("switches") {
             switches.forEach { s ->

@@ -2,9 +2,10 @@ package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.world.Area
-import dev.kotlinds.pokemonclient.world.MovingPlatforms
+import dev.kotlinds.pokemonclient.world.MechanismRide
 import dev.kotlinds.pokemonclient.world.PlatformPose
-import dev.kotlinds.pokemonclient.world.PlatformRide
+import dev.kotlinds.pokemonclient.world.PuzzleMechanics
+import dev.kotlinds.pokemonclient.world.PuzzleMechanism
 import dev.kotlinds.pokemonclient.world.TileKind
 
 /**
@@ -26,7 +27,9 @@ import dev.kotlinds.pokemonclient.world.TileKind
  *
  * The geometry was checked against the run's own solver, which crossed the gym live (NOTES "Ébènelle, solveur").
  */
-class HgssBlackthornGym(override val poses: List<PlatformPose>, private val area: Area) : MovingPlatforms {
+class HgssBlackthornGym(override val state: List<PlatformPose>, private val area: Area) : PuzzleMechanics<List<PlatformPose>> {
+
+    override val mechanism = PuzzleMechanism.MOVING_PLATFORM
 
     /** One platform shape (offsets at rotation 0). */
     private class Shape(
@@ -45,10 +48,11 @@ class HgssBlackthornGym(override val poses: List<PlatformPose>, private val area
         val footprint = xs.flatMap { x -> ys.map { y -> x to y } }
     }
 
-    override fun walkTiles(poses: List<PlatformPose>): Set<Pair<Int, Int>> =
-        poses.flatMap { place(it, WALK) }.toSet()
+    override fun walkTiles(state: List<PlatformPose>): Set<Pair<Int, Int>> =
+        state.flatMap { place(it, WALK) }.toSet()
 
-    override fun ride(poses: List<PlatformPose>, x: Int, y: Int): PlatformRide? {
+    override fun ride(state: List<PlatformPose>, x: Int, y: Int): MechanismRide<List<PlatformPose>>? {
+        val poses = state
         for ((i, pose) in poses.withIndex()) {
             val (pivot, forward, backward) = place(pose, TRIGGERS)
             val kind = when (x to y) {
@@ -57,10 +61,10 @@ class HgssBlackthornGym(override val poses: List<PlatformPose>, private val area
                 backward -> Move.BACKWARD
                 else -> continue
             }
-            val moved = move(poses, i, kind) ?: return PlatformRide(poses, x, y, moved = false)
+            val moved = move(poses, i, kind) ?: return MechanismRide(poses, x, y, moved = false)
             val dx = moved[i].x - pose.x
             val dy = moved[i].y - pose.y
-            return PlatformRide(moved, x + dx, y + dy, moved = true)
+            return MechanismRide(moved, x + dx, y + dy, moved = true)
         }
         return null
     }

@@ -66,8 +66,11 @@ class ActionChainsTest {
             put("direction", JsonPrimitive("north"))
             put("count", JsonPrimitive(3))
         }
-        val error = (registry.parse(json, ActionMode.ASSISTED).exceptionOrNull() as ActionException).error as ActionError.InvalidParameter
-        assertEquals("count", error.value)
-        assertTrue("tiles" in error.allowed)
+        val error = (registry.parse(json, ActionMode.ASSISTED).exceptionOrNull() as ActionException).error as ActionError.UnknownParameter
+        assertEquals("INVALID_PARAM", error.code)
+        assertEquals("count", error.name)
+        assertTrue("tiles" in error.valid)
+        // Every required parameter given: the optional ones left are suggested, never one already given.
+        assertTrue("tiles" in error.suggested.map { it.first } && "direction" !in error.suggested.map { it.first })
     }
 }

@@ -5,7 +5,7 @@ import dev.kotlinds.pokemonclient.world.LiveObject
 import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Overlay
 import dev.kotlinds.pokemonclient.world.Pathfinder
-import dev.kotlinds.pokemonclient.world.PlatformPlanner
+import dev.kotlinds.pokemonclient.world.MechanismPlanner
 import dev.kotlinds.pokemonclient.world.PlatformPose
 import dev.kotlinds.pokemonclient.world.RouteOptions
 import dev.kotlinds.pokemonclient.world.TeleportLink
@@ -60,9 +60,9 @@ class HgssBlackthornGymTest {
             val (pivot, forward, backward) = gym.triggers(pose)
             for (tile in listOf(pivot, forward, backward)) {
                 val ride = assertNotNull(gym.ride(initial, tile.first, tile.second))
-                val moved = ride.poses[initial.indexOf(pose)]
+                val moved = ride.state[initial.indexOf(pose)]
                 if (ride.moved) assertEquals(tile.first + moved.x - pose.x to tile.second + moved.y - pose.y, ride.playerX to ride.playerY)
-                else assertEquals(initial, ride.poses)
+                else assertEquals(initial, ride.state)
             }
         }
     }
@@ -76,7 +76,7 @@ class HgssBlackthornGymTest {
     @Test
     fun `go_to plans the rides from the entrance to Clair`() {
         val gym = HgssBlackthornGym(initial, area)
-        val route = assertNotNull(PlatformPlanner(area, overlay(), gym).route(Node(13, 86), RouteOptions(), emptySet()) { it.x == 12 && it.y == 4 })
+        val route = assertNotNull(MechanismPlanner(area, overlay(), gym).route(Node(13, 86), RouteOptions(), emptySet()) { it.x == 12 && it.y == 4 })
         val rides = route.edges.filterIsInstance<Edge.Teleport>()
         assertTrue(rides.isNotEmpty(), "the lava is only crossed by riding")
         assertEquals(12 to 4, route.end!!.x to route.end!!.y)
@@ -91,7 +91,7 @@ class HgssBlackthornGymTest {
                     val ride = assertNotNull(gym.ride(poses, edge.via.x, edge.via.y))
                     assertTrue(ride.moved)
                     assertEquals(edge.to.x to edge.to.y, ride.playerX to ride.playerY)
-                    poses = ride.poses
+                    poses = ride.state
                 }
                 else -> for (n in edge.tiles) {
                     val lava = area.tile(n.x, n.y)?.kind == dev.kotlinds.pokemonclient.world.TileKind.Lava
@@ -143,9 +143,9 @@ class HgssBlackthornGymFixtureTest {
         assertEquals(13 to 3, field("pz_blackthorn_clair").let { it.x to it.y })
         val gym = HgssBlackthornGym(poses("pz_blackthorn_entrance"), area)
         val overlay = Overlay(objects = start.objects.map { LiveObject(it.x, it.y, it.facing) })
-        val route = assertNotNull(PlatformPlanner(area, overlay, gym).route(Node(13, 87), RouteOptions()) { it.x == 13 && it.y == 3 })
-        var poses = gym.poses
-        route.edges.filterIsInstance<Edge.Teleport>().forEach { poses = assertNotNull(gym.ride(poses, it.via.x, it.via.y)).poses }
+        val route = assertNotNull(MechanismPlanner(area, overlay, gym).route(Node(13, 87), RouteOptions()) { it.x == 13 && it.y == 3 })
+        var poses = gym.state
+        route.edges.filterIsInstance<Edge.Teleport>().forEach { poses = assertNotNull(gym.ride(poses, it.via.x, it.via.y)).state }
         assertEquals(poses("pz_blackthorn_clair"), poses)
     }
 }

@@ -26,7 +26,7 @@ data class HgssMapHeader(
     val mapType: Int,
     /** Wild encounter bank (`ENCDATA_NA` = 0xFF when none). */
     val wildEncounterBank: Int,
-    /** `flyAllowed`: Fly (and Teleport) can be used from this zone (outdoors). */
+    /** `flyAllowed`: Fly (and Teleport) can be used from this zone (outdoors in the normal game; a randomizer may set it anywhere). */
     override val flyAllowed: Boolean = true,
     /** `bikeAllowed`: the Bicycle can be ridden in this zone. */
     override val bikeAllowed: Boolean = true,

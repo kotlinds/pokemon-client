@@ -5,7 +5,7 @@ import dev.kotlinds.pokemonclient.Direction
 /**
  * Routes across zones: floors of a dungeon, buildings and the outdoor area, linked by warps and holes
  * ([WorldLinks]). One Dijkstra over (area, [Node]) pairs: inside an area the moves are the [Pathfinder]'s; stepping
- * onto a warp (or pressing its direction on an exit mat) or onto a hole jumps to the arrival tile of the other zone.
+ * onto a warp (or pressing its direction on an exit mat, [WarpTrigger]) or onto a hole jumps to the arrival tile of the other zone.
  * Changes of direction cost [RouteOptions.turnPenalty] like in the [Pathfinder] (the search state also holds the
  * direction the player arrived in, with the same cut of the headings that can't be cheaper), and the moves their soft
  * costs ([RouteOptions.weights]: wild encounters by zone, trainers' sight where the overlay shows trainers).
@@ -86,7 +86,7 @@ class WorldRouter(
                     relax(Place(area, Node(toX, toY)), cost + LINK_COST, link, null)
                 }
                 // Pressing the direction of the exit mat the player stands on.
-                here.links[place.node.x to place.node.y]?.takeIf { it.exitDirection != null }?.let { take(it, 0) }
+                here.links[place.node.x to place.node.y]?.takeIf { it.trigger is WarpTrigger.Press }?.let { take(it, 0) }
                 val enterable = here.goalTiles + here.links.keys
                 for (edge in here.pathfinder.neighbours(place.node, options, enterable, allowJumps = options.acceptOneWay, relaxed = relaxed, ignorePeople = ignorePeople)) {
                     val to = edge.to
@@ -96,7 +96,9 @@ class WorldRouter(
                     when {
                         link == null -> if ((to.x to to.y) !in here.goalTiles || isGoal(next)) relax(next, cost, null, edge.endDirection)
                         // Stepping on a door, a ladder down or a hole takes it at once (unless it's the destination).
-                        link.exitDirection == null -> if (isGoal(next)) relax(next, cost, null, edge.endDirection) else take(link, cost)
+                        link.trigger == WarpTrigger.Enter -> if (isGoal(next)) relax(next, cost, null, edge.endDirection) else take(link, cost)
+                        // An exit mat is floor until its direction is pressed (the Pathfinder never leaves it that way);
+                        // a warp nothing takes is floor.
                         else -> relax(next, cost, null, edge.endDirection)
                     }
                 }
@@ -119,9 +121,7 @@ class WorldRouter(
             objects = area.people.filter { it.obstacle != null }.map { LiveObject(it.x, it.y, it.facing, clearedBy = it.obstacle) },
             teleports = area.scriptWarps.flatMap { pad ->
                 val trigger = area.triggers.firstOrNull { it.zone == pad.zone && it.id == pad.trigger } ?: return@flatMap emptyList()
-                (trigger.x until trigger.x + maxOf(1, trigger.width)).flatMap { x ->
-                    (trigger.y until trigger.y + maxOf(1, trigger.height)).map { y -> TeleportLink(x, y, pad.x, pad.y) }
-                }
+                trigger.tiles.map { (x, y) -> TeleportLink(x, y, pad.x, pad.y) }
             } + sameZoneTeleports(area),
         )
 

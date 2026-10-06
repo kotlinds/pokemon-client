@@ -2,10 +2,10 @@ package dev.kotlinds.pokemonclient.games.gen4
 
 import dev.kotlinds.NarcArchive
 import dev.kotlinds.NdsRom
-import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.SnapshotCache
 import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.world.Area
+import dev.kotlinds.pokemonclient.world.AreaKind
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.PersonTemplate
 import dev.kotlinds.pokemonclient.world.ScriptWarp
@@ -16,6 +16,7 @@ import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.Trigger
 import dev.kotlinds.pokemonclient.world.TriggerWarp
 import dev.kotlinds.pokemonclient.world.Warp
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.world.WorldSource
 
 /**
@@ -32,7 +33,7 @@ interface Gen4MapHeader {
     /** Member of the script NARC holding the zone's scripts. */
     val scriptsBank: Int
 
-    /** Fly (and Teleport) can be used from this zone (outdoors). */
+    /** Fly (and Teleport) can be used from this zone: outdoors in the normal games, anywhere a randomizer says. */
     val flyAllowed: Boolean
 
     /** The Bicycle can be ridden in this zone. */
@@ -64,7 +65,7 @@ data class Gen4WorldFiles(
  * only (two zones sharing such a matrix get two areas with the same [Area.id]).
  *
  * Per game (the subclasses): the header table ([headers]), the NARC paths ([files]), the tile behaviour codes
- * ([tileKind], [warpDirection]), the overworld sprites that are field move obstacles ([obstacle]), the hidden item
+ * ([tileKind], [warpTrigger]), the overworld sprites that are field move obstacles ([obstacle]), the hidden item
  * flags ([hiddenItemFlagBase]), the names ([mapName], [overworldName]) and what needs the game's script bytecode
  * ([trigger], [scriptWarps], [triggerWarps]: nothing by default).
  *
@@ -82,8 +83,8 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
     /** The [TileKind] of tile behaviour [behavior] (the codes differ a little between games). */
     protected abstract fun tileKind(behavior: Int, blocked: Boolean): TileKind
 
-    /** The direction to press on a warp tile of behaviour [behavior] (exit mats, side stairs), null for doors. */
-    protected abstract fun warpDirection(behavior: Int): Direction?
+    /** What takes a warp on a tile of behaviour [behavior] ([WarpTrigger]: the codes differ a little between games). */
+    protected abstract fun warpTrigger(behavior: Int): WarpTrigger
 
     /** The field move that clears an overworld object of sprite [sprite] (small tree, cracked rock, boulder), or null. */
     protected abstract fun obstacle(sprite: Int): FieldMoveKind?
@@ -209,7 +210,7 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
         val triggerWarps = mutableListOf<TriggerWarp>()
         for (zone in zoneIds) {
             val ev = events(zone) ?: continue
-            ev.warps.forEachIndexed { i, w -> warps += Warp(zone, i, w.x, w.z, w.header, w.anchor, behaviorAt(w.x, w.z)?.let(::warpDirection)) }
+            ev.warps.forEachIndexed { i, w -> warps += Warp(zone, i, w.x, w.z, w.header, w.anchor, behaviorAt(w.x, w.z)?.let(::warpTrigger) ?: WarpTrigger.Enter) }
             ev.bgs.forEachIndexed { i, bg -> signs += sign(zone, i, bg) }
             ev.objects.forEach { o ->
                 people += PersonTemplate(
@@ -230,7 +231,8 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
             triggerWarps += triggerWarps(zone, ev)
         }
         val name = if (matrix.zones != null && matrix.id == OVERWORLD_MATRIX) overworldName else mapName(zoneId).toString()
-        return Area(matrix.id, name, 0, 0, width, height, tiles, warps, signs, people, triggers, zones, scriptWarps, triggerWarps)
+        val kind = if (matrix.zones != null) AreaKind.OVERWORLD else AreaKind.SINGLE_MAP
+        return Area(matrix.id, name, 0, 0, width, height, tiles, warps, signs, people, triggers, zones, scriptWarps, triggerWarps, kind)
     }
 
     /**

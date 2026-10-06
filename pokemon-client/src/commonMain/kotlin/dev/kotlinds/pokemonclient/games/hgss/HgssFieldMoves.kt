@@ -12,7 +12,7 @@ import dev.kotlinds.pokemonclient.world.FieldMoveKind
  */
 internal object HgssFieldMoves {
 
-    val BADGES: Map<FieldMoveKind, Badge> = mapOf(
+    val BADGES: Map<FieldMoveKind, Badge?> = mapOf(
         FieldMoveKind.ROCK_SMASH to Badge("Zephyr", 0),
         FieldMoveKind.CUT to Badge("Hive", 1),
         FieldMoveKind.STRENGTH to Badge("Plain", 2),
@@ -21,5 +21,15 @@ internal object HgssFieldMoves {
         FieldMoveKind.WHIRLPOOL to Badge("Glacier", 6),
         FieldMoveKind.WATERFALL to Badge("Rising", 7),
         FieldMoveKind.ROCK_CLIMB to Badge("Earth", 15),
+        // No badge in their checks (FieldMove_CheckFlash / Teleport / Dig / SweetScent / Chatter / Headbutt); Milk
+        // Drink and Softboiled are the party menu's own (no check): sFieldMoveFuncTable and the party menu's entries.
+        FieldMoveKind.FLASH to null,
+        FieldMoveKind.TELEPORT to null,
+        FieldMoveKind.DIG to null,
+        FieldMoveKind.SWEET_SCENT to null,
+        FieldMoveKind.CHATTER to null,
+        FieldMoveKind.HEADBUTT to null,
+        FieldMoveKind.MILK_DRINK to null,
+        FieldMoveKind.SOFTBOILED to null,
     )
 }

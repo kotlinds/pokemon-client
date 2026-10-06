@@ -382,14 +382,8 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
     // ================================================================================================
 
     /** Address of save array [id] (SaveArray_Get, src/save.c:128), or null. */
-    private fun saveArray(saveData: Long, id: Int): Long? {
-        val hdr = saveData + A.SAVE_ARRAY_HEADERS + id * A.SAH_SIZE
-        if (mem.s32(hdr + A.SAH_ID) != id) return null
-        val off = mem.u32(hdr + A.SAH_OFFSET)
-        val len = mem.u32(hdr + A.SAH_LENGTH)
-        val addr = saveData + A.SAVE_DYNAMIC_REGION + off
-        return if (mem.inRam(addr, len.coerceAtLeast(1))) addr else null
-    }
+    private fun saveArray(saveData: Long, id: Int): Long? =
+        dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData(mem, saveData, A.SAVE_LAYOUT).table(id)
 
     private val badgeNames = listOf(
         "Zephyr", "Hive", "Plain", "Fog", "Storm", "Mineral", "Glacier", "Rising",
@@ -546,6 +540,16 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             v = resolved
             if (flagId !in 0 until A.NUM_SAVE_FLAGS) return@let null
             mem.ptr(v.saveDataPtr)?.let { sd -> saveArray(sd, A.SAVE_FLAGS) }?.let { vf -> mem.u8(vf + A.FLAGS_OFFSET + flagId / 8) shr (flagId % 8) and 1 == 1 }
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Every event flag of the save ([flag]'s array, `SaveVarsFlags.flags`) in one read ([dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData.eventFlags]), or null. */
+    fun eventFlags(): dev.kotlinds.pokemonclient.state.EventFlags? = try {
+        resolveVersion().first?.let { resolved ->
+            v = resolved
+            mem.ptr(v.saveDataPtr)?.let { sd -> dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData(mem, sd, A.SAVE_LAYOUT).eventFlags() }
         }
     } catch (_: Exception) {
         null

@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.readTestResource
 import dev.kotlinds.pokemonclient.world.FlagCondition
@@ -115,7 +116,7 @@ class HgssWorldSourceTest {
         assertEquals(TileKind.Door, area.tile(376, 183)!!.kind)
         val door = area.warps.single { it.zone == 78 && it.x == 376 && it.y == 183 }
         assertEquals(80 to 0, door.targetZone to door.targetWarp)
-        assertEquals(null, door.exitDirection)
+        assertEquals(WarpTrigger.Enter, door.trigger)
     }
 
     @Test
@@ -157,7 +158,27 @@ class HgssWorldSourceTest {
         )
         val exit = gym.warps.single()
         assertEquals(listOf(16, 53, 78, 7), listOf(exit.x, exit.y, exit.targetZone, exit.targetWarp))
-        assertEquals(Direction.SOUTH, exit.exitDirection)
+        assertEquals(WarpTrigger.Press(Direction.SOUTH), exit.trigger)
+    }
+
+    /**
+     * What takes each kind of warp (field_control.c): the Olivine Lighthouse's entrance (WARP_ENTRANCE_NORTH) fires on
+     * entering its tile, pressing north on it does nothing (the bench: arrived on it, `press up` did nothing); the Radio
+     * Tower's side stairs wait for a press east; Ilex Forest's tiles in front of the Route 34 gatehouse's door are only
+     * where that door arrives (plain floor: nothing takes them).
+     */
+    @Test
+    fun `warps are taken on entering, by a press, or never, by their tile`() {
+        val w = world
+        val olivine = w.areaOf(77)!!.warps.single { it.zone == 77 && it.id == 3 }
+        assertEquals(listOf(301, 263), listOf(olivine.x, olivine.y))
+        assertEquals(WarpTrigger.Enter, olivine.trigger)
+        val stairs = w.areaOf(112)!!.warps.single { it.zone == 112 && it.id == 1 }
+        assertEquals(WarpTrigger.Press(Direction.EAST), stairs.trigger)
+        val ilex = w.areaOf(117)!!.warps.filter { it.zone == 117 }.associate { (it.x to it.y) to it.trigger }
+        assertEquals(WarpTrigger.Never, ilex[12 to 18])
+        assertEquals(WarpTrigger.Never, ilex[13 to 18])
+        assertEquals(WarpTrigger.Enter, ilex[12 to 17])
     }
 
     @Test
@@ -172,6 +193,11 @@ class HgssWorldSourceTest {
         assertTrue(guide.startsScene({ 0 }, { false }), "the first time, the guide walks up and talks")
         assertTrue(!guide.startsScene({ 0 }, { true }), "once heard, armed but quiet")
         assertTrue(guide.startsScene({ 0 }, { null }), "an unreadable flag never makes it quiet")
+        // The one rule of every reader (the state, go_to, the survey): its 9 tiles while it starts a scene, none once quiet.
+        val area = assertNotNull(world.areaOf(496))
+        assertEquals((1..9).map { it to 46 }.toSet(), area.sceneTriggerTiles(496, { 0 }, { false }))
+        assertEquals(emptySet(), area.sceneTriggerTiles(496, { 0 }, { true }))
+        assertTrue(guide.covers(9, 46) && !guide.covers(10, 46))
         // The Ecruteak Gym's pits drop the player every time: never quiet.
         assertTrue(world.areaOf(80)!!.triggers.all { it.quietWhen == null })
     }
@@ -194,7 +220,7 @@ class HgssWorldSourceTest {
         assertEquals(listOf(16, 9, 1, 1), listOf(fall.x, fall.y, fall.width, fall.height))
         assertTrue(floor.warps.none { it.x == 16 && it.y == 9 })
         // Ladders: the warp direction to press comes from the ladder tile.
-        assertEquals(Direction.NORTH, floor.warps.single { it.x == 3 && it.y == 5 }.exitDirection)
+        assertEquals(WarpTrigger.Press(Direction.NORTH), floor.warps.single { it.x == 3 && it.y == 5 }.trigger)
     }
 
     @Test

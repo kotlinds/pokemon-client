@@ -25,6 +25,22 @@ sealed interface ActionError {
         override val message get() = "Invalid $parameter `$value`" + if (allowed.isEmpty()) "" else ". Allowed: ${allowed.joinToString()}"
     }
 
+    /**
+     * The action was given a parameter it doesn't have ([name]): refused rather than ignored (e.g. `count` for
+     * `tiles`), naming the parameter to use instead. [suggested]: the action's parameters the call didn't give, the
+     * required ones first (one of them is almost always what was meant), each with what it is; [valid]: every
+     * parameter of the action. One name per parameter: no alias is accepted, the message says the right one.
+     */
+    data class UnknownParameter(val action: String, val name: String, val suggested: List<Pair<String, String>>, val valid: List<String>) : ActionError {
+        override val code = "INVALID_PARAM"
+        override val message get() = "Unknown parameter `$name` for $action: " + when {
+            suggested.size == 1 -> suggested.single().let { (n, d) -> "use `$n` (${d.trimEnd('.')})" }
+            suggested.isNotEmpty() -> "use one of " + suggested.joinToString { (n, d) -> "`$n` (${d.trimEnd('.')})" }
+            valid.isEmpty() -> "$action takes no parameter"
+            else -> "its parameters are ${valid.joinToString { "`$it`" }}"
+        }
+    }
+
     /** The game shows something else than the screen the action works on. */
     data class UnexpectedScreen(val expected: String, val actual: String) : ActionError {
         override val code = "UNEXPECTED_SCREEN"
@@ -47,6 +63,17 @@ sealed interface ActionError {
     data class HmCannotForget(val move: String) : ActionError {
         override val code = "HM_CANNOT_FORGET"
         override val message get() = "$move is an HM move: it can't be forgotten. Choose another move to forget, or keep the old moves (no `forget`)"
+    }
+
+    /**
+     * [pokemon] already knows four moves and the action didn't say which one to forget: refused before any menu opens
+     * (NOTES: `teach` looped on "Should a move be deleted?" then left the yes/no on screen). [forgettable]: the moves it
+     * can forget (`move:<id> <name>`; HM moves can't be).
+     */
+    data class ForgetNeeded(val pokemon: String, val forgettable: List<String>) : ActionError {
+        override val code = "INVALID_PARAM"
+        override val message get() = "$pokemon already knows four moves: give `forget`, the move to forget" +
+            if (forgettable.isEmpty()) " (it only knows HM moves, which can't be forgotten)" else ": ${forgettable.joinToString()}"
     }
 
     /**
@@ -179,6 +206,12 @@ enum class UnavailableReason {
      * and the application left movement puzzles to the agent ([ActionSettings.solvePuzzles] off): do it yourself.
      */
     PUZZLE_LEFT_TO_AGENT,
+
+    /**
+     * The game has it, but the library doesn't support it in this game yet (a screen it goes through isn't decoded):
+     * the same action as in every game, said unavailable rather than tried blindly.
+     */
+    NOT_SUPPORTED_BY_GAME,
 
     /**
      * The target is on another map, while the application hides where the ways out lead

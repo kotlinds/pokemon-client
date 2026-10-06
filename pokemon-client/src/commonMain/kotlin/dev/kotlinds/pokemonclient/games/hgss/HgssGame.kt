@@ -63,16 +63,21 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
         val hgssMemory = HgssMemory(memory, version)
         val mapped = services.enrich(mapper.map(state, hgssMemory), state, hgssMemory)
         val field = mapped.field ?: return mapped
+        // The save's event flags: which people of the other maps are there (an exit whose arrival someone blocks).
+        val flagged = reader.eventFlags()?.let { mapped.copy(eventFlags = it) } ?: mapped
+        return withMapState(flagged, field, reader, state)
+    }
+
+    /** [mapped] with what the ROM's maps add to its [field]: the puzzle, hidden items picked up, triggers, examinables. */
+    private fun withMapState(mapped: GameState, field: dev.kotlinds.pokemonclient.state.FieldState, reader: HgssReader, state: HgssState): GameState {
         val area = world?.areaOf(field.mapId)
         val people = field.objects.mapNotNull { o -> o.id.removePrefix("person:").toIntOrNull()?.let { HgssIlexFarfetchd.ObjectAt(it, o.x, o.y, o.facing) } }
         val puzzle = HgssPuzzles.read(field.mapId, HgssPuzzles.reads(reader), area, people)
         val pickedUp = area?.signs.orEmpty()
             .filter { it.zone == field.mapId && it.kind == SignKind.HIDDEN_ITEM && it.flag?.let(reader::flag) == true }
             .map { "hidden_item:${it.id}" }.toSet()
-        // Armed triggers whose script would end silently now (Trigger.quietWhen) start nothing: not shown as active.
-        val triggers = area?.triggers.orEmpty().filter { it.zone == field.mapId && it.startsScene(reader::variable, reader::flag) }
-            .flatMap { t -> (t.x until t.x + maxOf(1, t.width)).flatMap { x -> (t.y until t.y + maxOf(1, t.height)).map { y -> x to y } } }
-            .toSet()
+        // Placeholders and armed triggers whose script would end silently now (Trigger.quietWhen) start nothing: not active.
+        val triggers = area?.sceneTriggerTiles(field.mapId, reader::variable, reader::flag).orEmpty()
         val examinables = HgssExaminables.of(state.surroundings?.objects.orEmpty(), field.mapId, world ?: HgssData.world, reader::flag)
         if (puzzle == null && pickedUp.isEmpty() && triggers.isEmpty() && examinables.isEmpty()) return mapped
         return mapped.copy(field = field.copy(puzzle = puzzle, pickedUp = pickedUp, activeTriggers = triggers, examinables = examinables))

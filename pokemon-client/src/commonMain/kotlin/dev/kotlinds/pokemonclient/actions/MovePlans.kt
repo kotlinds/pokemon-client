@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.world.FieldMoves
 
 import dev.kotlinds.pokemonclient.Direction
+import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.state.kind
@@ -29,16 +30,20 @@ import dev.kotlinds.pokemonclient.world.NeedsMechanism
 import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Overlay
 import dev.kotlinds.pokemonclient.world.Pathfinder
-import dev.kotlinds.pokemonclient.world.PlatformPlanner
+import dev.kotlinds.pokemonclient.world.MechanismPlanner
+import dev.kotlinds.pokemonclient.world.SwitchEdge
 import dev.kotlinds.pokemonclient.world.RouteFailure
 import dev.kotlinds.pokemonclient.world.RouteOptions
 import dev.kotlinds.pokemonclient.world.StepWeights
 import dev.kotlinds.pokemonclient.world.EncounterConditions
+import dev.kotlinds.pokemonclient.world.EncounterTables
 import dev.kotlinds.pokemonclient.world.FIELD_HEIGHT_UNITS
 import dev.kotlinds.pokemonclient.world.TeleportLink
 import dev.kotlinds.pokemonclient.world.SignKind
 import dev.kotlinds.pokemonclient.world.TileKind
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.world.WorldLinks
+import dev.kotlinds.pokemonclient.world.WorldSource
 
 /**
  * Recipes of the movement actions: routes computed on the ROM's maps ([dev.kotlinds.pokemonclient.world]) with the
@@ -79,7 +84,7 @@ internal object MovePlans {
                     "the game only answers A facing someone at your own height (from the water, a person on the shore above " +
                         "says nothing): find the way onto their level (a beach, stairs), then interact again"))
             }
-            if (walked !is Walk.Arrived) return@ActionPlan walked.toOutcome(context) { "" }
+            if (walked !is Walk.Arrived || walked.through != null) return@ActionPlan walked.toOutcome(context) { "" }
             val field = walked.field
             val live = resolve(context, action.target, null, null) ?: target
             // Its height may only be known now (its map block loaded on the way): at another height than the player,
@@ -99,15 +104,8 @@ internal object MovePlans {
             }
             val beforeState = context.navigator.settle()
             val before = beforeState.screen
-            context.scope.tap(Button.A)
-            context.navigator.awaitChange(before)
-            var after = context.navigator.settle()
-            // Switches and levers are silent: their effect is the puzzle state changing (once the script has run).
+            val after = pressA(context, beforeState)
             val puzzleBefore = beforeState.field?.puzzle
-            if (puzzleBefore != null && after.screen is Screen.Overworld && after.field?.puzzle == puzzleBefore) {
-                context.scope.step(SWITCH_FRAMES)
-                after = context.navigator.settle()
-            }
             val puzzleAfter = after.field?.puzzle
             if (puzzleBefore != null && puzzleAfter != null && puzzleAfter != puzzleBefore) {
                 return@ActionPlan ActionOutcome.Done("the puzzle changed: ${puzzleChange(puzzleBefore, puzzleAfter)}")
@@ -119,6 +117,41 @@ internal object MovePlans {
             if (stillThere) return@ActionPlan ActionOutcome.Done("faced ${action.target} and pressed A: no message (nothing to say, or nothing to do there)")
         }
         ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "Couldn't get right in front of ${action.target} (it keeps moving, or only a diagonal tile is reachable)"))
+    }
+
+    /**
+     * Presses A (the player already faces what to press, checked by the caller) and waits for what follows: a screen
+     * change, or, for the silent switches and levers, the puzzle state changing once their script has run.
+     * [beforeState]: the state just before the press. The state after.
+     */
+    private fun pressA(context: PlanContext, beforeState: GameState): GameState {
+        context.scope.tap(Button.A)
+        context.navigator.awaitChange(beforeState.screen)
+        var after = context.navigator.settle()
+        val puzzleBefore = beforeState.field?.puzzle
+        if (puzzleBefore != null && after.screen is Screen.Overworld && after.field?.puzzle == puzzleBefore) {
+            context.scope.step(SWITCH_FRAMES)
+            after = context.navigator.settle()
+        }
+        return after
+    }
+
+    /**
+     * Presses the switch of [edge] (a lever of a route planned by [MechanismPlanner]): turns to face it (checked before
+     * A, the verification rule), presses A and checks the puzzle changed. [Walk.Arrived] when it did; null when it
+     * didn't (nothing was there to press: the caller plans again); a [Walk.Interrupted] / [Walk.Failed] otherwise.
+     */
+    private fun pressSwitch(context: PlanContext, edge: SwitchEdge): Walk? {
+        when (val faced = FieldControl.face(context, edge.direction, "press ${edge.target}")) {
+            is FieldControl.Facing.Faced -> Unit
+            is FieldControl.Facing.Stopped -> return Walk.Interrupted(faced.state)
+            is FieldControl.Facing.Failed -> return Walk.Failed(faced.error)
+        }
+        val before = context.navigator.settle()
+        val after = pressA(context, before)
+        val field = after.field
+        if (after.screen !is Screen.Overworld || field == null) return Walk.Interrupted(after)
+        return if (field.puzzle != before.field?.puzzle) Walk.Arrived(field) else null
     }
 
     /**
@@ -153,20 +186,35 @@ internal object MovePlans {
      */
     val step = ActionPlan<GameAction.Step> { action, context ->
         BikeRide.mount(context, action.options)
-        val start = context.state().field ?: return@ActionPlan notInField(context)
+        val state = context.state()
+        val start = state.field ?: return@ActionPlan notInField(context)
+        val mark = FieldControl.warpMark(context)
         val d = action.direction
         val tiles = (1..action.tiles).map { Node(start.x + d.dx * it, start.y + d.dy * it) }
-        when (val walked = WalkSegments.walk(context, WalkSegments.Segment(d, tiles), action.options)) {
+        // Run, but walk onto the tiles where wild Pokémon appear (like go_to): the pace changes tile by tile, held on.
+        val area = context.game.world?.areaOf(start.mapId)
+        val runOnto = area?.let { runOnto(it, start, action.options, stepWeights(context, state, action.options)) } ?: { _: Node -> action.options.run }
+        val walked = WalkSegments.walk(context, WalkSegments.line(d, tiles, runOnto))
+        // Into a door, onto stairs or a hole: the walk ends there (the rest of the tiles aren't walked on the new map).
+        FieldControl.awaitOutcome(context, mark)?.takeUnless { PuzzleSolving.isRide(it) }?.let { return@ActionPlan ActionOutcome.Done(through(context, it).describe(it.last.to)) }
+        when (walked) {
             is WalkSegments.Result.Reached -> ActionOutcome.Done("walked ${action.tiles} tile(s) ${d.name.lowercase()}, now at ${walked.field.x},${walked.field.y}")
             is WalkSegments.Result.Elsewhere -> ActionOutcome.Done("moved to ${walked.field.x},${walked.field.y} (not a straight walk: slid, pushed, or another map)")
             is WalkSegments.Result.Refused -> {
                 val done = kotlin.math.abs(walked.from.x - start.x) + kotlin.math.abs(walked.from.y - start.y)
                 // Walking into a boulder (Strength used) pushes it while the player stays: that's what the step did.
                 pushedAhead(context, start, walked.from.x + d.dx, walked.from.y + d.dy)?.let { return@ActionPlan ActionOutcome.Done(it) }
+                // A wild battle (or a script) starting as the player stopped looks like a refused step at first.
+                val now = context.navigator.settle()
+                if (now.screen !is Screen.Overworld || now.battle != null) return@ActionPlan ActionOutcome.Failed(ActionError.Interrupted(cause(now), "$done tile(s)"))
+                // Standing on a warp taken by entering it (just arrived on it): the press did nothing, say how to take it.
+                val underFeet = area?.warps
+                    ?.firstOrNull { it.zone == start.mapId && it.x == walked.from.x && it.y == walked.from.y && it.trigger == WarpTrigger.Enter }
                 ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH,
-                    "blocked after $done tile(s) at ${walked.from.x},${walked.from.y}: can't go ${d.name.lowercase()} from there"))
+                    "blocked after $done tile(s) at ${walked.from.x},${walked.from.y}: can't go ${d.name.lowercase()} from there (${refusalCause(context, walked.from, d)})",
+                    underFeet?.let { "you stand on warp:${it.id}, taken by stepping onto it (pressing on it does nothing): go_to warp:${it.id} steps off and back on" }))
             }
-            is WalkSegments.Result.Stopped -> ActionOutcome.Failed(ActionError.Interrupted(cause(walked.state), "${walked.walked} tile(s)"))
+            is WalkSegments.Result.Stopped -> ActionOutcome.Failed(ActionError.Interrupted(cause(context, walked.state), "${walked.walked} tile(s)"))
         }
     }
 
@@ -183,34 +231,107 @@ internal object MovePlans {
             "; you stay at ${now.x},${now.y}"
     }
 
+    /**
+     * Why the game may have refused the step from [from] going [direction], from what the RAM and the map say now: who
+     * stands on the next tile (the Pokémon following the player, a person), or what the map has there (a wall, a
+     * surface at another height: a cliff, the void under a walkway, which the text map draws like floor). "nothing on
+     * the map explains it" otherwise (an invisible wall, or someone who has moved away since).
+     */
+    internal fun refusalCause(context: PlanContext, from: Node, direction: Direction): String {
+        val x = from.x + direction.dx
+        val y = from.y + direction.dy
+        val field = context.navigator.settle().field ?: return "unknown"
+        field.objects.firstOrNull { it.x == x && it.y == y }?.let { o ->
+            return if (o.kind == FieldObjectKind.FOLLOWER) "your Pokémon following you stands on $x,$y" else "${objectTargetId(o)} (${o.label}) stands on $x,$y"
+        }
+        val area = context.game.world?.areaOf(field.mapId) ?: return "unknown map"
+        val tile = area.tile(x, y) ?: return "$x,$y is outside the map"
+        if (tile.blocked || tile.kind == TileKind.Wall) return "$x,$y is a wall or an obstacle"
+        val here = area.tile(from.x, from.y)?.heights.orEmpty()
+        val height = if (field.x == from.x && field.y == from.y) field.height * FIELD_HEIGHT_UNITS else here.getOrNull(from.level) ?: here.firstOrNull()
+        if (height != null && tile.heights.isNotEmpty() && tile.heights.none { kotlin.math.abs(it - height) <= RouteOptions.DEFAULT_MAX_CLIMB }) {
+            return "$x,$y is on another level (height ${tile.heights.joinToString("/") { (it / FIELD_HEIGHT_UNITS).toString() }} there, " +
+                "${height / FIELD_HEIGHT_UNITS} here: a cliff, or the void beside a walkway; see levels)"
+        }
+        return "nothing on the map explains it at $x,$y: an invisible wall, or someone who has moved away"
+    }
+
     /** Most tiles one [GameAction.Step] walks. */
     const val MAX_STEP_TILES = 20
 
-    /** Walks to the nearest tall grass, then back and forth in it until a wild Pokémon appears. */
+    /**
+     * Walks to the nearest tile of this map where wild Pokémon appear ([encounterTile]: tall grass, a cave's floor, the
+     * water when surfing), then back and forth there until one appears: every step onto such a tile is an encounter
+     * check, so a single tile is paced from a neighbour.
+     */
     val findEncounter = ActionPlan<GameAction.FindEncounter> { _, context ->
-        val start = context.state().field ?: return@ActionPlan notInField(context)
-        val area = context.game.world?.areaOf(start.mapId) ?: return@ActionPlan noMap(start)
-        val grass = Target(GRASS, null, null, null, isGoal = { node -> area.tile(node.x, node.y)?.kind == TileKind.TallGrass })
-        when (val walked = walkTo(context, grass, MoveOptions())) {
-            is Walk.Arrived -> Unit
+        val state = context.state()
+        val start = state.field ?: return@ActionPlan notInField(context)
+        val world = context.game.world ?: return@ActionPlan noMap(start)
+        val area = world.areaOf(start.mapId) ?: return@ActionPlan noMap(start)
+        val surfing = start.movement == MovementMode.SURF
+        // Looking for wild Pokémon: running onto the encounter tiles doubles the chance of each step.
+        val pacing = MoveOptions(runInEncounterAreas = true)
+        val conditions = encounterConditions(state, pacing)
+        val ground = if (surfing) "water" else "tall grass or cave floor"
+        fun encounters(x: Int, y: Int, under: EncounterConditions = conditions) = encounterTile(world, area, start.mapId, x, y, surfing, under)
+        val spot = Target(ENCOUNTER_GROUND, null, null, null, isGoal = { node -> encounters(node.x, node.y) })
+        when (val walked = walkTo(context, spot, pacing)) {
+            is Walk.Arrived -> if (walked.through != null) return@ActionPlan walked.toOutcome(context) { "" }
             is Walk.Interrupted -> return@ActionPlan if (walked.state.battle != null) ActionOutcome.Done("wild battle") else walked.toOutcome(context) { "" }
+            is Walk.NoRoute -> {
+                // A Repel keeping every wild Pokémon of the map away: the tiles are there, nothing can appear.
+                val repelled = conditions.repelLevel != null && (area.zoneBounds[start.mapId] ?: return@ActionPlan walked.toOutcome(context) { "" }).let { b ->
+                    (b[1]..b[3]).any { y -> (b[0]..b[2]).any { x -> encounters(x, y, conditions.copy(repelLevel = null)) } }
+                }
+                val detail = if (repelled) "your Repel keeps the wild Pokémon of this map away (lead level ${conditions.repelLevel}): wait for it to wear off"
+                else "no $ground with wild Pokémon reachable on this map from ${start.x},${start.y}"
+                return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, detail))
+            }
             else -> return@ActionPlan walked.toOutcome(context) { "" }
         }
-        // Pace between two grass tiles: each step is a chance of an encounter.
+        // Pace: onto another encounter tile next to this one, or off this one and back (each entry is a check).
         repeat(MAX_PACING_STEPS) {
             val field = context.state().field ?: return@ActionPlan battleOrStop(context)
-            val back = Direction.entries.firstOrNull { d ->
-                area.tile(field.x + d.dx, field.y + d.dy)?.let { it.kind == TileKind.TallGrass && !it.blocked } == true
-            } ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "This patch of tall grass is a single tile"))
-            when (val step = stepOnce(context, back, Node(field.x + back.dx, field.y + back.dy), MoveOptions())) {
-                is StepResult.Moved -> Unit
-                is StepResult.Stopped -> return@ActionPlan battleOrStop(context)
-                is StepResult.Refused -> Unit
-                is StepResult.Failed -> return@ActionPlan ActionOutcome.Failed(step.error)
+            fun free(x: Int, y: Int) = area.tile(x, y)?.let { !it.blocked && it.kind != TileKind.Wall } == true &&
+                field.objects.none { it.kind != FieldObjectKind.FOLLOWER && it.x == x && it.y == y } && (surfing || area.tile(x, y)?.kind !is TileKind.Water)
+            val ways = Direction.entries.filter { d -> free(field.x + d.dx, field.y + d.dy) }
+                .sortedByDescending { d -> encounters(field.x + d.dx, field.y + d.dy) }
+            if (ways.isEmpty()) return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "no free tile next to ${field.x},${field.y} to pace to"))
+            var moved = false
+            for (d in ways) {
+                when (val step = stepOnce(context, d, Node(field.x + d.dx, field.y + d.dy), pacing)) {
+                    is StepResult.Moved -> moved = true
+                    is StepResult.Stopped -> return@ActionPlan battleOrStop(context)
+                    // A battle starting as the step ends looks like a refused step at first: settle before trying another way.
+                    is StepResult.Refused -> context.navigator.settle()
+                    is StepResult.Failed -> return@ActionPlan ActionOutcome.Failed(step.error)
+                }
+                if (context.state().battle != null || context.state().screen !is Screen.Overworld) return@ActionPlan battleOrStop(context)
+                if (moved) break
             }
-            if (context.state().battle != null || context.state().screen !is Screen.Overworld) return@ActionPlan battleOrStop(context)
+            if (!moved) return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH,
+                "every step from ${field.x},${field.y} was refused (${refusalCause(context, Node(field.x, field.y), ways.first())})"))
         }
-        ActionOutcome.Failed(ActionError.Timeout("no wild Pokémon after $MAX_PACING_STEPS steps in the grass"))
+        ActionOutcome.Failed(ActionError.Timeout("no wild Pokémon after $MAX_PACING_STEPS steps on the $ground"))
+    }
+
+    /**
+     * True when stepping onto ([x], [y]) of [area] can start a wild battle under [conditions]: a land encounter tile
+     * ([dev.kotlinds.pokemonclient.world.TileInfo.landEncounters]: tall grass, a cave's floor) on foot, water with
+     * encounters when [surfing], in a zone where the game's tables have Pokémon for it
+     * ([WorldSource.encounterChance] > 0: the same chances as the routes' [StepWeights]). When the game's tables are
+     * unknown ([EncounterTables.UNKNOWN]), the tile's kind alone tells.
+     */
+    internal fun encounterTile(world: WorldSource, area: Area, zone: Int, x: Int, y: Int, surfing: Boolean, conditions: EncounterConditions): Boolean {
+        val tile = area.tile(x, y)?.takeIf { !it.blocked } ?: return false
+        val kind = tile.kind
+        val water = kind is TileKind.Water && kind.wildEncounters
+        if (if (surfing) !water else !tile.landEncounters) return false
+        return when (world.encounterTables) {
+            EncounterTables.UNKNOWN -> true
+            EncounterTables.DECODED -> world.encounterChance(area.zoneAt(x, y) ?: zone, water = surfing, conditions) > 0.0
+        }
     }
 
     /** What changed between two readings of a map puzzle, by id (shutters opened / closed, levers, routes). */
@@ -236,25 +357,35 @@ internal object MovePlans {
         val warp: Boolean? = null,
         val adjacent: Boolean = false,
         val isGoal: ((Node) -> Boolean)? = null,
-        /** For warps taken by pressing a direction once on them (exit mats, stairs): that direction. */
-        val exit: Direction? = null,
+        /** For a warp: what takes it ([WarpTrigger]: entering its tile, a press on it, nothing); null for a hole. */
+        val trigger: WarpTrigger? = null,
         /**
          * Without a tile ([x] null): the tiles that end the walk and may be entered although they are on another map
          * (`exit:<direction>`: the neighbour's first tiles), for walks kept on the player's map ([Overlay.zone]).
          */
         val enter: Set<Pair<Int, Int>> = emptySet(),
+        /**
+         * For a map object talked to (or picked up) from next to it: the height it answers A at, when known ([isGoal]
+         * then keeps only the tiles next to it at that height, [talkFrom]).
+         */
+        val talkHeight: Int? = null,
     )
 
-    internal fun resolve(context: PlanContext, target: String?, x: Int?, y: Int?): Target? {
-        val state = context.state()
+    internal fun resolve(context: PlanContext, target: String?, x: Int?, y: Int?): Target? = resolve(context.game, context.state(), context.settings, target, x, y)
+
+    /**
+     * [target] (or the tile [x], [y]) of [state]'s map as go_to and interact walk to it, under [settings] (hidden items
+     * only when revealed); also what the view's reachability ([ReachSurvey]) measures. Null when unknown.
+     */
+    internal fun resolve(game: PokemonGame, state: GameState, settings: ActionSettings, target: String?, x: Int?, y: Int?): Target? {
         val field = state.field
-        val area = field?.let { context.game.world?.areaOf(it.mapId) }
+        val area = field?.let { game.world?.areaOf(it.mapId) }
         if (target == null) {
             if (x == null || y == null) return null
             // A door / stairs / exit tile: going there means going through.
             val warp = area?.warps?.firstOrNull { it.x == x && it.y == y }
             val hole = area?.triggerWarps?.any { it.x == x && it.y == y } == true
-            return Target("$x,$y", x, y, warp = warp != null || hole, exit = warp?.exitDirection)
+            return Target("$x,$y", x, y, warp = warp != null || hole, trigger = warp?.trigger)
         }
         if (field == null || area == null) return null
         if (target == PC) {
@@ -267,21 +398,26 @@ internal object MovePlans {
         val (kind, id) = target.split(':', limit = 2).takeIf { it.size == 2 } ?: return null
         val number = id.toIntOrNull()
         return when (kind) {
-            "person" -> field.objects.firstOrNull { it.id == target }?.let { Target(target, it.x, it.y, adjacent = true, isGoal = talkFrom(area, it)) }
+            "person" -> field.objects.firstOrNull { it.id == target }?.let { Target(target, it.x, it.y, adjacent = true, isGoal = talkFrom(area, it), talkHeight = knownHeight(area, it)) }
             // Item balls are objects of the map: `item:N` is the object `person:N` lying on the ground.
             "item" -> field.objects.firstOrNull { it.kind == FieldObjectKind.ITEM_BALL && it.id == "person:$id" }
-                ?.let { Target(target, it.x, it.y, adjacent = true, isGoal = talkFrom(area, it)) }
-            "warp" -> area.warps.firstOrNull { it.zone == field.mapId && it.id == number }?.let { Target(target, it.x, it.y, warp = true, exit = it.exitDirection) }
+                ?.let { Target(target, it.x, it.y, adjacent = true, isGoal = talkFrom(area, it), talkHeight = knownHeight(area, it)) }
+            "warp" -> area.warps.firstOrNull { it.zone == field.mapId && it.id == number }?.let { Target(target, it.x, it.y, warp = true, trigger = it.trigger) }
             "hole" -> area.triggerWarps.firstOrNull { it.zone == field.mapId && it.trigger == number }?.let { Target(target, it.x, it.y, warp = true) }
             // `sign:N` also reaches a hidden item (older ids); `hidden_item:N` only items not picked up yet. Hidden items
             // are walkthrough knowledge: unknown targets unless the application reveals them ([ActionSettings.revealHidden]).
-            "sign" -> area.signs.firstOrNull { it.zone == field.mapId && it.id == number && (it.kind == SignKind.SIGN || context.settings.revealHidden) }
+            "sign" -> area.signs.firstOrNull { it.zone == field.mapId && it.id == number && (it.kind == SignKind.SIGN || settings.revealHidden) }
                 ?.let { Target(target, it.x, it.y, adjacent = true) }
-            "hidden_item" -> area.signs.firstOrNull { it.zone == field.mapId && it.id == number && it.kind == SignKind.HIDDEN_ITEM && target !in field.pickedUp && context.settings.revealHidden }
+            "hidden_item" -> area.signs.firstOrNull { it.zone == field.mapId && it.id == number && it.kind == SignKind.HIDDEN_ITEM && target !in field.pickedUp && settings.revealHidden }
                 ?.let { Target(target, it.x, it.y, adjacent = true) }
             // Invisible things that answer A: known like hidden items (walkthrough), or when the game shows a cue.
-            "examine" -> field.examinables.firstOrNull { it.id == target && (it.cue || context.settings.revealHidden) }
+            "examine" -> field.examinables.firstOrNull { it.id == target && (it.cue || settings.revealHidden) }
                 ?.let { e -> Target(target, e.x, e.y, adjacent = true, isGoal = examineFrom(area, e.x, e.y)) }
+            // A puzzle's teleport usable now (a cart waiting at its station, a pad): walk onto the tile that starts it,
+            // the ride that follows ends the walk ([PuzzleSolving.isMechanism]).
+            "cart", "teleport" -> field.puzzle?.teleports?.firstOrNull { it.id == target }?.from
+                ?.minByOrNull { kotlin.math.abs(it.x - field.x) + kotlin.math.abs(it.y - field.y) }
+                ?.let { Target(target, it.x, it.y) }
             else -> null
         }
     }
@@ -351,6 +487,7 @@ internal object MovePlans {
                     else if ("hidden_item:${s.id}" !in field.pickedUp && context.settings.revealHidden) add("hidden_item:${s.id}")
                 }
                 field.examinables.filter { it.cue || context.settings.revealHidden }.forEach { add(it.id) }
+                field.puzzle?.teleports.orEmpty().filter { it.id.startsWith("cart:") || it.id.startsWith("teleport:") }.forEach { add(it.id) }
             }
             addAll(extra)
         }
@@ -371,6 +508,8 @@ internal object MovePlans {
             val field: FieldState,
             /** What the walk did besides walking (field moves used, objects pushed), for the agent. */
             val notes: List<String> = emptyList(),
+            /** The warp that ended the walk (a walk stops at the first one), or null when it ended by walking. */
+            val through: Through? = null,
         ) : Walk
         /**
          * Stopped by the game; [at] is the tile the player was stepping onto, when known. [steps]: tiles really moved
@@ -382,6 +521,11 @@ internal object MovePlans {
             val detail: String,
             /** What the party can do with each field move (to say what's missing when one is needed). */
             val access: Map<FieldMoveKind, FieldMoveAccess> = emptyMap(),
+            /**
+             * The steps the game refused on the way before no route was left ([refusalCause] of each): the map alone
+             * doesn't know them, so a diagnosis from the map (another floor, ledges) must not replace this one.
+             */
+            val refusals: List<String> = emptyList(),
         ) : Walk
         data class Stuck(val detail: String) : Walk
 
@@ -410,39 +554,71 @@ internal object MovePlans {
 
     private fun walkTo(context: PlanContext, target: Target, options: MoveOptions, notes: MutableList<String>): Walk {
         val refused = mutableSetOf<Pair<Node, Direction>>()
-        val startField = context.state().field
+        // Each refused step, with what may have refused it ([refusalCause]): told when the walk gives up.
+        val refusals = mutableListOf<String>()
+        fun refuse(from: Node, direction: Direction) {
+            val cause = refusalCause(context, from, direction)
+            refusals += "${direction.name.lowercase()} from ${from.x},${from.y} ($cause)"
+            if (!objectAt(context, from.x + direction.dx, from.y + direction.dy)) refused += from to direction
+        }
+        // Every move below ends with the warp rule ([FieldControl.awaitOutcome]): the walk stops at the first warp.
+        var mark = FieldControl.warpMark(context)
+        fun warped(): Walk.Arrived? {
+            val warped = FieldControl.awaitOutcome(context, mark) ?: return null
+            // A ride of the map's puzzle (a pad, a cart, a platform) is part of the way, not a warp: the walk goes on
+            // (or arrives, when the mechanism was the destination) and the watch starts again from there.
+            if (PuzzleSolving.isRide(warped)) {
+                mark = FieldControl.warpMark(context)
+                return null
+            }
+            return arrivedThrough(context, warped, notes)
+        }
+        // A warp nothing takes (only the other side's arrival): say so rather than walk there and wait.
+        if (target.warp == true && target.trigger == WarpTrigger.Never) return Walk.Failed(neverTaken(target))
         repeat(MAX_REPLANS) {
             val state = context.navigator.settle()
+            // A warp the last move ended with (every move below waited for it already): stop there.
+            if (context.navigator.warps.since(mark) != null) warped()?.let { return it }
             val field = state.field ?: return Walk.Interrupted(state)
             if (state.screen !is Screen.Overworld) return Walk.Interrupted(state)
-            // Through the targeted door already (its animation outlasted a step): arrived. Walking into the next zone
-            // of the overworld (a ledge jumped onto Route 5) changes the map id but not the area: not a warp.
-            if (target.warp == true && startField != null && changedArea(context, field, startField)) return Walk.Arrived(field)
             val area = context.game.world?.areaOf(field.mapId) ?: return Walk.NoRoute(RouteFailure.StartUnknown, noMapDetail(field))
             val pathfinder = Pathfinder(area, overlay(context, field, refused))
             val start = pathfinder.nodeOf(field)
             val goalTiles = goalTiles(area, target)
             val isGoal: (Node) -> Boolean = target.isGoal ?: { node -> (node.x to node.y) in goalTiles }
             if (isGoal(start) && target.warp != true) return Walk.Arrived(field)
-            // On the targeted exit mat already (just came in through it): only the press towards the exit is left.
-            if (target.warp == true && target.exit != null && field.x == target.x && field.y == target.y) return takeExit(context, target, target.exit, field, options)
+            // On the targeted warp already (just came in through it): what the game needs to take it from there.
+            if (target.warp == true && target.trigger != null && field.x == target.x && field.y == target.y) {
+                return takeWarpHere(context, target, target.trigger, field, options, mark, notes)
+            }
             val access = FieldMoveWalk.access(context, state)
-            val routeOptions = routeOptions(field, options, FieldMoves.usable(access), stepWeights(context, state, options))
+            val weights = stepWeights(context, state, options)
+            val routeOptions = routeOptions(field, options, FieldMoves.usable(access), weights)
+            // B held onto each tile as the route was planned: run, but walk where wild Pokémon appear.
+            val runOnto = runOnto(area, field, options, weights)
             // A tile target may be entered whatever it is (a warp, a scene trigger); targets reached with A never are.
             val enterable = if (target.adjacent) emptySet() else goalTiles
-            // Moving platforms (Blackthorn Gym): plan the rides; a plain route would never step on a trigger knowingly.
-            // Movement puzzles left to the agent ([ActionSettings.solvePuzzles] off): only walk, and say what to operate.
+            // Movement puzzles with a state (Blackthorn Gym platforms, Azalea Gym carts and levers): plan the rides and
+            // the presses; a plain route would never step on a trigger knowingly. Movement puzzles left to the agent
+            // ([ActionSettings.solvePuzzles] off): only walk, and say what to operate.
             val solve = context.settings.solvePuzzles
-            val ridden = if (!solve) null else field.puzzle?.mechanics?.let { PlatformPlanner(area, overlay(context, field, refused), it).route(start, routeOptions, enterable, isGoal) }
-            val route = ridden ?: when (val result = pathfinder.route(start, routeOptions, enterable, isGoal)) {
+            val ridden = if (!solve) null else field.puzzle?.mechanics?.let { MechanismPlanner(area, overlay(context, field, refused), it).route(start, routeOptions, enterable, isGoal) }
+            val route = ridden ?: when (val result = pathfinder.route(start, routeOptions, enterable, beside(area, target), isGoal)) {
                 is Pathfinder.Result.Found -> result.route
                 // No plain route: maybe one moving boulders / ice blocks out of the way.
                 is Pathfinder.Result.Failed -> (if (solve) pushRoute(area, overlay(context, field, refused), start, routeOptions, enterable, isGoal) else null)
-                    ?: return Walk.NoRoute(
-                        (if (solve) null else PuzzleSolving.diagnose(area, field, overlay(context, field, refused, solve = true), start, routeOptions, enterable, isGoal))
-                            ?: result.failure,
-                        "no way to ${target.id} from ${field.x},${field.y}" + if (solve) "" else " by walking only", access,
-                    )
+                    ?: run {
+                        val failure = (if (solve) null else PuzzleSolving.diagnose(area, field, overlay(context, field, refused, solve = true), start, routeOptions, enterable, isGoal))
+                            ?: result.failure
+                        // What the way needs, in the words of the view's reachability (the same diagnosis: ReachSurvey).
+                        val needs = Reachability.of(failure, result.blockers, field)?.suffix().orEmpty()
+                        return Walk.NoRoute(
+                            failure,
+                            "no way to ${target.id} from ${field.x},${field.y}" + (if (solve) "" else " by walking only") +
+                                (if (refusals.isEmpty()) "" else " once the game refused ${refusals.size} step(s): " + refusals.joinToString("; ")) + needs,
+                            access, refusals.toList(),
+                        )
+                    }
             }
             avoidanceNotes(route, options).forEach { if (it !in notes) notes += it }
             val scenes = sceneTiles(area, field, overlay(context, field, refused), if (target.warp == true) goalTiles else emptySet())
@@ -452,28 +628,23 @@ internal object MovePlans {
             while (++index < route.edges.size) {
                 val edge = route.edges[index]
                 // Straight runs of plain steps: walked holding the direction (smooth), checked on every tile.
-                val segment = WalkSegments.segmentAt(route.edges, index, area)
+                val segment = WalkSegments.segmentAt(route.edges, index, area, runOnto)
                 if (segment != null) {
-                    when (val walked = WalkSegments.walk(context, segment, options, scenes)) {
+                    val walked = WalkSegments.walk(context, segment, scenes)
+                    warped()?.let { return it }
+                    when (walked) {
                         is WalkSegments.Result.Reached -> {
-                            if (changedArea(context, walked.field, field)) return Walk.Arrived(walked.field)
                             from = segment.tiles.last()
                             index += segment.tiles.size - 1
                             continue
                         }
                         is WalkSegments.Result.Elsewhere -> {
-                            if (changedArea(context, walked.field, field)) return Walk.Arrived(walked.field)
-                            // The destination was a mechanism (a platform trigger) that carried the player away: done.
-                            if (!target.adjacent && segment.tiles.any { (it.x to it.y) in goalTiles && PuzzleSolving.isMechanism(field, it.x, it.y) }) {
-                                return Walk.Arrived(walked.field)
-                            }
+                            if (carriedFromGoal(field, target, goalTiles, segment.tiles)) return Walk.Arrived(rideEnd(context, walked.field))
                             return@repeat
                         }
                         is WalkSegments.Result.Refused -> {
                             val stuck = walked.from
-                            if (!objectAt(context, stuck.x + segment.direction.dx, stuck.y + segment.direction.dy)) {
-                                refused += (route.edges.map { it.to }.firstOrNull { it.x == stuck.x && it.y == stuck.y } ?: start) to segment.direction
-                            }
+                            refuse(route.edges.map { it.to }.firstOrNull { it.x == stuck.x && it.y == stuck.y } ?: start, segment.direction)
                             return@repeat
                         }
                         // [at]: the tile the player was stepping onto (a scene trigger there is what started).
@@ -484,7 +655,9 @@ internal object MovePlans {
                     }
                 }
                 if (edge is FieldMoveEdge) {
-                    when (val used = FieldMoveWalk.use(context, edge, options)) {
+                    val used = FieldMoveWalk.use(context, edge, options)
+                    warped()?.let { return it }
+                    when (used) {
                         is FieldMoveWalk.Use.Done -> {
                             with(FieldMoveWalk) { notes += "used ${edge.move.label()} at ${from.x},${from.y}" }
                             if (used.field.x != edge.to.x || used.field.y != edge.to.y) return@repeat
@@ -502,17 +675,36 @@ internal object MovePlans {
                         is FieldMoveWalk.Use.Failed -> return Walk.Failed(activated.error)
                     }
                 }
+                if (edge is SwitchEdge) {
+                    when (val pressed = pressSwitch(context, edge)) {
+                        is Walk.Arrived -> {
+                            notes += "pressed ${edge.target}"
+                            from = edge.to
+                            continue
+                        }
+                        // The puzzle didn't change: plan again from the state read now (at most a few times).
+                        null -> {
+                            refused += from to edge.direction
+                            return@repeat
+                        }
+                        else -> return pressed
+                    }
+                }
                 if (edge is Edge.Teleport) {
                     when (val ride = teleport(context, edge, options)) {
                         is StepResult.Moved -> {
-                            if (changedArea(context, ride.field, field)) return Walk.Arrived(ride.field)
+                            // A ride to another map is a warp like any other: the walk stops there.
+                            if (ride.field.mapId != field.mapId) warped()?.let { return it }
+                            // A planned teleport on this map (a pad, a cart, a lift) is part of the way, not a warp
+                            // to stop at: the watch starts again from where it left the player.
+                            mark = FieldControl.warpMark(context)
                             // Not where the teleport should have led (it didn't fire, or went elsewhere): compute again.
                             if (ride.field.x != edge.to.x || ride.field.y != edge.to.y) return@repeat
                             from = edge.to
                             continue
                         }
                         is StepResult.Refused -> {
-                            refused += from to edge.direction
+                            refuse(from, edge.direction)
                             return@repeat
                         }
                         is StepResult.Stopped -> return Walk.Interrupted(ride.state)
@@ -521,103 +713,181 @@ internal object MovePlans {
                 }
                 val intoWarp = area.warps.any { it.x == edge.to.x && it.y == edge.to.y }
                 val slide = (edge as? Edge.Slide)?.tiles?.size ?: (edge as? PushEdge)?.takeIf { !it.needsStrength }?.tiles?.size ?: 0
-                val intoGoalWarp = target.warp == true && (edge.to.x to edge.to.y) in goalTiles
                 val long = edge is Edge.Jump || intoWarp || (edge as? PushEdge)?.needsStrength == true
                 val step = if (edge is PushEdge && edge.needsStrength) FieldMoveWalk.push(context, edge, options)
-                else stepOnce(context, edge.direction, edge.to, options, long = long, slide = slide)
+                else stepOnce(context, edge.direction, edge.to, options, long = long, slide = slide, run = runOnto(edge.to))
+                // Entering a door, stairs or a hole (or any warp on the way): the walk is over there.
+                warped()?.let { return it }
                 when (step) {
                     is StepResult.Moved -> {
                         if (edge is PushEdge && step.field.x == edge.to.x && step.field.y == edge.to.y) {
                             notes += "pushed the ${if (edge.needsStrength) "boulder" else "ice block"} at ${edge.objectFrom.first},${edge.objectFrom.second} to ${edge.objectTo.first},${edge.objectTo.second}"
                         }
-                        // Entering a door / warp changes the map: the walk is over (stepping or jumping into the next
-                        // zone of the same area is not a warp: the walk goes on).
-                        if (changedArea(context, step.field, field)) return Walk.Arrived(step.field)
-                        // The targeted warp leads to this same map (a gym's pad): it moved the player, done.
-                        if (intoGoalWarp && (step.field.x != edge.to.x || step.field.y != edge.to.y)) return Walk.Arrived(step.field)
                         // On a scene trigger: its script runs now (and may move the player back), the walk stops there.
                         if ((step.field.x to step.field.y) in scenes && step.field.x == edge.to.x && step.field.y == edge.to.y) {
                             return Walk.Interrupted(sceneStarted(context), at = edge.to.x to edge.to.y)
                         }
-                        // The destination was a mechanism (a platform trigger) that carried the player away: done.
-                        if ((step.field.x != edge.to.x || step.field.y != edge.to.y) && !target.adjacent && (edge.to.x to edge.to.y) in goalTiles &&
-                            PuzzleSolving.isMechanism(field, edge.to.x, edge.to.y)) return Walk.Arrived(step.field)
+                        if ((step.field.x != edge.to.x || step.field.y != edge.to.y) && carriedFromGoal(field, target, goalTiles, listOf(edge.to))) return Walk.Arrived(rideEnd(context, step.field))
                         // Slid, pushed or overshot elsewhere than planned: compute the route again from where the
                         // player really is.
                         if (step.field.x != edge.to.x || step.field.y != edge.to.y) return@repeat
                         from = edge.to
                     }
                     is StepResult.Refused -> {
-                        if (!objectAt(context, from.x + edge.direction.dx, from.y + edge.direction.dy)) refused += from to edge.direction
+                        refuse(from, edge.direction)
                         return@repeat
                     }
-                    is StepResult.Stopped -> {
-                        // A hole (or a warp script) starts at once: wait for it to take the player to the other map.
-                        if (intoGoalWarp) awaitMapChange(context, field.mapId, from = edge.to.x to edge.to.y)?.let { return Walk.Arrived(it) }
-                        return Walk.Interrupted(step.state, at = edge.to.x to edge.to.y)
-                    }
+                    is StepResult.Stopped -> return Walk.Interrupted(step.state, at = edge.to.x to edge.to.y)
                     is StepResult.Failed -> return Walk.Failed(step.error)
                 }
             }
-            // On the targeted door / hole: its transition may still be running.
-            if (target.warp == true && target.exit == null) {
-                awaitMapChange(context, field.mapId, WARP_START_FRAMES, from = target.x?.let { x -> target.y?.let { x to it } })?.let { return Walk.Arrived(it) }
-            }
             val end = context.navigator.settle()
+            if (context.navigator.warps.since(mark) != null) warped()?.let { return it }
             val endField = end.field ?: return Walk.Interrupted(end)
-            // Exit mats and stairs: standing on them isn't enough, the game waits for a press towards the exit. The
-            // walk may have crossed into the next zone of the area on the way (Pewter City → Route 2's gatehouse mat):
-            // still on this area means not through yet, and the exit is pressed from the zone the player is on now.
-            if (target.warp == true && !changedArea(context, endField, field) && target.exit != null) return takeExit(context, target, target.exit, endField, options)
-            val endNode = pathfinder.nodeOf(endField)
-            if (!isGoal(endNode) && target.warp != true) return@repeat
-            return Walk.Arrived(endField)
+            if (target.warp != true) {
+                val carried = route.end?.let { carriedFromGoal(field, target, goalTiles, listOf(it)) } == true
+                if (!isGoal(pathfinder.nodeOf(endField)) && !carried) return@repeat
+                return Walk.Arrived(if (carried) rideEnd(context, endField) else endField)
+            }
+            // On the targeted warp and still on this map: an exit mat waits for its press; a door or an entrance that
+            // didn't fire on entering (or anything else) is taken the way the game needs from here.
+            if (target.trigger != null && endField.x == target.x && endField.y == target.y) {
+                return takeWarpHere(context, target, target.trigger, endField, options, mark, notes)
+            }
         }
-        return Walk.Stuck("the game refused ${refused.size} steps on the way to ${target.id}")
+        val refusedSteps = "the game refused ${refusals.size} step(s) on the way" + (if (refusals.isEmpty()) "" else ": " + refusals.joinToString("; "))
+        return Walk.Stuck(if (target.warp == true) "couldn't take ${target.id}: no warp took the player anywhere, and $refusedSteps"
+        else "$refusedSteps to ${target.id}")
     }
 
     /**
-     * Standing on an exit mat or stairs, the game waits for a press towards the exit. Ladders and stairs: the press
-     * starts a climb then a fade; the map changes well after the press, so wait for the change itself before
-     * concluding (the step alone looks refused).
+     * Takes the warp [target] the player stands on (arrived on it, or walked onto it without it firing), the way its
+     * [trigger] asks (the game's rules, [WarpTrigger]):
+     * - an exit mat, side stairs or a ladder: the press towards its direction;
+     * - a door, a north entrance, a warp panel: they fire on entering the tile, pressing on them does nothing (the
+     *   "TIMEOUT: the warp didn't take the player anywhere" of cave exits taken going north): step off onto a free
+     *   tile next to it, then back on, the step back facing the warp's own way when that tile is free.
+     * Each press is verified ([FieldControl.awaitOutcome]): the warp taken, else at most [MAX_STEP_OFF_TRIES] tiles
+     * tried, then a typed error.
      */
-    private fun takeExit(context: PlanContext, target: Target, exit: Direction, field: FieldState, options: MoveOptions): Walk {
-        val pushed = stepOnce(context, exit, Node(Int.MIN_VALUE, Int.MIN_VALUE), options)
-        if (pushed is StepResult.Moved && pushed.field.mapId != field.mapId) return Walk.Arrived(pushed.field)
-        // A ladder to another part of this same map (Diglett's Cave) moves the player without changing the map.
-        awaitMapChange(context, field.mapId, from = target.x?.let { x -> target.y?.let { x to it } })?.let { return Walk.Arrived(it) }
+    private fun takeWarpHere(context: PlanContext, target: Target, trigger: WarpTrigger, field: FieldState, options: MoveOptions, mark: Int, notes: List<String>): Walk {
+        val here = Node(field.x, field.y)
+        when (trigger) {
+            WarpTrigger.Never -> return Walk.Failed(neverTaken(target))
+            is WarpTrigger.Press -> {
+                val pushed = stepOnce(context, trigger.direction, Node(Int.MIN_VALUE, Int.MIN_VALUE), options)
+                FieldControl.awaitOutcome(context, mark)?.let { return arrivedThrough(context, it, notes) }
+                if (pushed is StepResult.Stopped) return Walk.Interrupted(pushed.state)
+                if (pushed is StepResult.Failed) return Walk.Failed(pushed.error)
+            }
+            WarpTrigger.Enter -> {
+                val area = context.game.world?.areaOf(field.mapId) ?: return Walk.NoRoute(RouteFailure.StartUnknown, noMapDetail(field))
+                val pathfinder = Pathfinder(area, overlay(context, field, emptySet()))
+                // Free tiles next to it, best first: the one behind the player's back (the step back then faces the way
+                // the warp is usually entered).
+                val sides = pathfinder.neighbours(here, routeOptions(field, options, emptySet(), StepWeights.NONE))
+                    .filterIsInstance<Edge.Step>()
+                    .sortedBy { if (field.facing != null && it.direction == field.facing.opposite) 0 else 1 }
+                for (side in sides.take(MAX_STEP_OFF_TRIES)) {
+                    val off = stepOnce(context, side.direction, side.to, options)
+                    FieldControl.awaitOutcome(context, mark)?.let { return arrivedThrough(context, it, notes) }
+                    when (off) {
+                        is StepResult.Moved -> if (off.field.x != side.to.x || off.field.y != side.to.y) continue
+                        is StepResult.Refused -> continue
+                        is StepResult.Stopped -> return Walk.Interrupted(off.state)
+                        is StepResult.Failed -> return Walk.Failed(off.error)
+                    }
+                    val back = stepOnce(context, side.direction.opposite, here, options, long = true)
+                    FieldControl.awaitOutcome(context, mark)?.let { return arrivedThrough(context, it, notes) }
+                    if (back is StepResult.Stopped) return Walk.Interrupted(back.state)
+                    if (back is StepResult.Failed) return Walk.Failed(back.error)
+                }
+            }
+        }
         val now = context.navigator.settle()
         if (now.screen !is Screen.Overworld || now.field == null) return Walk.Interrupted(now)
-        return Walk.Stuck("the warp didn't take the player anywhere (still at ${now.field.x},${now.field.y})")
+        return Walk.Stuck("${target.id} didn't take the player anywhere (still at ${now.field.x},${now.field.y}): " +
+            when (trigger) {
+                is WarpTrigger.Press -> "pressed ${trigger.direction.name.lowercase()} on it"
+                else -> "stepped off it and back on"
+            })
     }
 
+    /** The error of a warp nothing takes ([WarpTrigger.Never]). */
+    private fun neverTaken(target: Target) = ActionError.Unavailable(
+        UnavailableReason.NO_PATH,
+        "${target.id} at ${target.x},${target.y} can't be taken: its tile has no door, mat, stairs or entrance, nothing the game " +
+            "warps the player from (it is only where the warp of the other side arrives)",
+        "use another way out of this map",
+    )
+
     /**
-     * Waits (up to [frames]) for the player to be on another map than [startMap] (a warp's fade, a fall), then for
-     * the game to give the control back. The new map's field, or null when the map didn't change (or a battle or a
-     * menu came first). With [from] (the warp's tile), a warp to this same map counts too: the player standing still,
-     * on the overworld, at least two tiles away from it ([sameMapWarp]).
+     * True when the walk reached the destination by stepping on it although it carried the player away: one of
+     * [tiles] is a goal tile of [target] (a tile target, not one reached with A) that is a mechanism of [field]'s map
+     * (a cart station, a platform trigger: [PuzzleSolving.isMechanism]). The walk is then done, wherever the ride ends.
      */
-    internal fun awaitMapChange(context: PlanContext, startMap: Int, frames: Int = WARP_CHANGE_FRAMES, from: Pair<Int, Int>? = null): FieldState? {
-        var waited = 0
-        while (waited < frames) {
-            val state = context.state()
-            if (FieldControl.takenOver(state, FieldControl.Motion.TRANSITION)) return null
-            val field = state.field
-            if (field != null && field.mapId != startMap) return context.navigator.settle().field ?: field
-            if (field != null && from != null && sameMapWarp(state, field, from)) return context.navigator.settle().field ?: field
-            context.scope.step(2)
-            waited += 2
+    private fun carriedFromGoal(field: FieldState, target: Target, goalTiles: Set<Pair<Int, Int>>, tiles: Iterable<Node>): Boolean =
+        !target.adjacent && tiles.any { (it.x to it.y) in goalTiles && PuzzleSolving.isMechanism(field, it.x, it.y) }
+
+    /**
+     * Where a ride the walk ended on ([carriedFromGoal]) leaves the player: once they stand still with the control
+     * again (a cart ride lasts several seconds), else [at] (the last place read) when it doesn't end in time.
+     */
+    private fun rideEnd(context: PlanContext, at: FieldState): FieldState =
+        (FieldControl.awaitStill(context, maxFrames = TELEPORT_FRAMES) as? FieldControl.Still.Settled)?.state?.field ?: at
+
+    /** How [walkTo] ends at a warp: where the player stands now, and which warp it was ([through]). */
+    private fun arrivedThrough(context: PlanContext, warped: WarpWatch.Warped, notes: List<String>): Walk.Arrived =
+        Walk.Arrived(warped.last.to, notes.toList(), through(context, warped))
+
+    /**
+     * The warp of [warped]: the warp or hole of the tile the player was last read on, else of the tile they were facing
+     * (a door walked into), else of the tile behind them (side stairs: the climb's animation moves the player one tile
+     * past the stairs before the fade), with that tile and its map.
+     */
+    internal fun through(context: PlanContext, warped: WarpWatch.Warped): Through {
+        val from = warped.from
+        val area = context.game.world?.areaOf(from.mapId)
+        val tiles = listOf(from.x to from.y) + listOfNotNull(
+            from.facing?.let { from.x + it.dx to from.y + it.dy },
+            from.facing?.let { from.x - it.dx to from.y - it.dy },
+        )
+        val next = warped.next?.let { through(context, it) }
+        for ((x, y) in tiles) {
+            area?.warps?.firstOrNull { it.zone == from.mapId && it.x == x && it.y == y }?.let { return Through("warp:${it.id}", from, x, y, next) }
+            area?.triggerWarps?.firstOrNull { it.zone == from.mapId && it.x == x && it.y == y }?.let { return Through("hole:${it.trigger}", from, x, y, next) }
         }
-        return null
+        return Through(null, from, from.x, from.y, next)
     }
 
     /**
-     * True when [field] shows a warp from [from] to elsewhere on the same map done: the player stands (overworld,
-     * waiting for input, not moving) two tiles or more away from it. A step off it is one tile.
+     * A warp a walk went through: [id] (`warp:N`, `hole:N`; null when no warp of the map is known there), taken at
+     * ([x], [y]) on the map of [from] (the last place read before it).
      */
-    internal fun sameMapWarp(state: GameState, field: FieldState, from: Pair<Int, Int>): Boolean =
-        state.screen is Screen.Overworld && state.screen.awaiting == Awaiting.INPUT && !field.moving &&
-            kotlin.math.abs(field.x - from.first) + kotlin.math.abs(field.y - from.second) >= 2
+    data class Through(val id: String?, val from: FieldState, val x: Int, val y: Int, val next: Through? = null) {
+        /**
+         * For the agent: "took warp:3 at 301,263 (Olivine City) → Lake of Rage (536,90)", [to] being where they stand;
+         * each warp of a chain taken before the control came back ([next]): "took warp:3 … → Lake of Rage (536,90),
+         * then took warp:1 … → …".
+         */
+        fun describe(to: FieldState): String {
+            val arrived = next?.from ?: to
+            return "took ${id ?: "a warp"} at $x,$y" + (if (arrived.mapId != from.mapId) " (${from.mapName})" else "") +
+                " → ${arrived.mapName} (${arrived.x},${arrived.y})" + (next?.let { ", then " + it.describe(to) } ?: "")
+        }
+    }
+
+    /**
+     * For a target reached with A from next to it ([Target.adjacent], at a known tile): its tile and, when only its
+     * height ([Target.talkHeight]) keeps them from being goals, the tiles next to it, for the diagnosis of a failed
+     * route ([Pathfinder.diagnose]: the target never "stands in the way" of itself).
+     */
+    internal fun beside(area: Area, target: Target): Pathfinder.Beside? {
+        if (!target.adjacent) return null
+        val x = target.x ?: return null
+        val y = target.y ?: return null
+        return Pathfinder.Beside(x to y, if (target.talkHeight != null) goalTiles(area, target) else emptySet())
+    }
 
     /** Tiles that end the walk: the target itself, or the tiles from which it can be reached with A. */
     internal fun goalTiles(area: Area, target: Target): Set<Pair<Int, Int>> {
@@ -636,14 +906,21 @@ internal object MovePlans {
      * The live overlay of [field]'s map; unless [solve] (by default [ActionSettings.solvePuzzles]), one where routes
      * only walk ([PuzzleSolving.walkOnly]: no lift, no platform trigger, no ice block pushed).
      */
-    internal fun overlay(context: PlanContext, field: FieldState, refused: Set<Pair<Node, Direction>>, solve: Boolean = context.settings.solvePuzzles): Overlay {
-        // Destinations hidden: routes stay on the player's map (a way across the next map would reveal it).
-        val live = liveOverlay(context, field, refused).let { if (context.settings.hideDestinations) it.copy(zone = field.mapId) else it }
+    internal fun overlay(context: PlanContext, field: FieldState, refused: Set<Pair<Node, Direction>>, solve: Boolean = context.settings.solvePuzzles): Overlay =
+        overlay(context.game.world?.areaOf(field.mapId), field, refused, activeTriggers(context, field), solve, onThisMap = context.settings.hideDestinations)
+
+    /**
+     * The overlay of [field]'s map ([area]) with the live state: people and obstacles, the [refused] steps, the
+     * active scene [triggers], closed shutters, teleports and moving floors. [onThisMap]: routes stay on the player's
+     * map ([Overlay.zone]): while destinations are hidden (a way across the next map would reveal it), and for the
+     * reachability of the agent's view (it only talks about this map). Unless [solve], routes only walk.
+     */
+    internal fun overlay(area: Area?, field: FieldState, refused: Set<Pair<Node, Direction>>, triggers: Set<Pair<Int, Int>>, solve: Boolean, onThisMap: Boolean): Overlay {
+        val live = liveOverlay(area, field, refused, triggers).let { if (onThisMap) it.copy(zone = field.mapId) else it }
         return if (solve) live else PuzzleSolving.walkOnly(live, field)
     }
 
-    private fun liveOverlay(context: PlanContext, field: FieldState, refused: Set<Pair<Node, Direction>>): Overlay {
-        val area = context.game.world?.areaOf(field.mapId)
+    private fun liveOverlay(area: Area?, field: FieldState, refused: Set<Pair<Node, Direction>>, triggers: Set<Pair<Int, Int>>): Overlay {
         val templates = area?.people.orEmpty().filter { it.zone == field.mapId }
         return Overlay(
             objects = neighbourObstacles(area, field) + field.objects.map { o ->
@@ -663,13 +940,13 @@ internal object MovePlans {
                 )
             },
             refused = refused,
-            activeTriggers = activeTriggers(context, field),
+            // The puzzle's own triggers (cart stations, pads) are its teleports, not scenes: routes ride them.
+            activeTriggers = triggers - puzzleTriggerTiles(field.puzzle),
             // Closed shutters, and the invisible objects that answer A (they stand on their tile like a wall).
             blockedTiles = field.puzzle?.barriers.orEmpty().filterNot { it.open }.flatMap { b -> b.tiles.map { it.x to it.y } }.toSet() +
                 field.examinables.map { it.x to it.y },
             // Warp pads to this same map (the Saffron Gym's) move the player on the map like a puzzle's teleport.
-            teleports = puzzleTeleports(field.puzzle) +
-                context.game.world?.areaOf(field.mapId)?.let { WorldLinks.sameZoneTeleports(it, field.mapId) }.orEmpty(),
+            teleports = puzzleTeleports(field.puzzle) + area?.let { WorldLinks.sameZoneTeleports(it, field.mapId) }.orEmpty(),
             surfaces = puzzleSurfaces(field.puzzle),
         )
     }
@@ -700,6 +977,13 @@ internal object MovePlans {
     private fun objectAt(context: PlanContext, x: Int, y: Int): Boolean =
         context.navigator.settle().field?.objects.orEmpty().any { it.kind != FieldObjectKind.FOLLOWER && it.x == x && it.y == y }
 
+    /**
+     * The coordinate triggers [puzzle] models: the tiles of its teleports, and every tile its mechanism may ride from
+     * ([dev.kotlinds.pokemonclient.world.PuzzleMechanics.triggerTiles]: a cart station without its cart does nothing).
+     */
+    internal fun puzzleTriggerTiles(puzzle: PuzzleState?): Set<Pair<Int, Int>> =
+        puzzle?.teleports.orEmpty().flatMap { t -> t.from.map { it.x to it.y } }.toSet() + puzzle?.mechanics?.triggerTiles.orEmpty()
+
     /** The teleports of [puzzle] as route edges (heights converted to tile units). */
     internal fun puzzleTeleports(puzzle: PuzzleState?): List<TeleportLink> = puzzle?.teleports.orEmpty().flatMap { t ->
         t.from.map { TeleportLink(it.x, it.y, t.to.x, t.to.y, fromHeight = t.fromHeight?.times(FIELD_HEIGHT_UNITS), toHeight = t.toHeight?.times(FIELD_HEIGHT_UNITS)) }
@@ -724,15 +1008,11 @@ internal object MovePlans {
      * (the Ecruteak Gym pits while the puzzle is unsolved, story events...). Avoided unless targeted.
      */
     internal fun activeTriggers(context: PlanContext, field: FieldState): Set<Pair<Int, Int>> {
-        // Placeholder triggers (an empty script) start nothing: walked like floor.
-        val triggers = context.game.world?.areaOf(field.mapId)?.triggers.orEmpty().filter { it.zone == field.mapId && !it.inert }
-        if (triggers.isEmpty()) return emptySet()
+        val area = context.game.world?.areaOf(field.mapId) ?: return emptySet()
         val memory = context.scope.memory()
-        // Neither do armed triggers whose script ends silently in the current story (a speech already heard: the
-        // Viridian Gym's guide, see Trigger.quietWhen): the game runs them for a few frames and gives the control back.
-        return triggers.filter { t -> t.startsScene({ context.game.scriptVariable(memory, it) }, { context.game.scriptFlag(memory, it) }) }
-            .flatMap { t -> (t.x until t.x + maxOf(1, t.width)).flatMap { x -> (t.y until t.y + maxOf(1, t.height)).map { y -> x to y } } }
-            .toSet()
+        // The one rule of the triggers ([Area.sceneTriggerTiles]), on the save read now: placeholders and armed triggers
+        // whose script ends silently in the current story (the Viridian Gym's guide, see Trigger.quietWhen) are floor.
+        return area.sceneTriggerTiles(field.mapId, { context.game.scriptVariable(memory, it) }, { context.game.scriptFlag(memory, it) })
     }
 
     /**
@@ -755,24 +1035,33 @@ internal object MovePlans {
     /**
      * The soft step weights of a walk from [state] ([StepWeights]): every zone's wild encounter chance as the game rolls
      * it now ([dev.kotlinds.pokemonclient.world.WorldSource.encounterChance]) and an unbeaten trainer's battle, in steps
-     * of how the player will move on land:
-     * - the bike when riding (or [MoveOptions.bike] where cycling is allowed), running with [MoveOptions.run] or the
-     *   running shoes switched on ([FieldState.autoRun]), walking otherwise;
+     * of how the player will move on land ([FootPace]: the bike, running or walking; walking onto the tiles where wild
+     * Pokémon appear unless [MoveOptions.runInEncounterAreas], which costs the time walking loses there);
      * - with a Repel at work ([FieldState.repelSteps]), the level of the first Pokémon able to fight: weaker wild
      *   Pokémon don't appear (a strong enough lead makes the grass free). Its last steps are counted as if it lasted:
      *   the game stops the walk with a message when it wears off, and the next walk plans without it;
      * - the item the first Pokémon holds (a Cleanse Tag makes encounters rarer).
      */
-    internal fun stepWeights(context: PlanContext, state: GameState, options: MoveOptions): StepWeights {
+    internal fun stepWeights(context: PlanContext, state: GameState, options: MoveOptions): StepWeights =
+        StepWeights.of(context.game.world, encounterConditions(state, options))
+
+    /** What the player brings to the wild encounter roll now ([EncounterConditions]): movement, Repel, the lead's item. */
+    internal fun encounterConditions(state: GameState, options: MoveOptions): EncounterConditions {
         val field = state.field
-        val landMovement = when {
-            field?.movement == MovementMode.BIKE || (options.bike && field?.bikeAllowed != false) -> MovementMode.BIKE
-            options.run || field?.autoRun == true -> MovementMode.RUN
-            else -> MovementMode.WALK
-        }
+        val pace = FootPace.of(field, options)
         val repelLevel = if ((field?.repelSteps ?: 0) > 0) state.party.firstOrNull { !it.isEgg && it.hp > 0 }?.level else null
         val leadItem = state.party.firstOrNull()?.heldItem?.id?.value
-        return StepWeights.of(context.game.world, EncounterConditions(landMovement, repelLevel, leadItem))
+        return EncounterConditions(pace.encounterTiles, repelLevel, leadItem, travelMovement = pace.land)
+    }
+
+    /**
+     * Whether a walk on [area] with [options] holds B onto each tile: when it runs ([FootPace.land]), except onto the
+     * tiles it walks to keep wild encounters rare ([StepWeights.walksOnto] of [weights], the same weights its route
+     * was planned with: one source for the plan and the walker).
+     */
+    internal fun runOnto(area: Area, field: FieldState, options: MoveOptions, weights: StepWeights): (Node) -> Boolean {
+        if (FootPace.of(field, options).land != MovementMode.RUN) return { false }
+        return { node -> area.tile(node.x, node.y)?.let { !weights.walksOnto(it, area.zoneAt(node.x, node.y)) } ?: true }
     }
 
     /**
@@ -785,14 +1074,6 @@ internal object MovePlans {
         return planner.route(start, options, goalTiles, isGoal)
     }
 
-    /** True when [a] and [b] are on maps of different areas (a warp was taken), not zones of the same matrix. */
-    private fun changedArea(context: PlanContext, a: FieldState, b: FieldState): Boolean {
-        if (a.mapId == b.mapId) return false
-        val world = context.game.world ?: return true
-        return world.areaOf(a.mapId)?.id != world.areaOf(b.mapId)?.id
-    }
-
-    /** What the agent should know when the options asked to avoid something the only way crosses anyway. */
     /**
      * The tiles of [field]'s active scene triggers ([Overlay.activeTriggers] of [overlay]) a walk stops on: not the
      * mechanisms that move the player on their own (teleport pads, lifts, platform triggers, holes, same-map warps:
@@ -801,7 +1082,7 @@ internal object MovePlans {
     internal fun sceneTiles(area: Area, field: FieldState, overlay: Overlay, warpGoal: Set<Pair<Int, Int>>): Set<Pair<Int, Int>> {
         if (overlay.activeTriggers.isEmpty()) return emptySet()
         val moving = area.triggers.filter { t -> t.zone == field.mapId && (area.triggerWarps.any { it.zone == t.zone && it.trigger == t.id } || area.scriptWarps.any { it.zone == t.zone && it.trigger == t.id }) }
-            .flatMap { t -> (t.x until t.x + maxOf(1, t.width)).flatMap { x -> (t.y until t.y + maxOf(1, t.height)).map { y -> x to y } } }.toSet()
+            .flatMapTo(mutableSetOf()) { it.tiles }
         val teleports = overlay.teleports.map { it.fromX to it.fromY }.toSet()
         return overlay.activeTriggers.filterTo(mutableSetOf()) { (x, y) ->
             (x to y) !in moving && (x to y) !in teleports && (x to y) !in warpGoal && !PuzzleSolving.isMechanism(field, x, y)
@@ -822,11 +1103,12 @@ internal object MovePlans {
         at ?: return null
         val area = mapId?.let { context.game.world?.areaOf(it) } ?: return null
         val trigger = area.triggers.firstOrNull { t ->
-            t.zone == mapId && !t.inert && at.first in t.x until t.x + maxOf(1, t.width) && at.second in t.y until t.y + maxOf(1, t.height)
+            t.zone == mapId && !t.inert && t.covers(at.first, at.second)
         } ?: return null
         return "stepped on a scene trigger at ${at.first},${at.second} (trigger:${trigger.id}), which started a scene: see blocked_by for what it waits for (it starts again each time you step there while it does)"
     }
 
+    /** What the agent should know when the options asked to avoid something the only way crosses anyway. */
     private fun avoidanceNotes(route: Route, options: MoveOptions): List<String> = route.warnings.mapNotNull { w ->
         when {
             w is dev.kotlinds.pokemonclient.world.RouteWarning.CrossesTallGrass && options.avoidTallGrass ->
@@ -858,13 +1140,15 @@ internal object MovePlans {
      * For a forced move ([slide] > 0: the number of tiles of an [Edge.Slide] on ice or spinners), the press only
      * starts it: the wait lasts as long as the slide, and "still" means longer than the spin a spinner does on each
      * arrow, so the player is on the landing tile [to] when it returns (or elsewhere, and the caller re-plans).
+     * B is held with it when [run] (a walk's [runOnto] for [to]).
      */
-    fun stepOnce(context: PlanContext, direction: Direction, to: Node, options: MoveOptions, long: Boolean = false, slide: Int = 0): StepResult {
+    fun stepOnce(context: PlanContext, direction: Direction, to: Node, options: MoveOptions, long: Boolean = false, slide: Int = 0, run: Boolean = options.run): StepResult {
         val buttons = buildSet {
             add(direction.button)
-            if (options.run) add(Button.B)
+            if (run) add(Button.B)
         }
         val start = context.state().field ?: return StepResult.Stopped(context.state())
+        val mark = FieldControl.warpMark(context)
         var frames = 0
         val limit = if (long) LONG_STEP_FRAMES else STEP_FRAMES
         while (frames < limit) {
@@ -887,6 +1171,8 @@ internal object MovePlans {
             val end = after.field
             if (end == null || FieldControl.takenOver(after, FieldControl.Motion.WALK)) return StepResult.Stopped(after)
             if (end.mapId != start.mapId || (end.x == to.x && end.y == to.y)) return StepResult.Moved(end)
+            // Through a warp (even one back to this very tile): never press again, the caller sees where it led.
+            if (context.navigator.warps.since(mark) != null) return StepResult.Moved(end)
             // Only turned to face the direction (no tile change): keep holding.
             if (end.x == start.x && end.y == start.y) continue
             return StepResult.Moved(end)
@@ -932,17 +1218,25 @@ internal object MovePlans {
     // region Outcomes
 
     internal fun Walk.toOutcome(context: PlanContext, done: (FieldState) -> String): ActionOutcome = when (this) {
-        is Walk.Arrived -> ActionOutcome.Done(done(field))
+        // A walk ended by a warp on the way (not the destination: those are told by the trip, see WorldTravel).
+        is Walk.Arrived -> ActionOutcome.Done(through?.let { stoppedAt(it, field) } ?: done(field))
         is Walk.NoRoute -> ActionOutcome.Failed(ActionError.Unavailable(if (failure is NeedsMechanism) UnavailableReason.PUZZLE_LEFT_TO_AGENT else UnavailableReason.NO_PATH, detail,
             (failure as? RouteFailure.NeedsFieldMove)?.let { FieldMoveWalk.hint(it, access[it.move]) }
                 ?: (if (context.settings.hideDestinations && failure == RouteFailure.Unreachable) UNREACHABLE_ON_THIS_MAP else null)
                 ?: failure.hint(context.state().field)))
         is Walk.Stuck -> ActionOutcome.Failed(ActionError.Timeout(detail))
         is Walk.Failed -> ActionOutcome.Failed(error)
-        is Walk.Interrupted -> ActionOutcome.Failed(ActionError.Interrupted(cause(state), "$steps step(s)" + notes.joinToString("") { "; $it" } +
+        is Walk.Interrupted -> ActionOutcome.Failed(ActionError.Interrupted(cause(context, state), "$steps step(s)" + notes.joinToString("") { "; $it" } +
             (spotter(context, state)?.let { "; seen by $it" } ?: "") +
-            (sceneNote(context, state.field?.mapId ?: context.state().field?.mapId, at)?.takeIf { cause(state) == InterruptionCause.SCRIPT }?.let { "; $it" } ?: "")))
+            (sceneNote(context, state.field?.mapId ?: context.state().field?.mapId, at)?.takeIf { cause(context, state) == InterruptionCause.SCRIPT }?.let { "; $it" } ?: "")))
     }
+
+    /**
+     * The answer of a walk a warp ended before its destination: the walk stops at the first warp, the agent sees
+     * where they are now before going on.
+     */
+    internal fun stoppedAt(through: Through, field: FieldState): String =
+        "stopped on the way: ${through.describe(field)}, which wasn't the destination; look where you are, then go on from here"
 
     /** The map object of the trainer who saw the player in [state] (`person:N (label)`), when known. */
     private fun spotter(context: PlanContext, state: GameState): String? {
@@ -998,6 +1292,14 @@ internal object MovePlans {
         is RouteFailure.LongDetour -> "the way around crosses $links warps and other maps: go_to a map of the way first (by its name), or fly closer to it"
     }
 
+    /**
+     * Why the walk stopped in [state]. The holds let go at the first frame the game is busy, which may be a battle's
+     * very first frames (the encounter's flash: no field, no battle read yet): what started is then read once the game
+     * waits for input again.
+     */
+    private fun cause(context: PlanContext, state: GameState): InterruptionCause =
+        cause(if (state.battle == null && state.field == null) context.navigator.settle() else state)
+
     private fun cause(state: GameState): InterruptionCause = when {
         state.battle != null -> if (state.battle.trainers.isEmpty()) InterruptionCause.WILD_BATTLE else InterruptionCause.TRAINER_SIGHT
         state.field?.trainerEncounter == true -> InterruptionCause.TRAINER_SIGHT
@@ -1042,13 +1344,11 @@ internal object MovePlans {
     /** Polls standing still on the source tile after which the teleport is considered not to have fired. */
     private const val TELEPORT_IDLE_POLLS = 45
     private const val MAX_PACING_STEPS = 200
-    private const val GRASS = "tall grass"
+    /** The target of [findEncounter]'s walk, as its messages name it. */
+    private const val ENCOUNTER_GROUND = "a tile with wild Pokémon"
 
-    /** Longest wait for a warp's transition (climb, fade, fall) to change the map. */
-    private const val WARP_CHANGE_FRAMES = 240
-
-    /** After stepping on a door or a hole, how long its transition may take to start. */
-    private const val WARP_START_FRAMES = 90
+    /** Tiles next to a warp the player stands on tried to step off and back on it ([takeWarpHere]): the "3 tries" rule. */
+    private const val MAX_STEP_OFF_TRIES = 3
 
     /** The target id of the nearest PC (`interact(pc)`). */
     const val PC = "pc"

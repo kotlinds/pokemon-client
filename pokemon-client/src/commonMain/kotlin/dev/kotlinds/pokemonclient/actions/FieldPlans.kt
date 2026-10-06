@@ -15,6 +15,7 @@ import dev.kotlinds.pokemonclient.state.Entry
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.FieldMoveAccess
 
 /** Recipes of field actions reached from the start menu (save...). */
 internal object FieldPlans {
@@ -183,30 +184,149 @@ internal object FieldPlans {
             .andThen { landed -> Step.Done(landed to hub) }
     }
 
-    /**
-     * Start menu → POKéMON → a Pokémon that knows Fly → FLY, up to the fly map. The flyer is read from the party (move
-     * id, never a name), able to fight first. Its menu is still checked for FLY before confirming; the next Pokémon
-     * knowing Fly is tried only if the game doesn't offer it.
-     */
+    /** Start menu → POKéMON → a Pokémon that knows Fly → FLY ([openFieldMove]), up to the fly map. */
     private fun openFlyMap(context: PlanContext): Step<GameState> {
         // The game's Fly move (its rule), never a move name.
         val fly = context.game.fieldMoveRule(FieldMoveKind.FLY)?.move
         val flyers = fly?.let { FieldMoves.knowers(context.state(), it) }.orEmpty().sortedBy { it.fainted }
-        if (flyers.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly"))
+        return openFieldMove(context, FieldMoveKind.FLY, flyers).andThen { awaitFlyMap(context) }
+    }
+
+    /**
+     * Start menu → POKéMON → one of [users] (Pokémon knowing [move], read from the party by move id, never a name, in
+     * the order to try) → the move's entry ([FieldMoveKind.menuEntry]). Each Pokémon's menu is checked for the entry
+     * before confirming; the next one is tried only if the game doesn't offer it there. The state once chosen.
+     */
+    private fun openFieldMove(context: PlanContext, move: FieldMoveKind, users: List<dev.kotlinds.pokemonclient.state.PartyMon>): Step<GameState> {
+        val label = with(FieldMoveWalk) { move.label() }
+        if (users.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows $label"))
         return PartyBagPlans.openParty(context).andThen { state ->
             if (state.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", state.screen.kind))
-            for (flyer in flyers) {
-                val opened = context.navigator.choose(Screen.PartyGrid::class, flyer.displayName) { it.id == flyer.id.toString() }
+            for (user in users) {
+                val opened = context.navigator.choose(Screen.PartyGrid::class, user.displayName) { it.id == user.id.toString() }
                 if (opened is Step.Failed) return@andThen opened
                 val menu = context.navigator.settle().screen as? Screen.ContextMenu
-                if (menu?.entries?.any { it.id == "fieldmove:fly" } == true) {
-                    return@andThen context.navigator.choose(Screen.ContextMenu::class, "FLY") { it.id == "fieldmove:fly" }
+                if (menu?.entries?.any { it.id == move.menuEntry } == true) {
+                    return@andThen context.navigator.choose(Screen.ContextMenu::class, label.uppercase()) { it.id == move.menuEntry }
                 }
                 // Not offered: back to the party, then the next one.
                 context.navigator.press(Button.B, menu ?: context.state().screen, maxFrames = 120)
             }
-            Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "The game doesn't offer FLY for ${flyers.joinToString { it.displayName }}", "heal them first"))
-        }.andThen { awaitFlyMap(context) }
+            Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "The game doesn't offer ${label.uppercase()} for ${users.joinToString { it.displayName }}", "heal them first"))
+        }
+    }
+
+    /**
+     * Uses a field move from the party menu (`use_field_move`): a Pokémon knowing it is picked from the party (by move
+     * id: [FieldMoves.knowers]; for Milk Drink / Softboiled one with more than a fifth of its HP, the game's
+     * condition, and never the [GameAction.UseFieldMove.target]), then [openFieldMove], then what the move does is
+     * waited for and told: another map (Teleport, Dig), a wild battle (Sweet Scent, Headbutt), the target's HP (Milk
+     * Drink, Softboiled), the game's messages. A message that leaves the party menu on screen is the game's refusal
+     * (CANNOT_USE_HERE, with its text): where the move works is the game's own check, never assumed here (the map
+     * randomizer allows Teleport in towns, for one).
+     */
+    val useFieldMove = ActionPlan<GameAction.UseFieldMove> { action, context ->
+        val move = action.move
+        val label = with(FieldMoveWalk) { move.label() }
+        val before = context.navigator.settle()
+        val rule = context.game.fieldMoveRule(move) ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unsupported("use_field_move(${move.wire})"))
+        when (val access = FieldMoves.of(before, context.game::fieldMoveRule)[move]) {
+            is FieldMoveAccess.NoBadge -> return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NEEDS_BADGE, "$label needs the ${access.badge} Badge"))
+            FieldMoveAccess.NoPokemon -> return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows $label"))
+            else -> Unit
+        }
+        val knowers = FieldMoves.knowers(before, rule.move)
+        val target = action.target?.let { id -> before.party.firstOrNull { it.id == id } ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_POKEMON, "$id isn't in the party")) }
+        val users = if (move.healsAnother) {
+            target ?: return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("target", "missing", before.party.filter { !it.isEgg }.map { "${it.id} (${it.displayName})" }))
+            knowers.filter { it.id != target.id && it.hp * HEAL_HP_SHARE > it.maxHp }.ifEmpty {
+                return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE,
+                    "No other Pokémon knowing $label has more than a fifth of its HP to give", "heal it first"))
+            }
+        } else knowers.sortedBy { it.fainted }
+        val opened = openFieldMove(context, move, users)
+        if (opened is Step.Failed) {
+            PartyBagPlans.closeToOverworld(context)
+            return@ActionPlan ActionOutcome.Failed(opened.error)
+        }
+        if (target != null && move.healsAnother) healAnother(context, label, target) else fieldMoveResult(context, label, before)
+    }
+
+    /** A Pokémon gives HP at most when it has more than 1 / [HEAL_HP_SHARE] of its HP (Milk Drink, Softboiled). */
+    private const val HEAL_HP_SHARE = 5
+
+    /** How long the messages and animations of a field move may last (presses of [Navigator.advanceUntil]). */
+    private const val FIELD_MOVE_WAITS = 40
+
+    /** The screens a field move plays through without input: its animations, the map changing, the party closing. */
+    private fun fieldMovePlaying(screen: Screen) = screen is Screen.Animation || screen is Screen.Battle || screen is Screen.Unknown ||
+        (screen is Screen.Overworld && screen.awaiting != Awaiting.INPUT)
+
+    /**
+     * After the move's entry was chosen: its messages read until the player walks again (what it did, from [before]),
+     * a wild battle starts, or the party menu is back after a message (the game's refusal).
+     */
+    private fun fieldMoveResult(context: PlanContext, label: String, before: GameState): ActionOutcome {
+        val said = mutableListOf<String>()
+        // The party menu (or the Pokémon's menu) still drawn before anything was said: the move is starting, waited
+        // through; back on the party after a message: the game refused it.
+        val end = context.navigator.advanceUntil(
+            FIELD_MOVE_WAITS,
+            waitOn = { it -> fieldMovePlaying(it) || (said.isEmpty() && (it is Screen.PartyGrid || it is Screen.ContextMenu)) },
+            onMessage = { s -> (s.screen as? Screen.Dialogue)?.text?.let(said::add) },
+        ) { s ->
+            s.battle != null || (s.screen is Screen.Overworld && s.screen.awaiting == Awaiting.INPUT) ||
+                (s.screen is Screen.PartyGrid && s.screen.awaiting == Awaiting.INPUT && said.isNotEmpty())
+        }
+        if (end is Step.Failed) {
+            PartyBagPlans.closeToOverworld(context)
+            return ActionOutcome.Failed(end.error)
+        }
+        val state = (end as Step.Done).value
+        val text = said.joinToString(" ") { it.replace('\n', ' ') }.takeIf { it.isNotBlank() }
+        if (state.screen is Screen.PartyGrid) {
+            PartyBagPlans.closeToOverworld(context)
+            return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.CANNOT_USE_HERE, "The game refused $label here" + (text?.let { ": \"$it\"" } ?: "")))
+        }
+        if (state.battle != null) {
+            val foe = context.navigator.settle(maxFrames = BATTLE_START_FRAMES).battle?.battlers?.firstOrNull { !it.ref.isPlayerSide }
+            return ActionOutcome.Done("used $label: a wild " + (foe?.let { "${it.species.name} Lv${it.level}" } ?: "Pokémon") + " appeared")
+        }
+        val from = before.field
+        val to = state.field
+        val moved = from != null && to != null && (to.mapId != from.mapId || to.x != from.x || to.y != from.y)
+        return ActionOutcome.Done("used $label" + (if (moved) ", now in ${to?.mapName} at ${to?.x},${to?.y}" else "") + (text?.let { ": \"$it\"" } ?: ""))
+    }
+
+    /**
+     * Milk Drink / Softboiled, the user chosen: the party asks for the Pokémon to heal ([target], chosen by id), the
+     * game says how much HP it got, then the menus are closed. Checked on [target]'s HP.
+     *
+     * The "on which Pokémon?" prompt is the party grid itself, waiting for a choice ([Screen.PartyGrid]: HGSS
+     * `PARTY_MENU_STATE_SOFTBOILED`, src/party_menu.c, decoded as a grid whose purpose is OTHER, never a message), so it
+     * ends the first wait; a message before it is the game's refusal (the user's HP too low: msg 127, then the party
+     * menu again). A target the game refuses (the user itself, fainted or full: msg 120) prints its message and asks
+     * again: its HP doesn't change, told with that message.
+     */
+    private fun healAnother(context: PlanContext, label: String, target: dev.kotlinds.pokemonclient.state.PartyMon): ActionOutcome {
+        val said = mutableListOf<String>()
+        val result = context.navigator.advanceUntil(FIELD_MOVE_WAITS, waitOn = ::fieldMovePlaying, onMessage = { s -> (s.screen as? Screen.Dialogue)?.text?.let(said::add) }) { s ->
+            s.screen is Screen.PartyGrid && s.screen.awaiting == Awaiting.INPUT
+        }.andThen {
+            if (said.isNotEmpty()) return@andThen Step.Failed(ActionError.Unavailable(UnavailableReason.CANNOT_USE_HERE, "The game refused $label: \"${said.joinToString(" ")}\""))
+            context.navigator.choose(Screen.PartyGrid::class, target.displayName) { it.id == target.id.toString() }
+        }.andThen {
+            context.navigator.advanceUntil(FIELD_MOVE_WAITS, waitOn = ::fieldMovePlaying, onMessage = { s -> (s.screen as? Screen.Dialogue)?.text?.let(said::add) }) { s ->
+                (s.screen is Screen.PartyGrid && s.screen.awaiting == Awaiting.INPUT) || s.screen is Screen.Overworld
+            }
+        }
+        PartyBagPlans.closeToOverworld(context)
+        return result.then { _ ->
+            val after = context.state().party.firstOrNull { it.id == target.id }
+            val gained = (after?.hp ?: target.hp) - target.hp
+            if (gained > 0) ActionOutcome.Done("used $label: ${target.displayName} got $gained HP (${after?.hp}/${after?.maxHp})")
+            else ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.CANNOT_USE_HERE, "${target.displayName}'s HP didn't change" + (said.takeIf { it.isNotEmpty() }?.let { ": \"${it.joinToString(" ")}\"" } ?: "")))
+        }
     }
 
     /**
@@ -220,7 +340,9 @@ internal object FieldPlans {
         return when {
             opened is Step.Done -> opened
             (opened as Step.Failed).error is ActionError.Timeout -> Step.Failed(ActionError.Timeout("the fly map didn't open"))
-            refused -> Step.Failed(ActionError.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "The game refused Fly here", "go outdoors"))
+            // The map's header allowed it ([FieldState.flyAllowed]): the game said no for another reason (someone
+            // travelling with the player, a disguise, the Safari Zone: src/field_move.c FieldMove_CheckFly).
+            refused -> Step.Failed(ActionError.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "The game refused Fly here (its message says why)", "try again after leaving this place"))
             else -> Step.Failed(ActionError.UnexpectedScreen("the fly map", context.state().screen.kind))
         }
     }

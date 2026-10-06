@@ -8,7 +8,8 @@ import dev.kotlinds.pokemonclient.world.NeedsMechanism
 import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Overlay
 import dev.kotlinds.pokemonclient.world.Pathfinder
-import dev.kotlinds.pokemonclient.world.PlatformPlanner
+import dev.kotlinds.pokemonclient.world.MechanismPlanner
+import dev.kotlinds.pokemonclient.world.SwitchEdge
 import dev.kotlinds.pokemonclient.world.PushEdge
 import dev.kotlinds.pokemonclient.world.PushPlanner
 import dev.kotlinds.pokemonclient.world.PuzzleMechanism
@@ -17,9 +18,10 @@ import dev.kotlinds.pokemonclient.world.RouteOptions
 
 /**
  * The walks when movement puzzles are left to the agent ([ActionSettings.solvePuzzles] off):
- * - [walkOnly] turns the live overlay into one where routes only walk: lifts are no teleports and their tiles are
- *   never entered (unless they are the destination), the moving platforms are floor where they stand but their
- *   triggers that would move them are never entered, and slides never stop against a movable ice block. Strength
+ * - [walkOnly] turns the live overlay into one where routes only walk: lifts and cart stations with their cart are no
+ *   teleports and their tiles are never entered (unless they are the destination), the moving platforms are floor
+ *   where they stand but their triggers that would move them are never entered, levers are never pressed (only
+ *   [MechanismPlanner] presses them), and slides never stop against a movable ice block. Strength
  *   boulders are already never walked into by plain routes ([PushPlanner] is what pushes them, and it isn't used);
  * - [diagnose] tells, when no walking route exists, whether one operating a mechanism does, and the first mechanism on
  *   it ([NeedsMechanism]), so the agent knows what to do itself.
@@ -31,31 +33,48 @@ internal object PuzzleSolving {
         val puzzle = field.puzzle
         val lifts = liftTiles(field)
         val mechanics = puzzle?.mechanics
-        val platformFloor = mechanics?.walkTiles(mechanics.poses).orEmpty()
+        val platformFloor = mechanics?.let { floor(it) }.orEmpty()
         val triggers = movingTriggers(field)
         return overlay.copy(
-            teleports = overlay.teleports.filterNot { (it.fromX to it.fromY) in lifts },
+            teleports = overlay.teleports.filterNot { (it.fromX to it.fromY) in lifts || (it.fromX to it.fromY) in triggers },
             openTiles = overlay.openTiles + (platformFloor - triggers),
             forbiddenTiles = overlay.forbiddenTiles + lifts + triggers,
             avoidPushes = true,
         )
     }
 
-    /** True when stepping on ([x], [y]) operates a mechanism of [field]'s map right now (a lift, a platform trigger). */
-    fun isMechanism(field: FieldState, x: Int, y: Int): Boolean = (x to y) in liftTiles(field) || (x to y) in movingTriggers(field)
+    /**
+     * True when stepping on ([x], [y]) operates a mechanism of [field]'s map right now: a puzzle's teleport (a pad, a
+     * cart station, a lift: [dev.kotlinds.pokemonclient.state.PuzzleState.teleports]) or a platform trigger.
+     */
+    fun isMechanism(field: FieldState, x: Int, y: Int): Boolean =
+        field.puzzle?.teleports.orEmpty().any { t -> t.from.any { it.x == x && it.y == y } } || (x to y) in movingTriggers(field)
+
+    /**
+     * True when [warped], a jump of the player seen by the [WarpWatch], is a ride of the map's puzzle rather than a
+     * warp: on the same map, started from a mechanism ([isMechanism]) the player stood on or stepped onto (the tile
+     * read last before the jump, or the one they faced). A walk goes on (or arrives) after a ride; it stops at a warp.
+     */
+    fun isRide(warped: WarpWatch.Warped): Boolean {
+        val from = warped.from
+        if (warped.to.mapId != from.mapId) return false
+        val ahead = from.facing?.let { from.x + it.dx to from.y + it.dy }
+        return isMechanism(from, from.x, from.y) || (ahead != null && isMechanism(from, ahead.first, ahead.second))
+    }
 
     /** The tiles that start a lift ([TeleportKind.LIFT]) on [field]'s map. */
     fun liftTiles(field: FieldState): Set<Pair<Int, Int>> =
         field.puzzle?.teleports.orEmpty().filter { it.kind == TeleportKind.LIFT }.flatMap { t -> t.from.map { it.x to it.y } }.toSet()
 
-    /** The platform trigger tiles that would move a platform right now (stepping on them starts a ride). */
+    /** The trigger tiles that would start a ride right now (a platform that can move, a station with its cart). */
     private fun movingTriggers(field: FieldState): Set<Pair<Int, Int>> {
         val puzzle = field.puzzle ?: return emptySet()
         val mechanics = puzzle.mechanics ?: return emptySet()
-        val poses = mechanics.poses
-        val candidates = puzzle.platforms.flatMap { p -> p.triggers.map { it.tile.x to it.tile.y } } + mechanics.walkTiles(poses)
-        return candidates.filter { (x, y) -> mechanics.ride(poses, x, y)?.moved == true }.toSet()
+        return mechanics.movingTriggers(puzzle.platforms.flatMap { p -> p.triggers.map { it.tile.x to it.tile.y } })
     }
+
+    /** The tiles [mechanics] makes walkable in its state of now. */
+    private fun <S> floor(mechanics: dev.kotlinds.pokemonclient.world.PuzzleMechanics<S>): Set<Pair<Int, Int>> = mechanics.walkTiles(mechanics.state)
 
     /**
      * The first mechanism a route operating them would use from [start] (platform rides, the lift, pushes), when no
@@ -71,9 +90,9 @@ internal object PuzzleSolving {
         isGoal: (Node) -> Boolean,
     ): NeedsMechanism? {
         field.puzzle?.mechanics?.let { mechanics ->
-            PlatformPlanner(area, solving, mechanics).route(start, options, enterable, isGoal)?.let { route -> first(route, start, field)?.let { return it } }
+            MechanismPlanner(area, solving, mechanics).route(start, options, enterable, isGoal)?.let { route -> first(route, start, field)?.let { return it } }
         }
-        (Pathfinder(area, solving).route(start, options, enterable, isGoal) as? Pathfinder.Result.Found)?.let { found ->
+        (Pathfinder(area, solving).route(start, options, enterable, isGoal = isGoal) as? Pathfinder.Result.Found)?.let { found ->
             first(found.route, start, field)?.let { return it }
         }
         val pushes = PushPlanner(area, solving)
@@ -94,8 +113,9 @@ internal object PuzzleSolving {
                 )
                 edge is Edge.Teleport && (edge.via.x to edge.via.y) in lifts ->
                     return NeedsMechanism(PuzzleMechanism.LIFT, edge.via.x, edge.via.y, from, edge.direction)
-                edge is Edge.Teleport && mechanics?.ride(mechanics.poses, edge.via.x, edge.via.y) != null ->
-                    return NeedsMechanism(PuzzleMechanism.MOVING_PLATFORM, edge.via.x, edge.via.y, from, edge.direction)
+                edge is Edge.Teleport && mechanics?.ridesNow(edge.via.x, edge.via.y) == true ->
+                    return NeedsMechanism(mechanics.mechanism, edge.via.x, edge.via.y, from, edge.direction)
+                edge is SwitchEdge -> return NeedsMechanism(PuzzleMechanism.SWITCH, from.x + edge.direction.dx, from.y + edge.direction.dy, from, edge.direction, target = edge.target)
             }
             from = edge.to
         }
@@ -118,6 +138,10 @@ internal object PuzzleSolving {
                 "(from $from, step $dir; or go_to ${failure.x},${failure.y}), see puzzle.platforms for what each trigger does"
             PuzzleMechanism.LIFT -> "$left: the way goes through the lift at ${failure.x},${failure.y}: step onto it " +
                 "(from $from, step $dir; or go_to ${failure.x},${failure.y}) to ride it to the other floor"
+            PuzzleMechanism.CART_RIDE -> "$left: the way needs a cart ride: step on the station at ${failure.x},${failure.y} " +
+                "(from $from, step $dir; or go_to ${failure.x},${failure.y}), see puzzle.teleports for where each cart goes now"
+            PuzzleMechanism.SWITCH -> "$left: the way needs the lever ${failure.target ?: ""} at ${failure.x},${failure.y} pressed: " +
+                "interact ${failure.target ?: "with it"} (from $from, facing $dir), see puzzle.switches for what it changes"
         }.replace("  ", " ")
     }
 }

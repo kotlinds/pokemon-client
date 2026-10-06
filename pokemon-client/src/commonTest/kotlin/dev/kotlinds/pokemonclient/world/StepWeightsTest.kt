@@ -31,14 +31,19 @@ class StepWeightsTest {
         return Area(0, "test", 0, 0, width, rows.size, tiles, zones = IntArray(width * rows.size) { zone })
     }
 
-    /** A world whose zone [zone] rolls [land] on land and [surfing] on the water, whatever the conditions. */
-    private fun world(land: Double, surfing: Double) = object : WorldSource {
+    /**
+     * A world whose zone [zone] rolls [land] on land walking, [landRunning] running or cycling (the same by default:
+     * a roll that doesn't depend on the pace, like Platinum's), and [surfing] on the water.
+     */
+    private fun world(land: Double, surfing: Double, landRunning: Double = land) = object : WorldSource {
         override fun areaOf(zoneId: Int): Area? = null
         override val zoneCount = 10
+        override val encounterTables = EncounterTables.DECODED
         override fun encounterChance(zoneId: Int, water: Boolean, conditions: EncounterConditions) = when {
             zoneId != zone -> 0.0
             water -> surfing
-            else -> land
+            conditions.landMovement == MovementMode.WALK -> land
+            else -> landRunning
         }
     }
 
@@ -64,6 +69,32 @@ class StepWeightsTest {
         assertEquals(0, weights.encounter(TileInfo(false, TileKind.Water(surfable = true, fishable = true, wildEncounters = false)), zone))
         assertEquals(0, weights.encounter(TileInfo(false, TileKind.TallGrass), null))
         assertEquals(10, weights.encounter(TileInfo(false, TileKind.Cave), zone))
+    }
+
+    @Test
+    fun grassWalkedWhileTheTripRunsCostsTheWalkingRollAndTheTimeWalkingLoses() {
+        // Running elsewhere, walking onto the grass (the default of go_to): the walking roll (here 4 %), in running
+        // steps (8 frames): 40 frames = 5 steps, plus one step for the slower move (16 frames instead of 8).
+        val weights = StepWeights.of(world(land = 0.04, surfing = 0.0, landRunning = 0.08), EncounterConditions(MovementMode.WALK, travelMovement = MovementMode.RUN))
+        assertEquals(mapOf(zone to 5), weights.landEncounter)
+        assertEquals(setOf(zone), weights.walkedZones)
+        assertEquals(1, weights.walkedTileCost)
+        assertEquals(500, weights.trainerSight)
+        val grass = TileInfo(false, TileKind.TallGrass)
+        assertTrue(weights.walksOnto(grass, zone))
+        assertEquals(6, weights.moveOnto(grass, zone))
+        // A turn in place is an encounter check, not a walked tile.
+        assertEquals(5, weights.encounter(grass, zone))
+        assertEquals(0, weights.moveOnto(TileInfo(false, TileKind.Floor), zone))
+        // Nothing can appear (no table, or a Repel strong enough): the grass is run through.
+        val none = StepWeights.of(world(land = 0.0, surfing = 0.0), EncounterConditions(MovementMode.WALK, travelMovement = MovementMode.RUN))
+        assertTrue(!none.walksOnto(grass, zone))
+        // A roll that doesn't depend on the pace (Platinum's): walking gains nothing, the grass is run through.
+        val flat = StepWeights.of(world(land = 0.04, surfing = 0.0), EncounterConditions(MovementMode.WALK, travelMovement = MovementMode.RUN))
+        assertTrue(flat.walkedZones.isEmpty() && !flat.walksOnto(grass, zone))
+        assertEquals(mapOf(zone to 5), flat.landEncounter)
+        // Running everywhere: nothing is walked.
+        assertTrue(StepWeights.of(world(land = 0.08, surfing = 0.0), EncounterConditions(MovementMode.RUN)).walkedZones.isEmpty())
     }
 
     @Test

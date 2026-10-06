@@ -26,8 +26,17 @@ class Navigator(
     /** Told every state the recipes decode while [watching] runs (a [TravelMeter] counting the tiles walked). */
     private var watcher: ((GameState) -> Unit)? = null
 
+    /**
+     * The warps the player went through in the states decoded ([FieldControl.awaitOutcome]): every recipe reads the
+     * game through [state], so none is missed.
+     */
+    internal val warps = WarpWatch { game.world }
+
     /** The current state, decoded from this frame's RAM. */
-    fun state(): GameState = game.state(scope.memory()).also { state -> watcher?.invoke(state) }
+    fun state(): GameState = game.state(scope.memory()).also { state ->
+        warps.observe(state)
+        watcher?.invoke(state)
+    }
 
     /**
      * Runs [block] with [watcher] told every state decoded meanwhile: every recipe reads the game through [state], so

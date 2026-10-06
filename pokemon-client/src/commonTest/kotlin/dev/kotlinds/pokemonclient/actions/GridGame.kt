@@ -24,6 +24,9 @@ internal abstract class GridGame(var x: Int, var y: Int) : PokemonGame {
     /** Every tile the player stood on, in order. */
     val visited = mutableListOf(x to y)
 
+    /** Whether B was held (running) on each move of [visited] after the first tile. */
+    val ran = mutableListOf<Boolean>()
+
     private var held: Set<Button> = emptySet()
     private var heldFor = 0
 
@@ -43,6 +46,7 @@ internal abstract class GridGame(var x: Int, var y: Int) : PokemonGame {
         x = toX
         y = toY
         visited += x to y
+        ran += Button.B in held
     }
 
     val console: ConsolePort = object : ConsolePort {

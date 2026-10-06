@@ -11,6 +11,7 @@ import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.PartyPurpose
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.data.MachineId
 
 /**
  * Recipes of the party and bag actions out of battle (start menu → POKéMON / BAG → ...). Every step goes through the
@@ -219,6 +220,9 @@ internal object PartyBagPlans {
     val teach = ActionPlan<GameAction.Teach> { action, context ->
         val mon = context.state().party.firstOrNull { it.id == action.mon }
             ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_POKEMON, "${action.mon} isn't in the party"))
+        // Four moves: the move to forget is checked before any menu opens (the game would ask "Should a move be
+        // forgotten?" and the walk through the menus can't answer it).
+        forgetRefusal(context, mon, action.forget)?.let { return@ActionPlan ActionOutcome.Failed(it) }
         val result = bagItem(context, action.item).andThen { machine ->
             context.navigator.choose(Screen.Bag::class, machine.label) { it.id == machine.id }
         }.andThen {
@@ -236,7 +240,8 @@ internal object PartyBagPlans {
             context.navigator.advanceUntil(TEACH_WAITS) { s -> s.screen is Screen.YesNo || s.screen is Screen.MoveSelect || s.screen is Screen.Bag || s.screen is Screen.PartyGrid || s.screen is Screen.Overworld }
         }.andThen { state ->
             if (state.screen !is Screen.YesNo && state.screen !is Screen.MoveSelect) return@andThen Step.Done(state)
-            val forget = action.forget ?: return@andThen Step.Failed(ActionError.InvalidParameter("forget", "none", mon.moves.map { it.move.name }))
+            // Checked before the menus ([forgetRefusal]); only a party read wrongly could get here without it.
+            val forget = action.forget ?: return@andThen Step.Failed(ActionError.ForgetNeeded(mon.displayName, mon.moves.map { "move:${it.move.id.value} ${it.move.name}" }))
             if (state.screen is Screen.YesNo) {
                 val yes = context.navigator.choose(Screen.YesNo::class, "YES (forget a move)") { it.id == "option:yes" }
                 if (yes is Step.Failed) return@andThen yes
@@ -253,6 +258,26 @@ internal object PartyBagPlans {
             else ActionOutcome.Failed(ActionError.Timeout("${mon.displayName}'s moves didn't change"))
         }
     }
+
+    /**
+     * Why teaching [mon] with [forget] would fail on the "forget a move" question, before any menu: four moves and no
+     * [forget] ([ActionError.ForgetNeeded], listing the moves it can forget), a [forget] it doesn't know
+     * ([ActionError.InvalidParameter]) or an HM move ([ActionError.HmCannotForget]: the game never lets one go). Null
+     * when the teaching can go on (fewer than four moves: [forget] isn't needed and is ignored).
+     */
+    internal fun forgetRefusal(context: PlanContext, mon: dev.kotlinds.pokemonclient.state.PartyMon, forget: MoveRef?): ActionError? {
+        if (mon.moves.size < MAX_MOVES) return null
+        // HM moves, by id from the game's machine table (never by name): the moves of HM01..HM08.
+        val hms = context.game.data?.let { data -> MachineId.all.filter { it.isHm }.mapNotNull(data::machineMove).toSet() }.orEmpty()
+        val forgettable = mon.moves.filter { it.move.id !in hms }
+        if (forget == null) return ActionError.ForgetNeeded(mon.displayName, forgettable.map { "move:${it.move.id.value} ${it.move.name}" })
+        val known = mon.moves.firstOrNull { matchesRef(forget.raw, "move", it.move.id.value, it.move.name) }
+            ?: return ActionError.InvalidParameter("forget", forget.raw, forgettable.map { "move:${it.move.id.value} ${it.move.name}" })
+        return if (known.move.id in hms) ActionError.HmCannotForget(known.move.name) else null
+    }
+
+    /** Moves a Pokémon knows at most. */
+    private const val MAX_MOVES = 4
 
     /**
      * Uses a key item (Bicycle, Itemfinder, a rod...): see [activateKeyItem]. The Bicycle is checked on the player's

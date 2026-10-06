@@ -6,7 +6,11 @@ import dev.kotlinds.pokemonclient.state.FieldExaminable
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MovementMode
+import dev.kotlinds.pokemonclient.games.hgss.HgssIlexFarfetchd
+import dev.kotlinds.pokemonclient.state.HerdStep
+import dev.kotlinds.pokemonclient.state.PuzzleHerd
 import dev.kotlinds.pokemonclient.state.PuzzleKind
+import dev.kotlinds.pokemonclient.state.PuzzleTwig
 import dev.kotlinds.pokemonclient.state.PuzzleState
 import dev.kotlinds.pokemonclient.state.PuzzleTeleport
 import dev.kotlinds.pokemonclient.state.PuzzleTile
@@ -58,6 +62,26 @@ class HiddenKnowledgeViewTest {
     fun theLegendSaysTheMapIsAPartialWindow() {
         val legend = MapView.render(area, field(1)).getValue("legend").toString()
         assertTrue("partial view" in legend && "map_origin" in legend, legend)
+    }
+
+    /**
+     * NOTES (map randomizer run, 4:46): the Farfetch'd rule said "Follow `plan`" while no `plan` was given (a
+     * walkthrough's, like the blind spot). The rule tells how to read them only when they are shown.
+     */
+    @Test
+    fun theHerdingRuleMentionsThePlanOnlyWithAWalkthrough() {
+        val herd = PuzzleHerd(
+            "person:0", PuzzleTile(5, 2), blindSpot = false,
+            twigs = listOf(PuzzleTwig("trigger:3", listOf(PuzzleTile(7, 2)), active = true)),
+            plan = listOf(HerdStep.StepOnTwig("trigger:3", PuzzleTile(7, 2))),
+            facing = Direction.WEST,
+        )
+        val puzzle = PuzzleState(PuzzleKind.HERDING, HgssIlexFarfetchd.RULE, herds = listOf(herd), walkthroughRule = HgssIlexFarfetchd.WALKTHROUGH_RULE)
+        val shown = StateView.puzzle(puzzle, showHidden = true).toString()
+        assertTrue("plan" in shown && "blind_spot" in shown && "follow `plan`" in shown, shown)
+        val hidden = StateView.puzzle(puzzle, showHidden = false).toString()
+        assertFalse("plan" in hidden || "blind_spot" in hidden, hidden)
+        assertTrue("twigs" in hidden && "facing" in hidden && "it is caught" in hidden, hidden)
     }
 
     @Test

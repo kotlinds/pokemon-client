@@ -5,6 +5,7 @@ import dev.kotlinds.pokemonclient.actions.ActionMode
 import dev.kotlinds.pokemonclient.actions.ActionRegistry
 import dev.kotlinds.pokemonclient.actions.ActionSettings
 import dev.kotlinds.pokemonclient.actions.FlyAdvisor
+import dev.kotlinds.pokemonclient.actions.ReachSurvey
 import dev.kotlinds.pokemonclient.data.BattleKnowledge
 import dev.kotlinds.pokemonclient.data.CatchChance
 import dev.kotlinds.pokemonclient.data.KnowledgeLevel
@@ -116,7 +117,12 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
             val field = state.field
             val area = field?.let { game.world?.areaOf(it.mapId) }
             if (compact && !moved) put("map", MAP_UNCHANGED)
-            else if (field != null && area != null) MapView.render(area, field, game::mapName, world = game.world, showHidden = walkthrough, hideDestinations = hidden).forEach { (k, v) -> put(k, v) }
+            else if (field != null && area != null) {
+                // What reaching each listed target needs: one search over this map for the whole view.
+                val survey = ReachSurvey(game, state, options.actionSettings)
+                MapView.render(area, field, game::mapName, world = game.world, showHidden = walkthrough, hideDestinations = hidden, reach = survey::of)
+                    .forEach { (k, v) -> put(k, v) }
+            }
         }
         // Movement puzzles left to the agent: say so where it matters (a puzzle here, or the full state).
         val here = state.field

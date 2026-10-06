@@ -1,6 +1,5 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
-import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.world.Area
 import dev.kotlinds.pokemonclient.state.PlatformEffect
@@ -24,10 +23,7 @@ import dev.kotlinds.pokemonclient.state.TeleportKind
  *   purple shutter opened once by its switch (`FLAG_OPENED_GOLDENROD_PURPLE_GATE`).
  *   files/fielddata/script/scr_seq/scr_seq_0096_D37R0104.s; tiles from the shutters' objects (zone_event 194).
  * - **Azalea Gym** (`MAP_AZALEA_GYM`): 4 Spinarak carts on 12 stations; stepping on a station's trigger with a cart
- *   rides it to another station, the route chosen by 2 lever bits. `Gymmick.azalea` {u8 spiders[4]; int
- *   switches} (include/gymmick.h, src/gymmick_init.c InitAzaleaGym), routes in asm/overlay_04.s
- *   `ov04_022575A4` (per station, per lever state: count, arrival station, path) and `ov04_022575D4` (station
- *   tiles); ride: `BeginAzaleaGymSpinarakRide` / `ov04_02254724`, levers: `FlipAzaleaGymSwitch`.
+ *   rides it to another station, the route chosen by 2 lever bits ([HgssAzaleaGym]).
  * - **Blackthorn Gym** (`MAP_BLACKTHORN_GYM`): three platforms on the lava, turned and slid by trigger tiles
  *   ([HgssBlackthornGym]).
  * - **Ice Path B1F** (`MAP_ICE_PATH_B1F`): four Strength boulders, each dropping through its own hole to B2F.
@@ -42,9 +38,6 @@ object HgssPuzzles {
 
     /** `MAP_GOLDENROD_TUNNEL_B2F` (D37R0104). */
     const val GOLDENROD_TUNNEL_B2F = 201
-
-    /** `MAP_AZALEA_GYM` (T23GYM0102). */
-    const val AZALEA_GYM = 180
 
     /** Reads of the game the puzzles need (an [HgssReader] in the game; fakes in tests). */
     interface Reads {
@@ -68,11 +61,11 @@ object HgssPuzzles {
         val pads = pads(mapId, reads, area)
         val main = when (mapId) {
             GOLDENROD_TUNNEL_B2F -> goldenrodTunnel(reads)
-            AZALEA_GYM -> azaleaGym(reads)
+            HgssAzaleaGym.MAP -> azaleaGym(reads)
             HgssBlackthornGym.MAP -> blackthornGym(reads, area)
             ICE_PATH_B1F -> icePathBoulders(reads)
             HgssIlexFarfetchd.MAP -> HgssIlexFarfetchd.herds(reads, objects, area).takeIf { it.isNotEmpty() }
-                ?.let { PuzzleState(PuzzleKind.HERDING, HgssIlexFarfetchd.RULE, herds = it) }
+                ?.let { PuzzleState(PuzzleKind.HERDING, HgssIlexFarfetchd.RULE, herds = it, walkthroughRule = HgssIlexFarfetchd.WALKTHROUGH_RULE) }
             else -> HgssGymPuzzles.read(mapId, reads, area)
         }
         val unmodeled = HgssGymPuzzles.unmodeled(reads)
@@ -98,9 +91,7 @@ object HgssPuzzles {
         return area.scriptWarps.filter { it.zone == mapId }.mapNotNull { warp ->
             val trigger = area.triggers.firstOrNull { it.zone == mapId && it.id == warp.trigger } ?: return@mapNotNull null
             if (reads.variable(trigger.variable) != trigger.value) return@mapNotNull null
-            val from = (trigger.x until trigger.x + maxOf(1, trigger.width)).flatMap { x ->
-                (trigger.y until trigger.y + maxOf(1, trigger.height)).map { y -> PuzzleTile(x, y) }
-            }
+            val from = trigger.tiles.map { (x, y) -> PuzzleTile(x, y) }
             PuzzleTeleport("teleport:${warp.trigger}", TeleportKind.PAD, from, PuzzleTile(warp.x, warp.y))
         }
     }
@@ -171,75 +162,30 @@ object HgssPuzzles {
 
     // region Azalea Gym
 
-    /** `GYMMICK_AZALEA` (include/gymmick.h). */
-    private const val GYMMICK_AZALEA = 5
-
-    /** Station tiles (`ov04_022575D4`): where the carts stop. */
-    private val STATIONS = listOf(
-        PuzzleTile(3, 31), PuzzleTile(9, 31), PuzzleTile(15, 31),
-        PuzzleTile(3, 24), PuzzleTile(9, 24), PuzzleTile(15, 24),
-        PuzzleTile(3, 16), PuzzleTile(9, 16), PuzzleTile(15, 16),
-        PuzzleTile(3, 9), PuzzleTile(9, 9), PuzzleTile(15, 9),
-    )
-
-    /**
-     * Stations whose ride runs its path backwards (the jump table of `BeginAzaleaGymSpinarakRide`): their trigger
-     * is the station tile itself and the player gets off two tiles south of the arrival station (placed one tile
-     * south, then a step south). The others are entered from the tile south of the station and the player gets off
-     * one tile north of the arrival station (placed on it, then a step north).
-     */
-    private val REVERSED = setOf(3, 4, 5, 9, 10, 11)
-
-    /**
-     * Arrival station per station and lever state (`switches` 0..3), null when the cart doesn't go anywhere
-     * (`ov04_022575A4`: the `{count, arrival, path}` entries; count 0 = no route).
-     */
-    private val ROUTES: List<List<Int?>> = listOf(
-        listOf(4, 4, 4, 4), listOf(5, 5, 5, 5), listOf(3, 3, 3, 3),
-        listOf(2, 2, 2, 2), listOf(0, 0, 0, 0), listOf(1, 1, 1, 1),
-        listOf(null, 9, null, 10), listOf(9, 11, 10, 11), listOf(null, null, null, null),
-        listOf(7, 6, null, null), listOf(null, null, 7, 6), listOf(null, 7, null, 7),
-    )
-
-    /** Levers: switch 0 = the 3 levers of bit 0 (bg events 0..2), switch 1 = the lever of bit 1 (bg event 3). */
-    private val LEVERS = listOf(
-        listOf(0 to PuzzleTile(4, 7), 1 to PuzzleTile(11, 8), 2 to PuzzleTile(11, 18)),
-        listOf(3 to PuzzleTile(2, 18)),
-    )
-
     private const val AZALEA_RULE =
         "Step on a cart station's tile (teleport cart:N) while a Spinarak cart waits there to ride it to another " +
             "station; the cart stays at the arrival. Levers (switch:0 = sign:0..2, switch:1 = sign:3) each toggle one " +
-            "bit that changes the routes from the upper stations (cart:6..11). Carts and levers reset on entering the gym."
-
-    /** The trigger tile of [station] (the zone's coordinate events 0..11). */
-    fun azaleaTrigger(station: Int): PuzzleTile = STATIONS[station].let { if (station in REVERSED) it else PuzzleTile(it.x, it.y + 1) }
-
-    /** Where the player stands after riding from [from] to [to]. */
-    fun azaleaLanding(from: Int, to: Int): PuzzleTile = STATIONS[to].let { if (from in REVERSED) PuzzleTile(it.x, it.y + 2) else PuzzleTile(it.x, it.y - 1) }
-
-    /** The arrival station of a ride from [station] with lever bits [switches], or null. */
-    fun azaleaRoute(station: Int, switches: Int): Int? = ROUTES.getOrNull(station)?.getOrNull(switches and 3)
+            "bit that changes the routes from the upper stations (cart:6..11). Carts and levers reset on entering the gym. " +
+            "go_to plans the rides and the levers by itself (go_to cart:N rides that cart)."
 
     private fun azaleaGym(reads: Reads): PuzzleState? {
-        val gymmick = reads.gymmick() ?: return null
-        if (Gen4RomBytes.s32(gymmick, 0) != GYMMICK_AZALEA) return null
-        val carts = (0 until 4).map { gymmick[4 + it].toInt() and 0xFF }
-        val switches = Gen4RomBytes.s32(gymmick, 8) and 3
-        val rides = carts.distinct().filter { it in STATIONS.indices }.sorted().mapNotNull { station ->
-            val to = azaleaRoute(station, switches) ?: return@mapNotNull null
-            PuzzleTeleport("cart:$station", TeleportKind.CART_RIDE, listOf(azaleaTrigger(station)), azaleaLanding(station, to))
+        val carts = reads.gymmick()?.let(HgssAzaleaGym::carts) ?: return null
+        val switches = carts.switches
+        // One ride per station with a cart (two carts at one station are one way to ride from there).
+        val rides = carts.stations.distinct().mapNotNull { station ->
+            val to = HgssAzaleaGym.route(station, switches) ?: return@mapNotNull null
+            PuzzleTeleport("cart:$station", TeleportKind.CART_RIDE, listOf(HgssAzaleaGym.trigger(station)), HgssAzaleaGym.landing(station, to))
         }
-        val levers = LEVERS.mapIndexed { bit, signs ->
+        val levers = HgssAzaleaGym.LEVERS.mapIndexed { bit, signs ->
             PuzzleSwitch(
                 id = "switch:$bit",
                 targets = signs.map { "sign:${it.first}" },
                 tiles = signs.map { it.second },
                 flipped = switches shr bit and 1 == 1,
-                toggles = STATIONS.indices.filter { s -> azaleaRoute(s, switches) != azaleaRoute(s, switches xor (1 shl bit)) }.map { "cart:$it" },
+                toggles = HgssAzaleaGym.STATIONS.indices.filter { s -> HgssAzaleaGym.route(s, switches) != HgssAzaleaGym.route(s, switches xor (1 shl bit)) }.map { "cart:$it" },
             )
         }
-        return PuzzleState(PuzzleKind.CART_RIDES, AZALEA_RULE, levers, teleports = rides)
+        return PuzzleState(PuzzleKind.CART_RIDES, AZALEA_RULE, levers, teleports = rides, mechanics = HgssAzaleaGym(carts))
     }
 
     // region Ice Path B1F

@@ -209,6 +209,14 @@ sealed interface GameAction {
         override val key get() = "fly($destination)"
     }
 
+    /**
+     * Uses field move [move] outside battle from the party menu, by a Pokémon of the party that knows it (picked by
+     * the recipe); [target]: the Pokémon that gets the HP of Milk Drink / Softboiled.
+     */
+    data class UseFieldMove(val move: dev.kotlinds.pokemonclient.world.FieldMoveKind, val target: MonId? = null) : GameAction {
+        override val key get() = "use_field_move(${move.wire}" + (target?.let { "→$it" } ?: "") + ")"
+    }
+
     /** Saves the game. */
     data object SaveGame : GameAction {
         override val key = "save_game"
@@ -326,12 +334,23 @@ sealed interface PcOperation {
     }
 }
 
-/** Movement options of [GameAction.GoTo]. */
+/** Movement options of [GameAction.GoTo] and [GameAction.Step] (and of the walks other actions make). */
 data class MoveOptions(
     val avoidTallGrass: Boolean = false,
     val avoidTrainers: Boolean = false,
     val acceptOneWay: Boolean = false,
-    val run: Boolean = false,
+    /**
+     * Run (B held, with the running shoes) rather than walk: by default (owner's decision, NOTES "courir par défaut":
+     * an agent never asked for it and walked everywhere). Onto tiles where wild Pokémon can appear, walks still walk
+     * unless [runInEncounterAreas] ([FootPace]).
+     */
+    val run: Boolean = true,
+    /**
+     * Also run onto the tiles where wild Pokémon can appear now (tall grass, cave floors...): running doubles the
+     * encounter roll there (HGSS: 40 % instead of 20 %, src/field/encounter_check.c `FieldSystem_EncounterRateRoll`),
+     * so it must be asked for (looking for wild Pokémon: `find_encounter` does).
+     */
+    val runInEncounterAreas: Boolean = false,
     /** Ride the bicycle (got on before walking, again after each warp, where cycling is allowed). */
     val bike: Boolean = false,
 )

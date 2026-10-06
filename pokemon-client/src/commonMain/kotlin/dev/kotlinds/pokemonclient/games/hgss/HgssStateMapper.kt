@@ -158,6 +158,7 @@ class HgssStateMapper {
                         else -> MovementMode.WALK
                     },
                     moving = l.moving,
+                    runningShoes = l.hasRunningShoes,
                     trainerEncounter = state.engagedTrainer != null,
                     engagedTrainerId = state.engagedTrainer,
                     objects = state.surroundings?.objects.orEmpty().filterNot { it.hidden || HgssObjectIds.isProp(it, l.mapId) }.map { o ->

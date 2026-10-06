@@ -136,6 +136,22 @@ class ActionRegistryTest {
     }
 
     @Test
+    fun anUnknownParameterNamesTheParameterToUseWithoutAnAlias() {
+        // NOTES (map randomizer run): `option` passed twice to open_menu / choose, which take `entry`.
+        val menu = registry.parse(buildJsonObject { put("type", "open_menu"); put("option", "option:pokemon") }, ActionMode.ASSISTED)
+        val error = assertIs<ActionError.UnknownParameter>((menu.exceptionOrNull() as ActionException).error)
+        assertEquals("INVALID_PARAM", error.code)
+        assertEquals("option", error.name)
+        assertEquals(listOf("entry"), error.suggested.map { it.first })
+        assertTrue(error.message.startsWith("Unknown parameter `option` for open_menu: use `entry` ("), error.message)
+        val choose = registry.parse(buildJsonObject { put("type", "choose"); put("option", "option:yes") }, ActionMode.ASSISTED)
+        assertTrue((choose.exceptionOrNull() as ActionException).error.message.contains("use `entry` (Id of the entry"))
+        // An action without parameters says so.
+        val save = registry.parse(buildJsonObject { put("type", "save_game"); put("slot", 1) }, ActionMode.ASSISTED)
+        assertEquals("Unknown parameter `slot` for save_game: save_game takes no parameter", (save.exceptionOrNull() as ActionException).error.message)
+    }
+
+    @Test
     fun attackGoesThroughFightThenTheMoveCheckingEachCursor() {
         val game = FakeGame(command, state = { battleState(it) })
         game.onPress = { button, screen ->

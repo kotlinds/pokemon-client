@@ -30,7 +30,7 @@ internal sealed interface SearchResult<out S, out P, out L> {
 }
 
 /**
- * The one Dijkstra of the route planning ([Pathfinder], [WorldRouter], [PushPlanner], [PlatformPlanner]): the cheapest
+ * The one Dijkstra of the route planning ([Pathfinder], [WorldRouter], [PushPlanner], [MechanismPlanner]): the cheapest
  * way from [start] to a state where [isGoal] holds, over the states [moves] produces.
  *
  * A state is a [place] (where the player is: a node, an area and node, a node with the objects' positions) plus what

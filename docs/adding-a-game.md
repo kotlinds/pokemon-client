@@ -27,11 +27,21 @@ contract, and don't put generic things in `games/gen4/`.
 |---|---|---|
 | `state(memory)` | RAM → `GameState`: the `Screen` on display (with entries, cursor, topology), party, bag, battle, field, story (`StoryState`: open goals, steps completed, blockers) | yes |
 | `inputProbe` | which buttons the game has registered this frame (self-checking taps: hold until the game saw it) | yes (`Gen4Game` gives it) |
-| `world` | the ROM's maps as `Area`s: tiles (`TileKind`, heights), warps, signs, people, triggers (Gen 4: extend `Gen4WorldSource` with the header table, NARC paths, tile behaviours, obstacle sprites, hidden item flag base) | for movement actions |
+| `world` | the ROM's maps as `Area`s: tiles (`TileKind`, heights), warps, signs, people, triggers, and whether an area is one map alone or a space several maps share (`AreaKind`: only a `SINGLE_MAP` has a void around its room) (Gen 4: extend `Gen4WorldSource` with the header table, NARC paths, tile behaviours, what takes each warp by its tile's behaviour (`warpTrigger`: entering it, a press on it, or nothing), obstacle sprites, hidden item flag base) | for movement actions |
+| `world` encounters | the wild encounter tables: `encounterTables` (`DECODED` once the game decodes them; the default `UNKNOWN` makes `find_encounter` use the tile kinds and `lookup encounters` answer `"tables": "unknown"`, never "no wild Pokémon"), `wildEncounters(zone)` (the common `WildEncounters` model: groups by method, time of day, condition) and `encounterChance(zone, water, conditions)` (the game's roll: routes weigh it, and walks only walk onto encounter tiles where walking makes the roll rarer). Gen 4: the slot chances, held items, Repel rule and slot merging are shared (`Gen4Encounters`); the table format and the movement's first roll are per game (`HgssEncounters`, `PlatinumEncounters`) | for `find_encounter`, `lookup encounters`, route weights |
 | `data` | `GameData` from the ROM: species, moves, items, type chart, machines, text | for `lookup` and effectiveness |
-| `scriptVariable(memory, id)` | read a script variable (active triggers, puzzles) | for triggers |
+| `scriptVariable(memory, id)`, `scriptFlag(memory, id)` | read a script variable / an event flag (active triggers, puzzles, quiet triggers). Gen 4: the save's `VarsFlags` (`Gen4SaveData` with the game's `Gen4SaveLayout`) | for triggers |
 | `mapName(id)` | the one `MapName` of a map (the place shown in game + the map's own name; `map:<id>` when unknown), shown by the state and the map view, matched by `go_to` and `fly` | for movement actions |
-| `fieldMoveRule(kind)` | the move and badge of each field move, Fly included (Gen 4: give `fieldMoveBadges`) | for field moves and `fly` |
+| `fieldMoveRule(kind)` | the move and badge of each field move, Fly included (Gen 4: give `fieldMoveBadges`, a map from each move the game has to the badge it needs, `null` for none: Teleport, Dig...; a move missing from the map is one the game doesn't have). A game whose party and party menu aren't decoded yet says so (`Gen4Game.partyRead = false`): every move is `FieldMoveAccess.NotSupported`, `fly` and `use_field_move` are listed unavailable (`NOT_SUPPORTED_BY_GAME`), routes don't use Surf, Cut... | for field moves and `fly` |
+
+`GameState` fields a game fills when it can read them (null / empty means unknown, never "none"):
+
+| Field | What it is | Gen 4 |
+|---|---|---|
+| `pokedex` | species seen and caught (`SpeciesSet`, a compact bitset: cheap on every decode): `lookup encounters` names only the species seen below the walkthrough level | `Gen4SaveData.pokedex()` |
+| `eventFlags` | every event flag of the save (`EventFlags`, one bulk read): which people of other maps are there (an exit whose arrival someone blocks, the reachability survey) | `Gen4SaveData.eventFlags()` |
+| `field.runningShoes`, `field.autoRun` | the running shoes owned (null: taken as owned) / switched on (the game runs whatever is pressed) | HGSS reads both; Platinum not yet (walks run by default) |
+| `player.badgeIds` | the badges by the game's id (rules check ids, never names) | HGSS |
 
 Register the ROM's game code in `PokemonGames` (`pokemon-client`, not the app): the app, the MCP server and the
 bench all detect the game from the ROM (`POKEMON_ROM=roms/<game>.nds`).
@@ -124,6 +134,21 @@ Never compare values that depend on the time of day (the RTC follows the host cl
 7. **Story table** (optional, walkthrough knowledge): ordered steps with typed conditions on flags / vars / badges.
 8. **Verify the shared recipes** on the new game with the bench (`act:{...}`): heal, buy, PC, battle actions, fly,
    fish, teach, go_to... A recipe only needs a per-game override when the game's screens really differ.
+
+## What Platinum doesn't read yet
+
+The same actions are offered as in HeartGold / SoulSilver; what can't work yet is said so (typed), never tried blindly:
+
+- **The party, the bag, the player's trainer card and battles** aren't decoded: `party` is empty, `player` is null, so
+  field moves are `NotSupported` (see `partyRead`) and the badges unknown.
+- **Running shoes**: `runningShoes` / `autoRun` aren't read (walks hold B; Platinum's encounter roll doesn't depend
+  on the pace, so its walks never walk onto the grass anyway).
+- **Encounters**: the Great Marsh's daily Pokémon and the Trophy Garden's (another file, `encdata_ex`), Feebas's
+  tiles and the roamers are left out of `wildEncounters`; the swarm, Poké Radar and dual-slot (GBA cartridge)
+  replacements are listed as conditions.
+- **Script bytecode**: Platinum's script commands aren't decoded, so triggers that do nothing, script warps and holes
+  (`Gen4WorldSource.trigger` / `scriptWarps` / `triggerWarps`) are left at their defaults: every armed trigger (its
+  save variable at the awaited value, read like HGSS's) counts as a scene.
 
 ## What the shared code still assumes (to know before a non-Gen 4 game)
 

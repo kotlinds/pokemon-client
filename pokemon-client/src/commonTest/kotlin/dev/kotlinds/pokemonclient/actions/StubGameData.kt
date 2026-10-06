@@ -14,10 +14,11 @@ import dev.kotlinds.pokemonclient.state.ItemId
 import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.state.SpeciesId
 
-/** Game data for tests: only the given [items] and [species], nothing else. */
+/** Game data for tests: only the given [items], [species] and [machines] (the move each machine teaches), nothing else. */
 class StubGameData(
     private val items: Map<ItemId, ItemInfo> = emptyMap(),
     private val speciesInfo: Map<SpeciesId, SpeciesInfo> = emptyMap(),
+    private val machines: Map<MachineId, MoveId> = emptyMap(),
 ) : GameData {
     override val speciesCount = speciesInfo.size
     override val moveCount = 0
@@ -30,7 +31,7 @@ class StubGameData(
     override fun typeName(type: PokemonType) = type.label
     override fun trainerClassName(id: Int): String? = null
     override val typeChart = TypeChart(emptyMap(), emptySet())
-    override fun machineMove(machine: MachineId): MoveId? = null
+    override fun machineMove(machine: MachineId): MoveId? = machines[machine]
     override fun machineOf(item: ItemId): MachineId? = null
     override fun text(bank: TextBankId, line: Int): String? = null
 }

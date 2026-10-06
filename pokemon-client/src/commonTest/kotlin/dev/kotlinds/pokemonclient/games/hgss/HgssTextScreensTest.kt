@@ -48,6 +48,16 @@ class HgssTextScreensTest {
     }
 
     @Test
+    fun anItemBallsMessageHasNoSpeaker() {
+        // Route 6 of the map-randomized save, after picking up an item ball: its script hid the ball (the MapObject
+        // cleared) before the message, which read as said by a "person" (NOTES: "person: CLAUDE found a PP Up!").
+        val screen = assertIs<Screen.Dialogue>(screen("item_ball_found"))
+        assertEquals(TextSource.FIELD, screen.source)
+        assertTrue("TM62" in screen.text, screen.text)
+        assertNull(screen.speaker)
+    }
+
+    @Test
     fun nurseMessageAtAPageBreakWaitsForA() {
         val screen = assertIs<Screen.Dialogue>(screen("text_nurse_page"))
         assertEquals(Awaiting.INPUT, screen.awaiting)

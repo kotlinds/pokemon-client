@@ -15,6 +15,7 @@ import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.Trigger
 import dev.kotlinds.pokemonclient.world.TriggerWarp
 import dev.kotlinds.pokemonclient.world.Warp
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.world.WorldSource
 import kotlin.test.Test
 import kotlin.test.assertFalse
@@ -26,7 +27,7 @@ import dev.kotlinds.pokemonclient.state.MapName
 /**
  * A simulated dungeon of several floors (one area per zone, or one area shared by outdoor zones), like the real
  * game ([GridGame]): holding a direction for [GridGame.STEP_FRAMES] frames moves the player one tile; stepping on a door or a hole, or
- * pressing the exit direction on a ladder, moves the player to the other floor only after a transition of
+ * pressing the exit direction on a ladder ([WarpTrigger]), moves the player to the other floor only after a transition of
  * [transitionFrames] frames (a fade), during which the player doesn't move; stepping on an active scene trigger opens
  * a dialogue.
  */
@@ -41,6 +42,8 @@ private class FloorsGame(
     val pushBack: Boolean = false,
     /** The maps' names ("Floor N" by default). */
     val names: (Int) -> MapName = { MapName(it, map = "Floor $it") },
+    /** Warps the game takes on entering their tile but its maps don't show (what the walk can't foresee). */
+    val unmapped: List<Warp> = emptyList(),
 ) : GridGame(x, y) {
     var scene = false
 
@@ -61,7 +64,8 @@ private class FloorsGame(
     override fun state(memory: Memory): GameState {
         val field = FieldState(zone, names(zone), x, y, 0, facing, MovementMode.WALK, moving = false, objects = people[zone].orEmpty())
         val screen = if (scene) Screen.Dialogue(TextSource.FIELD, null, "A scene!", Awaiting.INPUT)
-        else Screen.Overworld(null, if (busy > 0) Awaiting.ANIMATION else Awaiting.INPUT)
+        // The game is busy during a push-back and a warp's transition (its fade), like the real one.
+        else Screen.Overworld(null, if (busy > 0 || pending != null) Awaiting.ANIMATION else Awaiting.INPUT)
         return GameState(0, screen, null, emptyList(), null, null, field)
     }
 
@@ -95,7 +99,7 @@ private class FloorsGame(
     override fun step(direction: Direction) {
         val here = area()
         // A ladder / exit mat: pressing its direction takes it.
-        here.warps.firstOrNull { it.zone == zone && it.x == x && it.y == y && it.exitDirection == direction }?.let {
+        here.warps.firstOrNull { it.zone == zone && it.x == x && it.y == y && it.trigger == WarpTrigger.Press(direction) }?.let {
             arrive(it.targetZone, it.targetWarp)
             return
         }
@@ -105,7 +109,7 @@ private class FloorsGame(
         val free = (!tile.blocked || tile.kind == TileKind.Door) && people[zone].orEmpty().none { it.x == nx && it.y == ny }
         if (!free) return
         moveTo(nx, ny)
-        here.warps.firstOrNull { it.zone == zone && it.x == x && it.y == y && it.exitDirection == null }?.let { arrive(it.targetZone, it.targetWarp) }
+        (here.warps + unmapped).firstOrNull { it.zone == zone && it.x == x && it.y == y && it.trigger == WarpTrigger.Enter }?.let { arrive(it.targetZone, it.targetWarp) }
         here.triggerWarps.firstOrNull { it.zone == zone && it.x == x && it.y == y }?.let { schedule(it.targetZone, it.toX, it.toY) }
         if (here.triggers.any { it.zone == zone && it.x == x && it.y == y } && here.triggerWarps.none { it.x == x && it.y == y }) {
             if (pushBack) { busy = PUSH_FRAMES; pushes++ } else scene = true
@@ -146,13 +150,102 @@ private fun floor(
 class WorldTravelTest {
 
     /**
+     * Two warps taken the same way, back to back (the shuffled warps' "invisible double warp", NOTES-run-map-randomizer):
+     * zone 1's warp at (0,1) leads to (0,2) on zone 2, right below zone 2's warp at (0,1) back to zone 1. Walking north
+     * into the first one, the walk stops on the first warp and says so; still holding north, it took the second one and
+     * came back where it started, "nothing happened".
+     */
+    private fun doubleWarp() = FloorsGame(
+        mapOf(
+            1 to floor(1, listOf(".", ".", "."), warps = listOf(Warp(1, 0, 0, 1, 2, 0), Warp(1, 1, 0, 2, 2, 1, WarpTrigger.Never))),
+            2 to floor(2, listOf(".", ".", "."), warps = listOf(Warp(2, 0, 0, 2, 1, 1, WarpTrigger.Never), Warp(2, 1, 0, 1, 1, 1))),
+        ),
+        zone = 1, x = 0, y = 2,
+    )
+
+    @Test
+    fun aStepStopsAtTheFirstWarpAndSaysWhichOne() {
+        val game = doubleWarp()
+        val done = assertIs<ActionOutcome.Done>(MovePlans.step.run(GameAction.Step(Direction.NORTH, 3), game.context()))
+        assertEquals(listOf(1, 2), game.zonesVisited)
+        assertEquals(Triple(2, 0, 2), Triple(game.zone, game.x, game.y))
+        assertEquals("took warp:0 at 0,1 (Floor 1) → Floor 2 (0,2)", done.detail)
+    }
+
+    @Test
+    fun goToAWarpStopsOnTheFarSideOfIt() {
+        val game = doubleWarp()
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), game.context()))
+        assertEquals(listOf(1, 2), game.zonesVisited)
+        assertEquals("took warp:0 at 0,1 (Floor 1) → Floor 2 (0,2)", done.detail)
+    }
+
+    /**
+     * A warp the walk didn't plan (the maps don't show it) taken on the way: the walk stops there, the answer says it
+     * wasn't the destination and where the player is now.
+     */
+    @Test
+    fun aWarpOnTheWayThatWasntTheDestinationStopsTheWalk() {
+        val game = FloorsGame(
+            mapOf(1 to floor(1, listOf("...")), 2 to floor(2, listOf("..."), warps = listOf(Warp(2, 0, 2, 0, 1, 0, WarpTrigger.Never)))),
+            zone = 1, x = 0, y = 0, unmapped = listOf(Warp(1, 0, 1, 0, 2, 0)),
+        )
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null), game.context()))
+        assertEquals(Triple(2, 2, 0), Triple(game.zone, game.x, game.y))
+        assertEquals(listOf(1, 2), game.zonesVisited)
+        assertTrue(done.detail!!.startsWith("stopped on the way: took a warp at 1,0 (Floor 1) → Floor 2 (2,0), which wasn't the destination"), done.detail)
+    }
+
+    /**
+     * Arrived on a warp taken by entering it (a cave mouth taken going north, NOTES: Mt. Silver 1F warp:2, Route 33
+     * w0): pressing does nothing in the game, so go_to steps off and back on.
+     */
+    @Test
+    fun aWarpUnderTheFeetIsTakenBySteppingOffAndBackOn() {
+        val game = doubleWarp()
+        game.x = 0; game.y = 1
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), game.context()))
+        assertEquals(2, game.zone, done.detail)
+        assertTrue((0 to 2) in game.visited || (0 to 0) in game.visited, game.visited.toString())
+        assertTrue(done.detail!!.startsWith("took warp:0"), done.detail)
+    }
+
+    /** A warp nothing takes (its tile has no warp behaviour: an arrival point only) is refused before walking. */
+    @Test
+    fun aWarpNothingTakesIsRefusedAtOnce() {
+        val game = doubleWarp()
+        game.x = 0; game.y = 0
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:1"), game.context())).error)
+        assertTrue("can't be taken" in error.detail, error.detail)
+        // Not a step taken.
+        assertEquals(1, game.visited.size)
+        assertEquals(Triple(1, 0, 0), Triple(game.zone, game.x, game.y))
+    }
+
+    /**
+     * Arrived below an exit mat taken by pressing south (the doormat of a shuffled door): the room is reached across
+     * the mat going north, and the mat itself is taken from there with the press south.
+     */
+    @Test
+    fun theDoormatBehindADoorLeadsBackInAndOut() {
+        val mat = Warp(1, 0, 1, 1, 2, 0, WarpTrigger.Press(Direction.SOUTH))
+        fun game() = FloorsGame(mapOf(1 to floor(1, listOf("...", "#.#", "#.#"), warps = listOf(mat)), 2 to floor(2, listOf("..."), warps = listOf(Warp(2, 0, 0, 0, 1, 0)))), zone = 1, x = 1, y = 2)
+        val inside = game()
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(0, 0, null), inside.context()))
+        assertEquals(Triple(1, 0, 0), Triple(inside.zone, inside.x, inside.y))
+        val out = game()
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), out.context()))
+        assertEquals(2, out.zone, done.detail)
+    }
+
+    /**
      * Floor 1: the start (0,0) is walled off from the goal (4,0); a ladder at (0,2) leads up to floor 2, which comes
      * back down by a hole at (4,1) landing at (4,1) on floor 1, next to the goal.
      */
     private fun dungeon(transition: Int = 60, names: (Int) -> MapName = { MapName(it, map = "Floor $it") }) = FloorsGame(
         mapOf(
-            1 to floor(1, listOf(".#...", ".#...", ".#..."), warps = listOf(Warp(1, 0, 0, 2, 2, 0, Direction.SOUTH))),
-            2 to floor(2, listOf(".....", "....."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, Direction.NORTH)), holes = listOf(TriggerWarp(2, 0, 4, 1, 1, 4, 1)), triggers = listOf(Trigger(2, 0, 4, 1, 1, 1, 1, 0x4000, 0))),
+            1 to floor(1, listOf(".#...", ".#...", ".#..."), warps = listOf(Warp(1, 0, 0, 2, 2, 0, WarpTrigger.Press(Direction.SOUTH)))),
+            2 to floor(2, listOf(".....", "....."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, WarpTrigger.Press(Direction.NORTH))), holes = listOf(TriggerWarp(2, 0, 4, 1, 1, 4, 1)), triggers = listOf(Trigger(2, 0, 4, 1, 1, 1, 1, 0x4000, 0))),
         ),
         zone = 1, x = 0, y = 0, transitionFrames = transition, names = names,
     )
@@ -297,8 +390,8 @@ class WorldTravelTest {
      */
     @Test
     fun anExitMatOnTheNextZoneOfTheAreaIsTakenByAPressTowardsTheExit() {
-        val outdoor = floor(1, listOf("......", "......"), warps = listOf(Warp(2, 0, 4, 1, 3, 0, Direction.SOUTH)), zones = listOf("111222", "111222"))
-        val gatehouse = floor(3, listOf("..."), warps = listOf(Warp(3, 0, 1, 0, 2, 0, Direction.NORTH)))
+        val outdoor = floor(1, listOf("......", "......"), warps = listOf(Warp(2, 0, 4, 1, 3, 0, WarpTrigger.Press(Direction.SOUTH))), zones = listOf("111222", "111222"))
+        val gatehouse = floor(3, listOf("..."), warps = listOf(Warp(3, 0, 1, 0, 2, 0, WarpTrigger.Press(Direction.NORTH))))
         val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor, 3 to gatehouse), zone = 1, x = 0, y = 0)
         val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), game.context()))
         assertEquals(listOf(1, 2, 3), game.zonesVisited, done.detail)
@@ -370,8 +463,8 @@ class HiddenDestinationsTravelTest {
     /** Floor 1's start (0,0) is walled off from (4,0); a ladder at (0,2) leads to floor 2, whose hole falls next to it. */
     private fun dungeon() = FloorsGame(
         mapOf(
-            1 to floor(1, listOf(".#...", ".#...", ".#..."), warps = listOf(Warp(1, 0, 0, 2, 2, 0, Direction.SOUTH))),
-            2 to floor(2, listOf(".....", "....."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, Direction.NORTH)), holes = listOf(TriggerWarp(2, 0, 4, 1, 1, 4, 1)), triggers = listOf(Trigger(2, 0, 4, 1, 1, 1, 1, 0x4000, 0))),
+            1 to floor(1, listOf(".#...", ".#...", ".#..."), warps = listOf(Warp(1, 0, 0, 2, 2, 0, WarpTrigger.Press(Direction.SOUTH)))),
+            2 to floor(2, listOf(".....", "....."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, WarpTrigger.Press(Direction.NORTH))), holes = listOf(TriggerWarp(2, 0, 4, 1, 1, 4, 1)), triggers = listOf(Trigger(2, 0, 4, 1, 1, 1, 1, 0x4000, 0))),
         ),
         zone = 1, x = 0, y = 0, transitionFrames = 10,
     )
@@ -412,8 +505,8 @@ class HiddenDestinationsTravelTest {
         val game = dungeon()
         val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), hidden(game)))
         assertEquals(2, game.zone, done.detail)
-        // The arrival is discovery (the game shows it); the target isn't described by where it leads.
-        assertFalse("Floor 2" in done.detail.orEmpty(), done.detail)
+        // The answer tells the warp taken and the arrival, which the game shows anyway (discovery), never more.
+        assertEquals("took warp:0 at 0,2 (Floor 1) → Floor 2 (0,0)", done.detail)
     }
 
     @Test
@@ -476,5 +569,20 @@ class HiddenDestinationsTravelTest {
         val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null), hidden(game))).error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertEquals(listOf(1), game.zonesVisited)
+    }
+
+    /**
+     * The go_to error and the view's reachability come from the same diagnosis and say it with the same words: a guard
+     * in the only way to warp:0 (destinations hidden: this map only).
+     */
+    @Test
+    fun theGoToErrorSaysWhatTheViewSaysOfTheTarget() {
+        val guard = FieldObject("person:1", "guard", dev.kotlinds.pokemonclient.state.FieldObjectKind.PERSON, 2, 0, Direction.WEST)
+        val game = FloorsGame(mapOf(1 to floor(1, listOf("....."), warps = listOf(Warp(1, 0, 4, 0, 2, 0)))), zone = 1, x = 0, y = 0, people = mapOf(1 to listOf(guard)))
+        val view = ReachSurvey(game, game.state(dev.kotlinds.pokemonclient.ZeroMemory), ActionSettings(hideDestinations = true)).of("warp:0")
+        assertEquals(" [blocked_by_person: person:1 (guard)]", view.suffix())
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), hidden(game))).error)
+        assertTrue(error.detail.endsWith(view.suffix()), error.detail)
+        assertTrue("person:1 (guard) stands in the only way" in error.hint.orEmpty(), error.hint)
     }
 }

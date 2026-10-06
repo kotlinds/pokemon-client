@@ -52,7 +52,7 @@ class HgssPuzzlesFixtureTest {
     @Test
     fun azaleaGymCartsAndLeversAreReadFromTheGymmick() {
         val field = field("gimmick_azalea_gym")
-        assertEquals(HgssPuzzles.AZALEA_GYM, field.mapId)
+        assertEquals(HgssAzaleaGym.MAP, field.mapId)
         assertEquals(14 to 6, field.x to field.y)
         val puzzle = assertNotNull(field.puzzle)
         assertEquals(PuzzleKind.CART_RIDES, puzzle.kind)
@@ -89,14 +89,14 @@ class HgssPuzzlesFixtureTest {
         // scr_seq_D35R0102_029: the Team Rocket HQ B1F trap (16,28) -> Warp MAP_TEAM_ROCKET_HEADQUARTERS_B1F, 0, 50, 4, DIR_WEST.
         assertEquals(listOf(ScriptWarp(247, 21, 50, 4, Direction.WEST)), world.areaOf(247)!!.scriptWarps)
         // Triggers that don't warp (Azalea cart stations, Goldenrod tunnel rival) are not script warps.
-        assertEquals(emptyList(), world.areaOf(HgssPuzzles.AZALEA_GYM)!!.scriptWarps)
+        assertEquals(emptyList(), world.areaOf(HgssAzaleaGym.MAP)!!.scriptWarps)
         assertEquals(emptyList(), world.areaOf(HgssPuzzles.GOLDENROD_TUNNEL_B2F)!!.scriptWarps)
     }
 
     @Test
     fun azaleaStationTriggersMatchTheZoneEvents() {
         // Coordinate events 0..11 of T23GYM0102 run AzaleaGymSpinarak 0..11.
-        val triggers = HgssWorldRom.require().areaOf(HgssPuzzles.AZALEA_GYM)!!.triggers.sortedBy { it.id }
-        assertEquals((0 until 12).map { HgssPuzzles.azaleaTrigger(it) }, triggers.map { PuzzleTile(it.x, it.y) })
+        val triggers = HgssWorldRom.require().areaOf(HgssAzaleaGym.MAP)!!.triggers.sortedBy { it.id }
+        assertEquals((0 until 12).map { HgssAzaleaGym.trigger(it) }, triggers.map { PuzzleTile(it.x, it.y) })
     }
 }

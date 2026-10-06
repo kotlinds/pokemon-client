@@ -15,9 +15,12 @@ object Gen4FieldMoves {
     /** A badge as a field move rule needs it: its [id] (bit of the badge flags, what the check uses), its [name] for messages. */
     data class Badge(val name: String, val id: Int)
 
-    /** The rule of field move [kind] in a game whose badges are [badges]; null when that game doesn't have the move. */
-    fun rule(kind: FieldMoveKind, badges: Map<FieldMoveKind, Badge>): FieldMoveRule? =
-        badges[kind]?.let { FieldMoveRule(MoveId(moveId(kind)), it.name, it.id) }
+    /**
+     * The rule of field move [kind] in a game whose field moves are [badges] (each one with the badge it needs, null
+     * for none: Teleport, Dig...); null when that game doesn't have the move.
+     */
+    fun rule(kind: FieldMoveKind, badges: Map<FieldMoveKind, Badge?>): FieldMoveRule? =
+        if (kind !in badges) null else badges[kind].let { FieldMoveRule(MoveId(moveId(kind)), it?.name, it?.id) }
 
     /** The move id of [kind] (include/constants/moves.h, the same in every Gen 4 game). */
     fun moveId(kind: FieldMoveKind): Int = when (kind) {
@@ -29,6 +32,15 @@ object Gen4FieldMoves {
         FieldMoveKind.ROCK_SMASH -> MOVE_ROCK_SMASH
         FieldMoveKind.WHIRLPOOL -> MOVE_WHIRLPOOL
         FieldMoveKind.ROCK_CLIMB -> MOVE_ROCK_CLIMB
+        FieldMoveKind.FLASH -> MOVE_FLASH
+        FieldMoveKind.TELEPORT -> MOVE_TELEPORT
+        FieldMoveKind.DIG -> MOVE_DIG
+        FieldMoveKind.SWEET_SCENT -> MOVE_SWEET_SCENT
+        FieldMoveKind.MILK_DRINK -> MOVE_MILK_DRINK
+        FieldMoveKind.SOFTBOILED -> MOVE_SOFTBOILED
+        FieldMoveKind.HEADBUTT -> MOVE_HEADBUTT
+        FieldMoveKind.CHATTER -> MOVE_CHATTER
+        FieldMoveKind.DEFOG -> MOVE_DEFOG
     }
 
     private const val MOVE_CUT = 15
@@ -39,4 +51,13 @@ object Gen4FieldMoves {
     private const val MOVE_ROCK_SMASH = 249
     private const val MOVE_WHIRLPOOL = 250
     private const val MOVE_ROCK_CLIMB = 431
+    private const val MOVE_HEADBUTT = 29
+    private const val MOVE_DIG = 91
+    private const val MOVE_TELEPORT = 100
+    private const val MOVE_SOFTBOILED = 135
+    private const val MOVE_FLASH = 148
+    private const val MOVE_MILK_DRINK = 208
+    private const val MOVE_SWEET_SCENT = 230
+    private const val MOVE_DEFOG = 432
+    private const val MOVE_CHATTER = 448
 }

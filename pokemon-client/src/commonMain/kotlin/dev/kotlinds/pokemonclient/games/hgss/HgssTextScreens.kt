@@ -169,6 +169,10 @@ internal object HgssScriptScreens {
      */
     private fun speaker(mem: HgssMemory, env: Long): String? {
         val obj = mem.ptr(env + A.SE_LAST_INTERACTED) ?: return null
+        // The object talked to is gone: an item ball's script hides it (`HidePerson VAR_SPECIAL_LAST_TALKED`, which
+        // clears the MapObject) before "CLAUDE found a PP Up!" (scr_seq_0141.s `_1830`). Nobody speaks then, like
+        // for the invisible objects below; its cleared slot would otherwise read as a "person".
+        if (mem.u32(obj + A.MO_FLAGS) and A.MO_FLAG_ACTIVE == 0L) return null
         val script = mem.u16(obj + A.MO_SCRIPT_ID)
         // A common trainer script, else a trainer its map's own scripts battle (Kimono Girls, Elite Four...).
         val trainer = trainerOfScript(script)

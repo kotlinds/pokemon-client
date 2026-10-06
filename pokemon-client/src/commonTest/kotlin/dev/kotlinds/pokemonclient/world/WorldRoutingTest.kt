@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.world
 
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.FieldObjectKind
@@ -82,12 +83,12 @@ class WorldRoutingTest {
     @Test
     fun linksGiveTheArrivalTileAndHoles() {
         val up = area(2, "...", warps = listOf(Warp(2, 0, 0, 0, 1, 1)))
-        val down = area(1, "...", warps = listOf(Warp(1, 0, 0, 0, 9, 0), Warp(1, 1, 2, 0, 2, 0, Direction.NORTH)), holes = listOf(TriggerWarp(1, 3, 1, 0, 2, 2, 0)))
+        val down = area(1, "...", warps = listOf(Warp(1, 0, 0, 0, 9, 0), Warp(1, 1, 2, 0, 2, 0, WarpTrigger.Press(Direction.NORTH))), holes = listOf(TriggerWarp(1, 3, 1, 0, 2, 2, 0)))
         val world = object : WorldSource {
             override fun areaOf(zoneId: Int) = mapOf(1 to down, 2 to up)[zoneId]
         }
         val links = WorldLinks.links(world, down, 1)
-        assertEquals(ZoneLink(ZoneLink.Kind.WARP, "warp:1", 1, 2, 0, Direction.NORTH, 2, 0, 0), links.first { it.id == "warp:1" })
+        assertEquals(ZoneLink(ZoneLink.Kind.WARP, "warp:1", 1, 2, 0, WarpTrigger.Press(Direction.NORTH), 2, 0, 0), links.first { it.id == "warp:1" })
         assertNull(links.first { it.id == "warp:0" }.toX, "unknown destination")
         val hole = links.single { it.kind == ZoneLink.Kind.HOLE }
         assertEquals("hole:3" to (2 to 0), hole.id to (hole.toX!! to hole.toY!!))
@@ -109,8 +110,8 @@ class WorldRoutingTest {
     @Test
     fun theRouterGoesThroughWarpsAndHoles() {
         // Zone 1: start walled off from the goal; a ladder (press north) up to zone 2, whose hole falls next to the goal.
-        val one = area(1, ".#..", ".#..", warps = listOf(Warp(1, 0, 0, 1, 2, 0, Direction.NORTH)))
-        val two = area(2, "....", warps = listOf(Warp(2, 0, 0, 0, 1, 0, Direction.SOUTH)), holes = listOf(TriggerWarp(2, 0, 3, 0, 1, 3, 1)))
+        val one = area(1, ".#..", ".#..", warps = listOf(Warp(1, 0, 0, 1, 2, 0, WarpTrigger.Press(Direction.NORTH))))
+        val two = area(2, "....", warps = listOf(Warp(2, 0, 0, 0, 1, 0, WarpTrigger.Press(Direction.SOUTH))), holes = listOf(TriggerWarp(2, 0, 3, 0, 1, 3, 1)))
         val world = object : WorldSource {
             override fun areaOf(zoneId: Int) = mapOf(1 to one, 2 to two)[zoneId]
         }
@@ -118,7 +119,7 @@ class WorldRoutingTest {
         assertEquals(listOf("warp:0", "hole:0"), route.links.map { it.id })
         assertTrue(route.oneWay)
         // A boulder where the map places it blocks the other floors too (static overlay).
-        val blocked = area(2, "....", warps = listOf(Warp(2, 0, 0, 0, 1, 0, Direction.SOUTH)), holes = listOf(TriggerWarp(2, 0, 3, 0, 1, 3, 1)))
+        val blocked = area(2, "....", warps = listOf(Warp(2, 0, 0, 0, 1, 0, WarpTrigger.Press(Direction.SOUTH))), holes = listOf(TriggerWarp(2, 0, 3, 0, 1, 3, 1)))
         val withBoulder = Area(2, "Zone 2", 0, 0, 4, 1, Array(4) { blocked.tile(it, 0) }, warps = blocked.warps, people = listOf(PersonTemplate(2, 1, 0, 2, 0, null, 0, 0, 0, FieldMoveKind.STRENGTH)), zones = IntArray(4) { 2 }, triggerWarps = blocked.triggerWarps)
         val world2 = object : WorldSource {
             override fun areaOf(zoneId: Int) = mapOf(1 to one, 2 to withBoulder)[zoneId]
@@ -146,7 +147,7 @@ class WorldRoutingTest {
     fun theMapListsArrivalsHolesEdgesItemsAndHiddenItems() {
         val outdoor = area(
             1, ".....~", ".....~", zones = listOf("111122", "111122"),
-            warps = listOf(Warp(1, 0, 0, 0, 5, 2, Direction.NORTH)),
+            warps = listOf(Warp(1, 0, 0, 0, 5, 2, WarpTrigger.Press(Direction.NORTH))),
             holes = listOf(TriggerWarp(1, 4, 1, 1, 6, 7, 8)),
             signs = listOf(Sign(1, 0, 2, 0, 1), Sign(1, 1, 3, 0, 8190, SignKind.HIDDEN_ITEM, 990), Sign(1, 2, 3, 1, 8191, SignKind.HIDDEN_ITEM, 991)),
         )

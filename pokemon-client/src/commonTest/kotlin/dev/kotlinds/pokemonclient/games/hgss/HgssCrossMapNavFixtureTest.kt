@@ -54,7 +54,7 @@ class HgssCrossMapNavFixtureTest {
         val gatehouse: (Node) -> Boolean = { it.x == 1050 && it.y == 183 }
         val options = RouteOptions(fieldMoves = setOf(FieldMoveKind.CUT))
         fun route(objects: List<LiveObject>) = assertIs<Pathfinder.Result.Found>(
-            Pathfinder(area, Overlay(objects = objects)).route(Node(field.x, field.y), options, setOf(1050 to 183), gatehouse),
+            Pathfinder(area, Overlay(objects = objects)).route(Node(field.x, field.y), options, setOf(1050 to 183), isGoal = gatehouse),
         ).route
         val cut = route(live(field) + neighbours).edges.filterIsInstance<FieldMoveEdge>().single()
         assertEquals(FieldMoveKind.CUT, cut.move)
@@ -75,7 +75,7 @@ class HgssCrossMapNavFixtureTest {
         val options = RouteOptions(mode = MovementMode.SURF, canSurf = true, fieldMoves = setOf(FieldMoveKind.SURF, FieldMoveKind.CUT, FieldMoveKind.STRENGTH))
         // Rocks all around the beach: no way by surfing from the Cinnabar side.
         val start = Node(field.x, field.y)
-        assertIs<Pathfinder.Result.Failed>(Pathfinder(area, Overlay(objects = live(field))).route(start, options, setOf(warp.x to warp.y), onWarp))
+        assertIs<Pathfinder.Result.Failed>(Pathfinder(area, Overlay(objects = live(field))).route(start, options, setOf(warp.x to warp.y), isGoal = onWarp))
         // The way the world router finds: more warps than go_to takes for a target of this map (refused before moving).
         val loop = assertNotNull(WorldRouter(world).route(92, start, options, goalTiles = { a -> if (a === area) setOf(warp.x to warp.y) else emptySet() }) { it.area === area && onWarp(it.node) })
         assertTrue(loop.links.size > 8, loop.links.toString())

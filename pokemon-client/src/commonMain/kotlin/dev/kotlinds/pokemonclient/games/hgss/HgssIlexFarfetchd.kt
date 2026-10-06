@@ -221,7 +221,14 @@ object HgssIlexFarfetchd {
 
     const val RULE =
         "A lost Farfetch'd runs away when you talk to it (A) from the wrong side, to another corner of its area, and " +
-            "turns towards the noise when you step on an active twig. Talked to from behind while it looks away " +
-            "(blind spot), it is caught. Follow `plan`: go_to each tile (avoid the other twigs on the way), face the " +
-            "given direction and press A, or just walk onto the twig tile."
+            "turns towards the noise when you step on an active twig. Talked to from behind while it looks away, it is " +
+            "caught."
+
+    /**
+     * How to read the herds' `blind_spot` and `plan` (a walkthrough's, [dev.kotlinds.pokemonclient.state.PuzzleState.walkthroughRule]).
+     * Without a walkthrough the agent gets the positions, facings and twigs, and works the way out itself.
+     */
+    const val WALKTHROUGH_RULE =
+        "`blind_spot`: true while it looks away (talked to from behind now, it is caught); follow `plan`: go_to each tile (avoid the other twigs on " +
+            "the way), face the given direction and press A, or just walk onto the twig tile."
 }

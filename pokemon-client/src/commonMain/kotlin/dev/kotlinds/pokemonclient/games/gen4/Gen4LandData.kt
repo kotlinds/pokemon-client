@@ -64,7 +64,13 @@ class Gen4Bdhc(private val plates: List<Plate>) {
 
     /**
      * Heights (units, rounded) of the surfaces at the center of each tile of the block (`z * 32 + x`), sorted and
-     * without duplicates; an empty list where no plate covers the tile.
+     * without duplicates.
+     *
+     * A tile no plate covers is at height 0, like the game sees it: its height lookup finds no plate and gives 0
+     * (`GetHeight` of the terrain collision manager: `CALCULATED_HEIGHT_SOURCE_NONE`, the height left at 0), and a move
+     * onto it is refused from 20 units above or below (`GetVerticalDirection`), whatever its collision bit says. Such
+     * tiles are the void between raised walkways (Whirl Islands B2F: rows of unblocked floor between the sloped
+     * walkways, at 240-336), never walked on from them although nothing blocks them.
      */
     fun tileHeights(): Array<List<Int>> {
         val result = Array<MutableList<Int>?>(BLOCK * BLOCK) { null }
@@ -83,12 +89,15 @@ class Gen4Bdhc(private val plates: List<Plate>) {
                 if (h !in list) list += h
             }
         }
-        return Array(BLOCK * BLOCK) { i -> result[i]?.sorted() ?: emptyList() }
+        return Array(BLOCK * BLOCK) { i -> result[i]?.sorted() ?: NO_PLATE }
     }
 
     companion object {
         private const val BLOCK = Gen4MapMatrix.BLOCK_TILES
         private const val FX = 4096.0
+
+        /** The height of a tile no plate covers: the game's lookup gives 0 there (see [tileHeights]). */
+        private val NO_PLATE = listOf(0)
 
         fun parse(b: ByteArray, start: Int): Gen4Bdhc? {
             if (b.decodeToString(start, start + 4) != "BDHC") return null

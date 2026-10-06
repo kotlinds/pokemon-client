@@ -63,7 +63,7 @@ class HgssPuzzlesTest {
     @Test
     fun azaleaGymCartsRideOnEntry() {
         // InitAzaleaGym: carts at stations 0, 1, 2, 7, levers 0.
-        val puzzle = assertNotNull(HgssPuzzles.read(HgssPuzzles.AZALEA_GYM, FakePuzzleReads(gymmick = azalea(listOf(0, 1, 2, 7), 0)), null))
+        val puzzle = assertNotNull(HgssPuzzles.read(HgssAzaleaGym.MAP, FakePuzzleReads(gymmick = azalea(listOf(0, 1, 2, 7), 0)), null))
         assertEquals(PuzzleKind.CART_RIDES, puzzle.kind)
         val rides = puzzle.teleports.associateBy { it.id }
         assertEquals(setOf("cart:0", "cart:1", "cart:2", "cart:7"), rides.keys)
@@ -81,10 +81,10 @@ class HgssPuzzlesTest {
     @Test
     fun azaleaGymLeversChangeTheUpperRoutesAndReversedRidesLandSouth() {
         // Cart at station 4 (reversed: the station tile is the trigger), back to station 0 (3,31): off at (3,33).
-        assertEquals(PuzzleTile(9, 24), HgssPuzzles.azaleaTrigger(4))
-        assertEquals(PuzzleTile(3, 33), HgssPuzzles.azaleaLanding(4, 0))
-        assertEquals(listOf(9, 11, 10, 11), (0..3).map { HgssPuzzles.azaleaRoute(7, it) })
-        val puzzle = assertNotNull(HgssPuzzles.read(HgssPuzzles.AZALEA_GYM, FakePuzzleReads(gymmick = azalea(listOf(4, 6, 8, 10), 3)), null))
+        assertEquals(PuzzleTile(9, 24), HgssAzaleaGym.trigger(4))
+        assertEquals(PuzzleTile(3, 33), HgssAzaleaGym.landing(4, 0))
+        assertEquals(listOf(9, 11, 10, 11), (0..3).map { HgssAzaleaGym.route(7, it) })
+        val puzzle = assertNotNull(HgssPuzzles.read(HgssAzaleaGym.MAP, FakePuzzleReads(gymmick = azalea(listOf(4, 6, 8, 10), 3)), null))
         // Station 8 never goes anywhere; 6 and 10 with both levers flipped go to 10 and 6.
         assertEquals(mapOf("cart:4" to PuzzleTile(3, 33), "cart:6" to PuzzleTile(9, 8), "cart:10" to PuzzleTile(3, 18)), puzzle.teleports.associate { it.id to it.to })
         assertEquals(listOf(true, true), puzzle.switches.map { it.flipped })
@@ -92,7 +92,7 @@ class HgssPuzzlesTest {
 
     @Test
     fun noAzaleaPuzzleWithoutTheAzaleaGymmick() {
-        assertNull(HgssPuzzles.read(HgssPuzzles.AZALEA_GYM, FakePuzzleReads(gymmick = ByteArray(0x24)), null))
+        assertNull(HgssPuzzles.read(HgssAzaleaGym.MAP, FakePuzzleReads(gymmick = ByteArray(0x24)), null))
         assertNull(HgssPuzzles.read(1, FakePuzzleReads(), null))
     }
 

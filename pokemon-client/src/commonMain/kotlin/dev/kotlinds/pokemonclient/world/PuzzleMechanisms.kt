@@ -15,13 +15,19 @@ enum class PuzzleMechanism {
 
     /** A lift started by stepping on its center (the Violet Gym). */
     LIFT,
+
+    /** A cart ridden from its station to another one by stepping on the station (the Azalea Gym's Spinarak carts). */
+    CART_RIDE,
+
+    /** A switch pressed with A that changes the way (the Azalea Gym's levers, which set the carts' routes). */
+    SWITCH,
 }
 
 /**
  * No route by walking alone, but there is one operating [mechanism] (movement puzzles left to the agent): the first
  * one on that way, at ([x], [y]) (the boulder / ice block, the platform trigger, the lift's tile), operated from
- * [from] going [direction] (walking into the boulder, stepping onto the trigger or the lift). [objectTo]: where a
- * pushed object would stop.
+ * [from] going [direction] (walking into the boulder, stepping onto the trigger, the lift or the station; facing the
+ * lever). [objectTo]: where a pushed object would stop.
  */
 data class NeedsMechanism(
     val mechanism: PuzzleMechanism,
@@ -30,4 +36,6 @@ data class NeedsMechanism(
     val from: Node? = null,
     val direction: Direction? = null,
     val objectTo: Pair<Int, Int>? = null,
+    /** For a [PuzzleMechanism.SWITCH]: what to press (`sign:N`). */
+    val target: String? = null,
 ) : RouteFailure

@@ -32,6 +32,17 @@ class HgssBlockersTest {
     }
 
     @Test
+    fun theVioletGymGuideOnTheLiftBlocksUntilSproutTower() {
+        // obj_T22GYM0101_sunglasses_2 on the lift's center (15,20), hidden once Elder Li is beaten (FLAG_UNK_076).
+        val guide = person(4, 15, 20, mapId = 135, eventFlag = 0x1C0)
+        val blockers = HgssBlockers.of(state(135, listOf(guide)))
+        assertEquals(listOf("person:4"), blockers.map { it.target })
+        assertTrue("lift" in blockers.single().reason && "Sprout Tower" in blockers.single().reason, blockers.single().reason)
+        val trained = StoryInfo(flags = setOf(HgssStoryTable.Flags.BEAT_SPROUT_ELDER))
+        assertTrue(HgssBlockers.of(state(135, listOf(guide), story = trained)).isEmpty())
+    }
+
+    @Test
     fun aCuratedPersonOfAnotherZoneIsMatchedByItsOwnZone() {
         // The Route 36 Sudowoodo seen from the neighbouring zone: matched with its own zone, not the player's; its id
         // is qualified with that zone, like the field object's (HgssObjectIds).

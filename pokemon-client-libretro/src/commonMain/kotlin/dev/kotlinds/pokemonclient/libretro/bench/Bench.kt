@@ -60,6 +60,9 @@ import kotlinx.io.readByteArray
  * - `boot[:frames]`: from power-on, presses A until the overworld (continues the saved game);
  * - `load:<file>` / `save:<file>`: loads / saves a save state (relative to the out dir);
  * - `step:<n>`: emulates n frames; `tap:<BUTTON>[x<n>]`: self-checking taps; `hold:<B1+B2...>:<n>`: holds buttons n frames; `touch:<x>,<y>`: touches the bottom screen;
+ * - `trace:<B1+B2...|none>:<held>:<total>`: holds the buttons `held` frames, then nothing, `total` frames in all, printing
+ *   each frame where the screen, the map, the tile, the facing or the movement changes; `fieldtrace:on|off`: prints the
+ *   same (with the buttons held) on every frame while the commands run, actions included (how a walk takes a warp);
  * - `until:<kind>:<frames>`: steps until the screen kind starts with `kind` (e.g. `overworld`, `dialogue`);
  * - `shot:<name>`: PNG of both screens; `state`: prints the decoded GameState; `screen`: prints the screen only;
  *   `flyhint:<map id>`: the fly suggestion for that map from here ([dev.kotlinds.pokemonclient.actions.FlyAdvisor]);
@@ -151,8 +154,12 @@ private class Bench(
     /** `autobattle`: every battle message read on every frame (the ground truth the recorder is checked against). */
     private var truth: MutableList<String>? = null
 
+    /** `fieldtrace:on`: the last field line printed (see [traceField]), null while off. */
+    private var fieldTrace: String? = null
+
     private val scope: ActionScope = ActionScope(console, game.inputProbe, onFrame = {
         if (watching) watchParty()
+        if (fieldTrace != null) traceField()
         truth?.let { seen ->
             val message = runCatching { game.state(scope.memory()).battle?.message }.getOrNull()
             truthFrames += message
@@ -171,6 +178,19 @@ private class Bench(
             println("  progress (frame ${console.frame}): ${progress.text}")
         }
     })
+
+    /**
+     * `fieldtrace:on`: prints the frame, the buttons held, the screen and the player's map, tile, facing and movement
+     * whenever one of them changes (how an action walks into a warp, frame by frame).
+     */
+    private fun traceField() {
+        val s = runCatching { game.state(scope.memory()) }.getOrNull() ?: return
+        val f = s.field
+        val held = runCatching { game.inputProbe.heldButtons(scope.memory()) }.getOrDefault(emptySet())
+        val line = "${held.joinToString("+").ifEmpty { "-" }} ${s.screen.kind}/${s.screen.awaiting} ${f?.mapId} ${f?.x},${f?.y} ${f?.facing} moving=${f?.moving}"
+        if (line != fieldTrace) println("  [${console.frame}] $line")
+        fieldTrace = line
+    }
 
     /** Frame of the last progress printed (see the scope's `onProgress`). */
     private var lastProgressPrint = Long.MIN_VALUE / 2
@@ -221,7 +241,22 @@ private class Bench(
                 val button = Button.valueOf(arg.substringBefore('x').uppercase())
                 repeat(arg.substringAfter('x', "1").toInt()) { println("  ${scope.tap(button)}") }
             }
+            "fieldtrace" -> fieldTrace = if (arg == "on") "" else null
             "hold" -> arg.split(':').let { (b, n) -> scope.step(n.toInt(), InputFrame(b.split('+').map { Button.valueOf(it.uppercase()) }.toSet())); scope.step(2) }
+            // trace:<B1+B2...|none>:<held frames>:<total frames>: holds the buttons, then nothing, printing every frame
+            // where the map, the position, the facing, the movement or the screen changes (warps, steps, fades).
+            "trace" -> arg.split(':').let { (b, n, total) ->
+                val held = if (b == "none") emptySet() else b.split('+').map { Button.valueOf(it.uppercase()) }.toSet()
+                var last = ""
+                repeat(total.toInt()) { i ->
+                    scope.step(1, if (i < n.toInt()) InputFrame(held) else InputFrame(emptySet()))
+                    val s = game.state(scope.memory())
+                    val f = s.field
+                    val line = "${s.screen.kind} ${f?.mapId} ${f?.x},${f?.y} ${f?.facing} moving=${f?.moving}"
+                    if (line != last) println("  +${i + 1}${if (i < n.toInt()) " held" else ""}: $line")
+                    last = line
+                }
+            }
             "raw" -> dev.kotlinds.pokemonclient.games.hgss.HgssReader(scope.memory()).read()?.let { st ->
                 println("  mode=${st.mode} detail=${st.modeDetail} awaiting=${st.awaitingInput} fading=${st.fading}")
                 println("  loc=${st.location?.let { "${game.mapName(it.mapId)} ${it.x},${it.z} ${it.facing}" }}")

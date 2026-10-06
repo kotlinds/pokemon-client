@@ -5,11 +5,21 @@ import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.world.WorldSource
+import kotlin.math.abs
 
 /**
  * The few rules every movement recipe shares (walks, single steps, field moves, pushes, teleports, `interact`), kept
  * in one place so they can't drift apart: when the player is in control, when the game took the control away, how to
- * wait for the player to stand still, and how to face a direction (verified, like every other press).
+ * wait for the player to stand still, how to face a direction (verified, like every other press), and what a warp is
+ * ([isWarp], [WarpWatch], [awaitOutcome]).
+ *
+ * The warp rule: a movement stops at the first warp. Every state the recipes read goes through the [WarpWatch] of the
+ * [Navigator], which notes the first jump of the player to another place; the holds let go as soon as the game is busy
+ * without the player moving (a door opening, a fade starting), never press again once a warp was seen, and the answer
+ * says which warp was taken and where the player is now. Holding on across a warp is what took the shuffled warps
+ * twice (the "invisible double warp": arrived in front of another warp taken the same way, the held direction took it
+ * back at once, and the walk saw the same map and tile as before).
  */
 internal object FieldControl {
 
@@ -70,10 +80,12 @@ internal object FieldControl {
     }
 
     /**
-     * Steps without input until the player has stood still for [stillFrames] frames in a row (a step, a bike's last
-     * tile, a slide over), at most [maxFrames]. With [stopOn], returns as soon as the game takes the control away
-     * during that kind of motion ([Still.TakenOver]). The one "wait until still" of the walks: the game may still act on
-     * an input read a few frames ago, so a move is over only once the player stays put for a few frames.
+     * Steps without input until the player has stood still, with the control ([inControl]), for [stillFrames] frames in
+     * a row (a step, a bike's last tile, a slide over), at most [maxFrames]. With [stopOn], returns as soon as the game
+     * takes the control away during that kind of motion ([Still.TakenOver]). The one "wait until still" of the walks:
+     * the game may still act on an input read a few frames ago, so a move is over only once the player stays put for a
+     * few frames. Frames where the game is busy without the player moving (a door opening, the fade of a warp that
+     * starts the frame after the step ends) don't count as still: the move isn't over.
      */
     fun awaitStill(context: PlanContext, maxFrames: Int = SETTLE_FRAMES, stillFrames: Int = STILL_FRAMES, stopOn: Motion? = null): Still {
         var still = 0
@@ -84,10 +96,75 @@ internal object FieldControl {
             waited++
             state = context.state()
             if (stopOn != null && takenOver(state, stopOn)) return Still.TakenOver(state)
-            still = if (state.field?.moving == true) 0 else still + 1
+            still = if (state.field?.moving == false && inControl(state)) still + 1 else 0
             if (still >= stillFrames) return Still.Settled(state)
         }
         return Still.TimedOut(state)
+    }
+
+    /**
+     * True when the player went from [before] to [after] (two readings in a row) through a warp, a hole or a warp pad,
+     * not by moving on the map, by what the game did between them:
+     * - onto another area (the next zone of the same overworld is walked into): always a warp (without maps, any
+     *   other map);
+     * - farther than [MAX_STRIDE] tiles on the same area (two shuffled outdoor maps of one region, a pad to the same
+     *   map) when the game showed a map transition in between ([transitionSeen]: its fade,
+     *   [dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION]), or when the readings are [frames] ≤
+     *   [CONSECUTIVE_FRAMES] apart (nothing the player does on the map moves them that far in so few frames).
+     *
+     * Distance alone isn't a warp: waits that read the game every few frames ([Navigator.advanceUntil] during a field
+     * move's animation, a ride) see a Rock Climb, a waterfall or a cart cover several tiles between two readings,
+     * with no transition.
+     */
+    fun isWarp(world: WorldSource?, before: FieldState, after: FieldState, transitionSeen: Boolean, frames: Long): Boolean {
+        if (before.mapId != after.mapId) {
+            if (world == null) return true
+            if (world.areaOf(before.mapId)?.id != world.areaOf(after.mapId)?.id) return true
+        }
+        if (abs(after.x - before.x) + abs(after.y - before.y) <= MAX_STRIDE) return false
+        return transitionSeen || frames <= CONSECUTIVE_FRAMES
+    }
+
+    /**
+     * True when [state] shows the game's map transition (the fade of a warp, a fall, a map load: the screen is a
+     * [dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION]): what tells a warp from a long move ([isWarp]).
+     */
+    fun inTransition(state: GameState): Boolean =
+        (state.screen as? Screen.Animation)?.kind == dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION
+
+    /** The mark to take before a movement ([WarpWatch.mark]), the player's place read first (the last one known). */
+    fun warpMark(context: PlanContext): Int {
+        context.state()
+        return context.navigator.warps.mark()
+    }
+
+    /**
+     * After a move (a step, a straight walk, a press on a mat): waits until the player stands still with the control
+     * for [STILL_FRAMES] frames in a row, or a warp seen since [mark] ([WarpWatch.mark]) is over, at most
+     * [WARP_FRAMES]. A warp starts a frame after the step onto it ends, and its fade, the new map's loading and the
+     * walk out of the arrival door take a few seconds: deciding before (the walk saw the player standing on the warp,
+     * "nothing happened") is what pressed on into a second warp. The warp taken, with where the player stands once
+     * the game gives the control back; null when there was none (or a battle, a message, a menu came first).
+     */
+    fun awaitOutcome(context: PlanContext, mark: Int): WarpWatch.Warped? {
+        val warps = context.navigator.warps
+        // Already standing still with the control for long enough (the move's own wait saw it): no warp is starting.
+        if (warps.since(mark) == null && warps.calmFrames >= STILL_FRAMES) return null
+        var still = 0
+        var waited = 0
+        while (waited < WARP_FRAMES && context.navigator.warps.since(mark) == null) {
+            val state = context.state()
+            // A battle starting (no field), a message, a menu: not a warp, the caller sees what took over.
+            if (takenOver(state, Motion.TRANSITION) || state.field == null) break
+            still = if (state.field?.moving == false && inControl(state)) still + 1 else 0
+            if (still >= STILL_FRAMES) break
+            context.scope.step(1)
+            waited++
+        }
+        val warped = context.navigator.warps.since(mark) ?: return null
+        // The control back on the new map (its arrival walk-out done), then where the player really is.
+        val now = context.navigator.settle()
+        return warped.endingAt(now.field ?: warped.last.to)
     }
 
     /** How [face] ended. */
@@ -129,6 +206,15 @@ internal object FieldControl {
     /** Frames in a row without moving after which a move is over (a bike may start one more tile by itself). */
     const val STILL_FRAMES = 6
 
+    /** The longest move between two readings that is still walking (a ledge jump crosses two tiles). */
+    const val MAX_STRIDE = 2
+
+    /** Readings this many frames apart or fewer are consecutive ([isWarp]): no move on the map covers 3 tiles in them. */
+    const val CONSECUTIVE_FRAMES = 2L
+
+    /** Longest wait for a warp to start and end once the player stopped on it (a ladder's climb, a fade, the arrival). */
+    const val WARP_FRAMES = 300
+
     /** Longest wait for the player to stand still after a move (a step takes 8 frames running, 16 walking). */
     const val SETTLE_FRAMES = 64
 
@@ -140,4 +226,114 @@ internal object FieldControl {
 
     /** Taps tried to face a direction before giving up (the "3 tries" rule). */
     private const val MAX_TURN_TRIES = 3
+}
+
+/**
+ * The warps the player went through, seen from every state the recipes decode ([Navigator.state]): how a walk, a step
+ * or a field move learns that the game moved the player through a door, stairs, a hole or a warp pad, so that it
+ * stops there ([FieldControl.awaitOutcome]). A movement takes a [mark] before it starts and asks [since] after.
+ *
+ * What a warp is comes from what the game does ([FieldControl.isWarp]): another area, or a jump with the game's map
+ * transition (its fade) in between. Readings during a warp may jump more than once (the new map's tile read as 0,0 for
+ * a frame before the arrival): those jumps belong to the same warp, whose [Warped.to] is the last place read. A
+ * second warp before the player has the control again (its own transition seen after the first jump) is noted as
+ * such ([Warped.next]): the agent is told every warp taken.
+ */
+internal class WarpWatch(private val world: () -> WorldSource?) {
+
+    /**
+     * A warp: [from] the last reading before the jump (the warp's tile, or the tile in front of a door), [to] after;
+     * [next] the warp taken right after it, before the control came back (null: none).
+     */
+    data class Warped(val from: FieldState, val to: FieldState, val next: Warped? = null) {
+        /** The last warp of the chain: where the player ended up. */
+        val last: Warped get() = next?.last ?: this
+
+        /** This chain with the player last read at [to] (the arrival of its last warp). */
+        fun endingAt(to: FieldState): Warped = if (next == null) copy(to = to) else copy(next = next.endingAt(to))
+    }
+
+    private var last: FieldState? = null
+    private var lastFrame = 0L
+
+    /** The last warps seen ([KEPT] at most); the first of them is number [count] - size + 1. */
+    private val recent = ArrayDeque<Warped>()
+    private var count = 0
+
+    /** True from a warp's jump until the player has the control again: further jumps belong to that warp. */
+    private var open = false
+
+    /**
+     * The game showed a map transition ([FieldControl.inTransition]) since the player last had the control, moved by
+     * themselves, read a message or chose in a menu (or since the last warp noted).
+     */
+    private var transition = false
+
+    /** The frames of the last readings where the player stood still with the control, in a row (null: not now). */
+    private var calmFrom: Long? = null
+    private var calmTo = 0L
+
+    /**
+     * How many frames in a row, up to the last reading, the player has stood still with the control: a move whose
+     * own wait saw that ([FieldControl.awaitStill]) needs no other wait for a warp ([FieldControl.awaitOutcome]).
+     */
+    val calmFrames: Long get() = calmFrom?.let { calmTo - it + 1 } ?: 0
+
+    /** Reads [state]: notes a warp when the player jumped since the previous reading ([FieldControl.isWarp]). */
+    fun observe(state: GameState) {
+        val calm = state.field?.moving == false && FieldControl.inControl(state)
+        if (calm) {
+            if (calmFrom == null) calmFrom = state.frame
+            calmTo = state.frame
+        } else {
+            calmFrom = null
+        }
+        if (FieldControl.inTransition(state)) transition = true
+        val field = state.field ?: return
+        val previous = last ?: field
+        val frames = state.frame - lastFrame
+        last = field
+        lastFrame = state.frame
+        val jumped = FieldControl.isWarp(world(), previous, field, transition, frames)
+        if (open) {
+            // Another jump of the same warp (its arrival read in two steps), unless a transition of its own came first.
+            if (jumped && transition) note(previous, field, chained = true)
+            else recent[recent.lastIndex] = recent.last().endingAt(field)
+        } else if (jumped) {
+            note(previous, field, chained = false)
+        }
+        if (calm) open = false
+        // What the player does by themselves, a message, a menu: whatever transition came before isn't a warp's.
+        if (calm || field.moving || state.screen is Screen.Dialogue || state.screen is Screen.Selectable) transition = false
+    }
+
+    /** Notes a warp from [from] to [to]: a new one, or ([chained]) the next of the warp still under way. */
+    private fun note(from: FieldState, to: FieldState, chained: Boolean) {
+        transition = false
+        open = true
+        if (chained) {
+            recent[recent.lastIndex] = recent.last().chain(Warped(from, to))
+            return
+        }
+        count++
+        recent.addLast(Warped(from, to))
+        if (recent.size > KEPT) recent.removeFirst()
+    }
+
+    private fun Warped.chain(warp: Warped): Warped = if (next == null) copy(next = warp) else copy(next = next.chain(warp))
+
+    /** The current mark: [since] a mark only tells the warps after it. */
+    fun mark(): Int = count
+
+    /** The first warp seen after [mark] (the oldest one kept when more came since), or null when there was none. */
+    fun since(mark: Int): Warped? {
+        if (count <= mark) return null
+        val index = recent.size - (count - mark)
+        return recent.getOrNull(index.coerceAtLeast(0))
+    }
+
+    private companion object {
+        /** Warps remembered: a movement asks right after it ends. */
+        const val KEPT = 8
+    }
 }

@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.InputFrame
+import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MovementMode
@@ -18,12 +19,26 @@ import dev.kotlinds.pokemonclient.world.Node
  * segment at once and the walk re-plans), a screen other than the overworld (a battle, a trainer, a message) stops
  * it, and no progress for a while means the game refused the step. The direction is let go one tile before the end
  * (when the player starts the last tile, or the one before on a bike, whose input the game reads ahead), then the
- * walker waits for the player to stand still and checks the final tile.
+ * walker waits for the player to stand still and checks the final tile. The game busy while the player doesn't move
+ * (a door opening, a warp's fade) lets go at once, and after a warp ([WarpWatch]) the direction is never held again:
+ * the segment ends there ([Result.Elsewhere]), see [FieldControl].
+ *
+ * The pace changes on the way without stopping: the game decides running or walking at the start of each step (B held
+ * then or not), so B is pressed or let go for each tile as the player starts the one before ([Segment.runs]); the
+ * direction stays held (a stop at the edge of the grass would cost a full stop and start).
  */
 internal object WalkSegments {
 
-    /** A straight run of plain steps in [direction], [tiles] in order (the last one is the segment's end). */
-    data class Segment(val direction: Direction, val tiles: List<Node>)
+    /**
+     * A straight run of plain steps in [direction], [tiles] in order (the last one is the segment's end), each run (B
+     * held) or walked onto as [runs] says (one per tile, [MovePlans.runOnto]: a walk lets go of B onto the tiles where
+     * wild Pokémon appear).
+     */
+    data class Segment(val direction: Direction, val tiles: List<Node>, val runs: List<Boolean> = tiles.map { false }) {
+        init {
+            require(runs.size == tiles.size) { "one pace per tile" }
+        }
+    }
 
     /** How a segment ended. */
     sealed interface Result {
@@ -36,8 +51,7 @@ internal object WalkSegments {
         /** The game refused the step leaving [from] (an invisible wall, a person who moved in the way). */
         data class Refused(val from: Node) : Result
 
-        /** Another screen took over (a battle, a trainer spotting the player, a phone call, a script), after [walked] tiles. */
-        /** Stopped by the game; [at] is the tile the player was stepping onto (what started a scene, a battle...). */
+        /** Stopped by the game (a battle, a trainer spotting the player, a phone call, a script); [at] is the tile the player was stepping onto (what started a scene, a battle...). */
         data class Stopped(val state: GameState, val walked: Int = 0, val at: Node? = null) : Result
     }
 
@@ -45,7 +59,7 @@ internal object WalkSegments {
      * The segment starting at [edges]`[start]`: the following [Edge.Step]s in the same direction that don't enter a
      * warp tile of [area] (a door is a single, longer step). Null when that edge isn't a plain step.
      */
-    fun segmentAt(edges: List<Edge>, start: Int, area: Area): Segment? {
+    fun segmentAt(edges: List<Edge>, start: Int, area: Area, runOnto: (Node) -> Boolean): Segment? {
         val first = edges[start] as? Edge.Step ?: return null
         if (enters(area, first)) return null
         val tiles = mutableListOf(first.to)
@@ -56,23 +70,27 @@ internal object WalkSegments {
             tiles += next.to
             i++
         }
-        return Segment(first.direction, tiles)
+        return line(first.direction, tiles, runOnto)
     }
+
+    /** The straight line [tiles] in [direction], each tile run onto or walked onto as [runOnto] says. */
+    fun line(direction: Direction, tiles: List<Node>, runOnto: (Node) -> Boolean): Segment = Segment(direction, tiles, tiles.map(runOnto))
 
     private fun enters(area: Area, edge: Edge) = area.warps.any { it.x == edge.to.x && it.y == edge.to.y }
 
     /**
-     * Walks [segment] holding its direction (with B when running), as described on [WalkSegments]. Entering one of
-     * [scenes] (tiles of active scene triggers) stops it there: the scene starts as the step ends ([Result.Stopped]
-     * with that tile).
+     * Walks [segment] holding its direction (with B onto the tiles it runs onto: [Segment.runs]), as described on [WalkSegments].
+     * Entering one of [scenes] (tiles of active scene triggers) stops it there: the scene starts as the step ends
+     * ([Result.Stopped] with that tile).
      */
-    fun walk(context: PlanContext, segment: Segment, options: MoveOptions, scenes: Set<Pair<Int, Int>> = emptySet()): Result {
+    fun walk(context: PlanContext, segment: Segment, scenes: Set<Pair<Int, Int>> = emptySet()): Result {
+        val mark = FieldControl.warpMark(context)
         var remaining = segment.tiles
         var round = 0
         while (remaining.isNotEmpty() && round++ < MAX_ROUNDS) {
             val start = context.state().field ?: return Result.Stopped(context.state())
             val done = segment.tiles.size - remaining.size
-            when (val held = hold(context, segment.direction, remaining, start, options, scenes)) {
+            when (val held = hold(context, segment.direction, remaining, segment.runs.drop(done), start, scenes)) {
                 is Held.Stopped -> return Result.Stopped(held.state, done + held.walked, held.at)
                 is Held.Refused -> return Result.Refused(held.from)
                 is Held.Released -> Unit
@@ -82,6 +100,8 @@ internal object WalkSegments {
                 is FieldControl.Still.TakenOver -> return Result.Stopped(still.state)
                 is FieldControl.Still.Settled, is FieldControl.Still.TimedOut -> still.state.field ?: return Result.Stopped(still.state)
             }
+            // Through a warp (even one that came back to this very tile): never hold again, the walk decides.
+            if (context.navigator.warps.since(mark) != null) return Result.Elsewhere(end)
             val at = remaining.indexOfFirst { it.x == end.x && it.y == end.y }
             when {
                 at == remaining.lastIndex -> return Result.Reached(end)
@@ -101,17 +121,22 @@ internal object WalkSegments {
         data class Stopped(val state: GameState, val walked: Int, val at: Node?) : Held
     }
 
-    /** Holds the direction until the release point of [tiles], checking each new position. */
-    private fun hold(context: PlanContext, direction: Direction, tiles: List<Node>, start: FieldState, options: MoveOptions, scenes: Set<Pair<Int, Int>>): Held {
-        val input = InputFrame(buildSet {
+    /**
+     * Holds the direction until the release point of [tiles], checking each new position; B is held for the step onto
+     * each tile that [runs] says (set as the step before starts: the game reads it when the next step begins).
+     */
+    private fun hold(context: PlanContext, direction: Direction, tiles: List<Node>, runs: List<Boolean>, start: FieldState, scenes: Set<Pair<Int, Int>>): Held {
+        fun input(index: Int) = InputFrame(buildSet {
             add(direction.button)
-            if (options.run) add(Button.B)
+            if (runs.getOrElse(index) { false }) add(Button.B)
         })
+        var input = input(0)
         val releaseAt = if (start.movement == MovementMode.BIKE && tiles.size >= 2) tiles.size - 2 else tiles.size - 1
         var next = 0
         var lastX = start.x
         var lastY = start.y
         var idle = 0
+        var busy = 0
         while (true) {
             context.scope.step(1, input)
             val state = context.state()
@@ -133,8 +158,14 @@ internal object WalkSegments {
                 if ((field.x to field.y) in scenes) return Held.Stopped(state, next + 1, expected)
                 if (next >= releaseAt) return Held.Released
                 next++
+                // The step onto the next tile starts when this one ends: its pace from now on.
+                input = input(next)
                 continue
             }
+            // The game busy while the player stands (a door opening, a warp's fade starting): let go now, holding on
+            // would carry the press into what comes next (the warp on the other side).
+            busy = if (!field.moving && state.screen.awaiting != Awaiting.INPUT) busy + 1 else 0
+            if (busy >= BUSY_FRAMES) return Held.Released
             idle = if (field.moving) 0 else idle + 1
             if (idle >= REFUSED_FRAMES) {
                 context.scope.step(1)
@@ -147,4 +178,7 @@ internal object WalkSegments {
     /** No new tile for this long while holding (and not moving): the game refuses the step (turning included). */
     private const val REFUSED_FRAMES = 24
     private const val MAX_ROUNDS = 8
+
+    /** Frames in a row of the game busy while the player stands still after which the hold lets go. */
+    private const val BUSY_FRAMES = 2
 }

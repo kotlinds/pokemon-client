@@ -59,6 +59,12 @@ private class WalkingGame(
     val doorTile: Pair<Int, Int>? = null,
     /** Turning to this direction on this tile makes the trainer [spotterId] see the player (no step needed). */
     val sightOnTurn: Pair<Pair<Int, Int>, Direction>? = null,
+    /** The chance of a wild encounter per check on the land encounter tiles (grass, cave floor) when walking: none by default. */
+    val landEncounters: Double = 0.0,
+    /** [FieldState.autoRun]: the running shoes switched on. */
+    val autoRun: Boolean? = null,
+    /** Whether the world knows its encounter tables ([landEncounters]) or not (then only the tile kinds tell). */
+    val encounterTables: dev.kotlinds.pokemonclient.world.EncounterTables = dev.kotlinds.pokemonclient.world.EncounterTables.DECODED,
 ) : GridGame(x, y) {
     private var fadeLeft = 0
     val area: Area = run {
@@ -67,13 +73,16 @@ private class WalkingGame(
             when (rows[i / width].getOrElse(i % width) { '#' }) {
                 '#' -> TileInfo(true, TileKind.Wall)
                 '"' -> TileInfo(false, TileKind.TallGrass)
+                'c' -> TileInfo(false, TileKind.Cave)
                 '~' -> TileInfo(false, TileKind.Water(surfable = true, fishable = true))
-                // Floors with known heights (BDHC units): ',' low ground (height 1), '^' a raised shore (height 2).
+                // Floors with known heights (BDHC units): ',' low ground (height 1), '^' a raised shore (height 2), 'w' below.
                 ',' -> TileInfo(false, TileKind.Floor, listOf(8))
                 '^' -> TileInfo(false, TileKind.Floor, listOf(16))
+                // A raised walkway (height 6), more than a step above the plain floor.
+                'w' -> TileInfo(false, TileKind.Floor, listOf(48))
                 else -> TileInfo(false, TileKind.Floor)
             }
-        })
+        }, zones = if (landEncounters > 0) IntArray(width * rows.size) { 1 } else null)
     }
     var inBattle = false
     var spotted = false
@@ -82,12 +91,16 @@ private class WalkingGame(
     override val name = "Walking"
     override val world = object : WorldSource {
         override fun areaOf(zoneId: Int) = area
+        override val zoneCount = 2
+        override val encounterTables = this@WalkingGame.encounterTables
+        override fun encounterChance(zoneId: Int, water: Boolean, conditions: dev.kotlinds.pokemonclient.world.EncounterConditions) =
+            if (water) 0.0 else landEncounters * if (conditions.landMovement == MovementMode.WALK) 1.0 else 2.0
     }
     override fun fieldMoveRule(move: FieldMoveKind) = FieldMoveRule(MoveId(57), "Fog")
     override fun state(memory: Memory): GameState {
         val height = (area.tile(x, y)?.heights?.firstOrNull() ?: 0) / dev.kotlinds.pokemonclient.world.FIELD_HEIGHT_UNITS
         val field = FieldState(1, MapName(1, map = "test"), x, y, height, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted,
-            engagedTrainerId = spotterId.takeIf { spotted })
+            engagedTrainerId = spotterId.takeIf { spotted }, autoRun = autoRun)
         val battle = if (inBattle) BattleState(BattleKind.WILD, false, null, emptyList(), emptyList(), emptyList(), null) else null
         val screen = when {
             inBattle -> Screen.Battle(Awaiting.ANIMATION)
@@ -142,12 +155,83 @@ class MovePlansTest {
     }
 
     @Test
+    fun walksRunButWalkOntoTheTilesWhereWildPokemonAppear() {
+        // Floor, two grass tiles, floor: run, walk the grass (running doubles the encounter roll), run again.
+        val rows = listOf(".\"\"..")
+        val game = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
+        game.facing = Direction.EAST
+        val before = game.console.frame
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
+        assertEquals(listOf(1 to 0, 2 to 0, 3 to 0, 4 to 0), game.visited.drop(1))
+        assertEquals(listOf(false, false, true, true), game.ran)
+        // One hold: B pressed or let go tile by tile as the step before starts, never a stop at the edge of the grass
+        // (the game reads B when each step begins).
+        val frames = game.console.frame - before
+        assertTrue(frames < 4 * GridGame.STEP_FRAMES + 30, "took $frames frames")
+        // step too, one straight line whose pace changes on the way.
+        val stepped = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
+        assertIs<ActionOutcome.Done>(MovePlans.step.run(GameAction.Step(Direction.EAST, 4), stepped.context()))
+        assertEquals(listOf(false, false, true, true), stepped.ran)
+        // Asked to run there too: B all along.
+        val running = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null, MoveOptions(runInEncounterAreas = true)), running.context()))
+        assertEquals(listOf(true, true, true, true), running.ran)
+        // Grass where nothing appears (no encounter table) is run through; run = false walks everywhere.
+        val empty = WalkingGame(rows, x = 0, y = 0)
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), empty.context()))
+        assertEquals(listOf(true, true, true, true), empty.ran)
+        val walking = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null, MoveOptions(run = false)), walking.context()))
+        assertEquals(listOf(false, false, false, false), walking.ran)
+    }
+
+    @Test
+    fun theRouteWeighsTheGrassAsWalkedWhenTheWalkWalksThere() {
+        val field = FieldState(1, MapName(1), 0, 0, 0, Direction.EAST, MovementMode.WALK, moving = false)
+        assertEquals(FootPace(MovementMode.RUN, MovementMode.WALK), FootPace.of(field, MoveOptions()))
+        assertEquals(FootPace(MovementMode.RUN, MovementMode.RUN), FootPace.of(field, MoveOptions(runInEncounterAreas = true)))
+        // The running shoes switched on: the game holds B itself, the walk can't walk anywhere.
+        assertEquals(FootPace(MovementMode.RUN, MovementMode.RUN), FootPace.of(field.copy(autoRun = true), MoveOptions(run = false)))
+        // Without the running shoes, B does nothing: walking all along.
+        assertEquals(FootPace(MovementMode.WALK, MovementMode.WALK), FootPace.of(field.copy(runningShoes = false), MoveOptions()))
+        assertEquals(FootPace(MovementMode.BIKE, MovementMode.BIKE), FootPace.of(field.copy(movement = MovementMode.BIKE), MoveOptions()))
+    }
+
+    @Test
     fun aRefusedStepIsLearnedAndTheRouteComputedAgain() {
         // The map says (2,0) is free, the game refuses it: the walker goes around through the bottom row.
         val game = WalkingGame(listOf(".....", "....."), x = 0, y = 0, invisibleWalls = setOf(2 to 0))
         assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
         assertEquals(4 to 0, game.x to game.y)
         assertTrue((2 to 0) !in game.visited)
+    }
+
+    /**
+     * NOTES (map randomizer run, Whirl Islands B2F): "the game refused 6 steps on the way to warp:4" told neither where
+     * nor which way. The refusals are listed, each with what the map and the RAM say of the tile.
+     */
+    @Test
+    fun aWalkGivingUpTellsWhichStepsWereRefusedAndWhy() {
+        // A corridor whose only way is refused by the game although the map allows it.
+        val game = WalkingGame(listOf("....."), x = 0, y = 0, invisibleWalls = setOf(2 to 0))
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
+        val detail = failed.error.message
+        assertTrue("the game refused 1 step(s): east from 1,0 (nothing on the map explains it at 2,0" in detail, detail)
+    }
+
+    @Test
+    fun aRefusedStepSaysWhatBlocked() {
+        // Someone on the next tile, then a tile on another level (a raised shore: height 2 against the floor's 0).
+        val follower = FieldObject("person:9", "Pikachu", FieldObjectKind.FOLLOWER, 1, 0, Direction.WEST)
+        val blocked = WalkingGame(listOf("...."), x = 0, y = 0, invisibleWalls = setOf(1 to 0), people = listOf(follower.copy(kind = FieldObjectKind.PERSON, label = "boy")))
+        val person = assertIs<ActionOutcome.Failed>(MovePlans.step.run(GameAction.Step(Direction.EAST, 2), blocked.context())).error.message
+        assertTrue("blocked after 0 tile(s) at 0,0: can't go east from there (person:9 (boy) stands on 1,0)" in person, person)
+        val withFollower = WalkingGame(listOf("...."), x = 0, y = 0, invisibleWalls = setOf(1 to 0), people = listOf(follower))
+        val pet = assertIs<ActionOutcome.Failed>(MovePlans.step.run(GameAction.Step(Direction.EAST, 2), withFollower.context())).error.message
+        assertTrue("your Pokémon following you stands on 1,0" in pet, pet)
+        val cliff = WalkingGame(listOf(".www"), x = 0, y = 0, invisibleWalls = setOf(1 to 0))
+        val level = assertIs<ActionOutcome.Failed>(MovePlans.step.run(GameAction.Step(Direction.EAST, 1), cliff.context())).error.message
+        assertTrue("1,0 is on another level (height 6 there, 0 here" in level, level)
     }
 
     @Test
@@ -287,8 +371,43 @@ class MovePlansTest {
 
     @Test
     fun findEncounterWalksToTheGrassAndPacesUntilABattle() {
-        val game = WalkingGame(listOf(".\"\""), x = 0, y = 0, battleTile = 1 to 0)
+        val game = WalkingGame(listOf(".\"\""), x = 0, y = 0, battleTile = 1 to 0, landEncounters = 0.1)
         // The battle starts on the first grass tile: that's the success of this action.
+        assertEquals("wild battle", assertIs<ActionOutcome.Done>(MovePlans.findEncounter.run(GameAction.FindEncounter, game.context())).detail)
+    }
+
+    /** NOTES (map randomizer run): "find_encounter doesn't work in caves (no way to tall grass)". */
+    @Test
+    fun findEncounterPacesOnACaveFloor() {
+        // No grass at all: the cave floor (2,0) is where wild Pokémon appear; the battle starts on stepping back onto it.
+        val game = WalkingGame(listOf("..c."), x = 0, y = 0, battleTile = 2 to 0, landEncounters = 0.1)
+        assertEquals("wild battle", assertIs<ActionOutcome.Done>(MovePlans.findEncounter.run(GameAction.FindEncounter, game.context())).detail)
+    }
+
+    @Test
+    fun findEncounterPacesOffASingleTileAndBack() {
+        // One grass tile: pacing steps off it and back onto it (each entry rolls).
+        val game = WalkingGame(listOf("\"."), x = 1, y = 0, landEncounters = 0.1)
+        val walk = game.visited.size
+        assertIs<ActionOutcome.Failed>(MovePlans.findEncounter.run(GameAction.FindEncounter, game.context()))
+        assertTrue(game.visited.drop(walk).count { it == 0 to 0 } > 10, "paced onto the grass tile")
+    }
+
+    @Test
+    fun findEncounterSaysWhenTheMapHasNoWildPokemon() {
+        // Grass, but the map's tables have nobody for it: nothing to pace for.
+        val game = WalkingGame(listOf(".\"\""), x = 0, y = 0)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.findEncounter.run(GameAction.FindEncounter, game.context()))
+        assertTrue("no tall grass or cave floor with wild Pokémon" in assertIs<ActionError.Unavailable>(failed.error).detail, failed.toString())
+    }
+
+    /**
+     * A game whose encounter tables aren't decoded ([dev.kotlinds.pokemonclient.world.EncounterTables.UNKNOWN]): the
+     * tile kinds alone tell where wild Pokémon may appear, the walk still goes to the grass and paces there.
+     */
+    @Test
+    fun findEncounterUsesTheTileKindsWhenTheTablesAreUnknown() {
+        val game = WalkingGame(listOf(".\"\""), x = 0, y = 0, battleTile = 1 to 0, encounterTables = dev.kotlinds.pokemonclient.world.EncounterTables.UNKNOWN)
         assertEquals("wild battle", assertIs<ActionOutcome.Done>(MovePlans.findEncounter.run(GameAction.FindEncounter, game.context())).detail)
     }
 

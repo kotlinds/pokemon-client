@@ -92,7 +92,7 @@ internal object WorldTravel {
      * where they started, where they are now and the warps taken, so the answer never looks like nothing happened.
      * Interruptions already tell their steps.
      */
-    private fun ActionOutcome.withMovement(context: PlanContext, start: FieldState, taken: List<ZoneLink>): ActionOutcome {
+    private fun ActionOutcome.withMovement(context: PlanContext, start: FieldState, taken: List<Hop>): ActionOutcome {
         if (this !is ActionOutcome.Failed || error is ActionError.Interrupted) return this
         val now = context.state().field ?: return this
         if (now.mapId == start.mapId && now.x == start.x && now.y == start.y) return this
@@ -121,7 +121,13 @@ internal object WorldTravel {
      * How a [travel] ended: the last walk, the links taken before it, the active triggers of its map, and what the
      * agent should know about the way (the bicycle...).
      */
-    data class Trip(val walk: MovePlans.Walk, val taken: List<ZoneLink>, val triggers: Set<Pair<Int, Int>>, val notes: List<String> = emptyList())
+    data class Trip(val walk: MovePlans.Walk, val taken: List<Hop>, val triggers: Set<Pair<Int, Int>>, val notes: List<String> = emptyList())
+
+    /**
+     * A link of the trip taken: the planned [link], the warp the walk went through ([MovePlans.Through], the very one a
+     * walk tells) and where the player stood once it was over ([arrival]).
+     */
+    data class Hop(val link: ZoneLink, val through: MovePlans.Through, val arrival: FieldState)
 
     // region Targets
 
@@ -144,7 +150,7 @@ internal object WorldTravel {
             if (action.x == null || action.y == null) return Resolved.Found(Goal(zone, zoneTarget(MapName.idForm(zone), world, zone)))
             val targetArea = world.areaOf(zone) ?: return Resolved.Failed(noMap(field))
             val warp = targetArea.warps.firstOrNull { it.zone == zone && it.x == action.x && it.y == action.y }
-            return Resolved.Found(Goal(zone, MovePlans.Target("${action.x},${action.y} on ${context.game.mapName(zone)}", action.x, action.y, warp = warp != null, exit = warp?.exitDirection)))
+            return Resolved.Found(Goal(zone, MovePlans.Target("${action.x},${action.y} on ${context.game.mapName(zone)}", action.x, action.y, warp = warp != null, trigger = warp?.trigger)))
         }
         if (target == null) {
             return MovePlans.resolve(context, null, action.x, action.y)?.let { Resolved.Found(Goal(field.mapId, it)) }
@@ -244,10 +250,17 @@ internal object WorldTravel {
             val detail = if (connections.isEmpty()) "${field.mapName} has no edge leading to another map: use its warps (see exits)" else "No exit that way"
             return Resolved.Failed(ActionOutcome.Failed(if (connections.isEmpty()) ActionError.Unavailable(UnavailableReason.NO_PATH, detail) else ActionError.InvalidParameter("target", target, allowed)))
         }
+        return Resolved.Found(Goal(field.mapId, exitTarget(target, chosen, onThisMap = context.settings.hideDestinations)))
+    }
+
+    /**
+     * The target `exit:<direction>` ([id]) through the map edges [chosen]: the neighbour's first tiles one step past
+     * them. [onThisMap]: walks kept on the player's map (destinations hidden, the view's reachability) may still step
+     * onto those tiles: the exit asked for.
+     */
+    internal fun exitTarget(id: String, chosen: List<dev.kotlinds.pokemonclient.world.MapConnection>, onThisMap: Boolean): MovePlans.Target {
         val beyond = chosen.flatMap { c -> c.tiles.map { (x, y) -> x + c.direction.dx to y + c.direction.dy } }.toSet()
-        // Walks kept on this map (destinations hidden) may still step onto the neighbour's first tiles: the exit asked for.
-        val enter = if (context.settings.hideDestinations) beyond else emptySet()
-        return Resolved.Found(Goal(field.mapId, MovePlans.Target(target, null, null, isGoal = { node -> (node.x to node.y) in beyond }, enter = enter)))
+        return MovePlans.Target(id, null, null, isGoal = { node -> (node.x to node.y) in beyond }, enter = if (onThisMap) beyond else emptySet())
     }
 
     /** `frontier`: the nearest reachable tile next to a way out of this map, away from where the player stands. */
@@ -386,7 +399,7 @@ internal object WorldTravel {
      */
     private fun travel(context: PlanContext, world: WorldSource, goal: Goal, options: MoveOptions, notes: MutableList<String>, meter: TravelMeter?): Trip {
         if (context.settings.hideDestinations) return hiddenTravel(context, goal, options, notes)
-        val taken = mutableListOf<ZoneLink>()
+        val taken = mutableListOf<Hop>()
         var localFailure: MovePlans.Walk.NoRoute? = null
         // One pass per link taken, and one more for the walk on the destination's map: a route of [MAX_HOPS] links
         // (accepted by [detour]) takes MAX_HOPS + 1 passes (Mt. Silver's summit to its Pokémon Center: 12 warps).
@@ -413,7 +426,8 @@ internal object WorldTravel {
             // Before moving: a way the walk can't finish, or a long detour to a target of this very map, is the agent's call.
             // A field move needed on this very map: the local failure knows where to use it from and what the party
             // lacks; keep it over the less precise cross-map one (and over a detour: it opens the short way).
-            val precise = localFailure?.takeIf { precise(it.failure) }
+            // So is a walk that found no way left once the game refused steps the map allows (only the walk knows them).
+            val precise = localFailure?.takeIf { precise(it.failure) || it.refusals.isNotEmpty() }
             if (taken.isEmpty()) route?.let { detour(context, field, goal, it) }?.let { return Trip(precise ?: it, taken, triggers) }
             val link = route?.links?.firstOrNull()
                 ?: return Trip(
@@ -422,14 +436,15 @@ internal object WorldTravel {
                         ?: MovePlans.Walk.NoRoute(RouteFailure.Unreachable, "no way to ${goal.target.id} from ${field.x},${field.y} (${field.mapName})"),
                     taken, triggers,
                 )
-            val walked = MovePlans.walkTo(context, MovePlans.Target(link.id, link.x, link.y, warp = true, exit = link.exitDirection), options)
+            val walked = MovePlans.walkTo(context, MovePlans.Target(link.id, link.x, link.y, warp = true, trigger = link.trigger), options)
             if (walked !is MovePlans.Walk.Arrived) return Trip(walked, taken, triggers)
-            // A warp leads to another area (a building, a floor); a warp to this same map (a gym's pad) leaves the map
-            // unchanged: it worked when the player was moved off it. Walking into the next zone of the overworld is no warp.
-            if (world.areaOf(walked.field.mapId) === area && !teleported(link, walked.field)) {
-                return Trip(MovePlans.Walk.Stuck("${link.id} at ${link.x},${link.y} didn't take the player anywhere"), taken, triggers)
-            }
-            taken += link
+            // A walk ends at the first warp ([FieldControl.awaitOutcome]): none means the link didn't fire.
+            val through = walked.through
+                ?: return Trip(MovePlans.Walk.Stuck("${link.id} at ${link.x},${link.y} didn't take the player anywhere"), taken, triggers)
+            // Another warp than the link planned (one under the player's feet, a hole on the way): the trip stops there,
+            // the answer says where the player is ([finish]).
+            if (through.x != link.x || through.y != link.y) return Trip(walked, taken, triggers)
+            taken += Hop(link, through, walked.field)
             // What the walk to the link did besides walking (a tree cut on the way): told with the final answer.
             walked.notes.forEach { if (it !in notes) notes += it }
             localFailure = null
@@ -450,13 +465,6 @@ internal object WorldTravel {
         val triggers = MovePlans.activeTriggers(context, field)
         return Trip(MovePlans.walkTo(context, goal.target, options), emptyList(), triggers)
     }
-
-    /**
-     * True when [link], a warp to the map it is on, moved the player: they stand on its arrival tile, or anywhere but
-     * on the warp itself (the same-map jump is the only sign it fired).
-     */
-    internal fun teleported(link: ZoneLink, field: FieldState): Boolean =
-        link.targetZone == field.mapId && ((link.toX == field.x && link.toY == field.y) || (field.x != link.x || field.y != link.y))
 
     /** True for the local failures that say exactly what closes the way on this map (a field move, a shutter, a level, a mechanism). */
     private fun precise(failure: RouteFailure): Boolean =
@@ -572,10 +580,17 @@ internal object WorldTravel {
         val triggers = trip.triggers
         val via = if (taken.isEmpty()) "" else " (${describe(taken)})"
         return when (walked) {
-            is MovePlans.Walk.Arrived -> ActionOutcome.Done(
-                "arrived at ${walked.field.x},${walked.field.y}" + (if (taken.isEmpty()) "" else " on ${walked.field.mapName}") + via +
-                    walked.notes.joinToString("") { "; $it" },
-            )
+            is MovePlans.Walk.Arrived -> {
+                val through = walked.through
+                val target = goal.target
+                // The walk ends at the first warp: the one asked for ("took warp:3 → ..."), or one on the way.
+                val reached = when {
+                    through == null -> "arrived at ${walked.field.x},${walked.field.y}" + (if (taken.isEmpty()) "" else " on ${walked.field.mapName}")
+                    target.warp == true && through.x == target.x && through.y == target.y -> through.describe(walked.field)
+                    else -> MovePlans.stoppedAt(through, walked.field)
+                }
+                ActionOutcome.Done(reached + via + walked.notes.joinToString("") { "; $it" })
+            }
             is MovePlans.Walk.Interrupted -> {
                 val at = walked.at
                 if (at != null && at in triggers && walked.state.battle == null) {
@@ -604,8 +619,12 @@ internal object WorldTravel {
         }
     }
 
-    private fun describe(taken: List<ZoneLink>): String =
-        if (taken.isEmpty()) "no warp taken" else "via " + taken.joinToString(", ") { l -> l.id + if (l.oneWay) " (fell, one way)" else "" }
+    /**
+     * The links of a trip for the agent, each in the words of a walk's warp ([MovePlans.Through.describe]: "took warp:4
+     * at 12,3 (Route 32) → Union Cave 1F (17,31)"), one way falls said so.
+     */
+    private fun describe(taken: List<Hop>): String =
+        if (taken.isEmpty()) "no warp taken" else taken.joinToString("; ") { h -> h.through.describe(h.arrival) + if (h.link.oneWay) " (fell, one way)" else "" }
 
     // endregion
 

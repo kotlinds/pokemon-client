@@ -291,6 +291,16 @@ object HgssAddresses {
     const val FLAGS_OFFSET = 0x2E0L          // SaveVarsFlags.flags: flag id -> byte id/8, bit id%8
     const val NUM_SAVE_FLAGS = 0xB60         // NUM_FLAGS (include/save_vars_flags.h): u8 flags[0x16C]
     const val SAVE_MISC = 9                  // SAVE_MISC_DATA (include/save_misc_data.h)
+    const val SAVE_POKEDEX = 6               // Pokedex (include/pokedex.h)
+
+    /** The save's layout for the Gen 4 save reader ([dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData]). */
+    val SAVE_LAYOUT = dev.kotlinds.pokemonclient.games.gen4.Gen4SaveLayout(
+        dataOffset = SAVE_DYNAMIC_REGION,
+        tableHeaders = SAVE_ARRAY_HEADERS,
+        varsFlagsTable = SAVE_FLAGS,
+        flagsOffset = FLAGS_OFFSET,
+        pokedexTable = SAVE_POKEDEX,
+    )
     // SAVE_MISC_DATA: apricorn_trees[128] (4 bytes), berry_pots[4] (12), GF_RTC_DateTime (0x1C), then Gymmick
     // (rivalName follows at 0x270, unk_0280 at 0x280: consistent with the 0x24-byte Gymmick at 0x24C).
     const val MISC_GYMMICK = 0x24CL

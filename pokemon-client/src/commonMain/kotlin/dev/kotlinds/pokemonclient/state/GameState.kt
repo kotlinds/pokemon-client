@@ -45,7 +45,33 @@ data class GameState(
      * which would silently hide Fly and drop Surf from the routes.
      */
     val fieldMoves: Map<dev.kotlinds.pokemonclient.world.FieldMoveKind, dev.kotlinds.pokemonclient.world.FieldMoveAccess>? = null,
+    /** The species seen and caught (from the save data, readable anywhere), null when unreadable. */
+    val pokedex: PokedexState? = null,
+    /**
+     * The save's event flags (story progress), when the game reads them: which people of the other maps are there
+     * (an object is hidden once its event flag is set, [dev.kotlinds.pokemonclient.world.PersonTemplate.hiddenByFlag]),
+     * e.g. to tell an exit whose arrival tile someone blocks. Null when unknown.
+     */
+    val eventFlags: EventFlags? = null,
 )
+
+/**
+ * A snapshot of the save's event flags: [bits] holds flag `n` in bit `n % 8` of byte `n / 8` (the Gen 4 layout of
+ * `SaveVarsFlags.flags`). Flags past its end are unknown.
+ */
+class EventFlags(bits: ByteArray) {
+    /** A copy: the flags of a state never change once read. */
+    private val bits: ByteArray = bits.copyOf()
+
+    /** True / false when flag [id] is set / clear, null when unknown. */
+    operator fun get(id: Int): Boolean? {
+        if (id < 0 || id / 8 >= bits.size) return null
+        return (bits[id / 8].toInt() shr (id % 8)) and 1 == 1
+    }
+
+    override fun equals(other: Any?): Boolean = other is EventFlags && bits.contentEquals(other.bits)
+    override fun hashCode(): Int = bits.contentHashCode()
+}
 
 /** Start menu entries the story unlocks. */
 enum class StartMenuFeature {
@@ -174,7 +200,10 @@ data class FieldState(
      * [trainerEncounter], when the game tells it; null otherwise.
      */
     val engagedTrainerId: Int? = null,
-    /** Whether the map lets the player fly away (outdoors), null when unknown. */
+    /**
+     * Whether the map lets the player fly away: its map header's flag, the game's only rule for the place (outdoors in
+     * the normal games; the map randomizer allows it everywhere), null when unknown.
+     */
     val flyAllowed: Boolean? = null,
     /** Whether the map has a PC (Pokémon storage), null when unknown. */
     val hasPc: Boolean? = null,
@@ -202,6 +231,11 @@ data class FieldState(
      * button), null when unknown. [movement] still says WALK: it tells the field state, not the pace.
      */
     val autoRun: Boolean? = null,
+    /**
+     * The player owns the running shoes (holding B runs), null when unknown (taken as owned). Without them walks walk
+     * whatever `run` says, and the routes count walking steps.
+     */
+    val runningShoes: Boolean? = null,
 )
 
 /** A person or object standing on the map. */

@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents
 import dev.kotlinds.pokemonclient.games.gen4.Gen4LandData
 import dev.kotlinds.pokemonclient.games.gen4.Gen4MapMatrix
@@ -179,11 +180,18 @@ class HgssWorldFormatsTest {
         assertEquals(TileKind.Unknown(0xF0), kind(0xF0))
         assertTrue(HgssTileBehaviors.isSurfable(0x15) && !HgssTileBehaviors.isSurfable(0x17))
 
-        assertEquals(Direction.SOUTH, HgssTileBehaviors.warpDirection(0x65))
-        assertEquals(Direction.EAST, HgssTileBehaviors.warpDirection(0x5E))
-        assertEquals(Direction.WEST, HgssTileBehaviors.warpDirection(0x6D))
-        assertEquals(Direction.NORTH, HgssTileBehaviors.warpDirection(0x3C))
-        assertNull(HgssTileBehaviors.warpDirection(0x69))
+        // Taken by a press on them (field_control.c FieldSystem_CheckMapTransition): mats, side stairs, ladders.
+        assertEquals(WarpTrigger.Press(Direction.SOUTH), HgssTileBehaviors.warpTrigger(0x65))
+        assertEquals(WarpTrigger.Press(Direction.EAST), HgssTileBehaviors.warpTrigger(0x5E))
+        assertEquals(WarpTrigger.Press(Direction.WEST), HgssTileBehaviors.warpTrigger(0x6D))
+        assertEquals(WarpTrigger.Press(Direction.NORTH), HgssTileBehaviors.warpTrigger(0x3C))
+        // Taken on entering (FieldSystem_CheckTransition, a door walked into): pressing north on a north entrance does nothing.
+        assertEquals(WarpTrigger.Enter, HgssTileBehaviors.warpTrigger(0x69))
+        assertEquals(WarpTrigger.Enter, HgssTileBehaviors.warpTrigger(0x64))
+        assertEquals(WarpTrigger.Enter, HgssTileBehaviors.warpTrigger(0x6E))
+        assertEquals(WarpTrigger.Enter, HgssTileBehaviors.warpTrigger(0x67))
+        // Plain floor: only an arrival point.
+        assertEquals(WarpTrigger.Never, HgssTileBehaviors.warpTrigger(0x00))
     }
 
     @Test

@@ -1,7 +1,7 @@
 package dev.kotlinds.pokemonclient.state
 
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.world.MovingPlatforms
+import dev.kotlinds.pokemonclient.world.PuzzleMechanics
 
 /**
  * The live state of a map puzzle that changes where the player can walk: switches, the barriers they open and
@@ -33,14 +33,21 @@ data class PuzzleState(
     /** Moving platforms (the Blackthorn Gym's platforms on the lava): where they are and what their trigger tiles do. */
     val platforms: List<PuzzlePlatform> = emptyList(),
     /**
-     * The platforms' rules, for route planning ([dev.kotlinds.pokemonclient.world.PlatformPlanner]): `go_to` rides
-     * them by itself. Null on maps without moving platforms.
+     * The rules of the map's movement puzzle and its state, for route planning
+     * ([dev.kotlinds.pokemonclient.world.MechanismPlanner]): `go_to` operates it by itself (rides the moving platforms,
+     * the carts, presses the levers). Null on maps without such a puzzle.
      */
-    val mechanics: MovingPlatforms? = null,
+    val mechanics: PuzzleMechanics<*>? = null,
     /** Pokémon to herd and catch (the Ilex Forest Farfetch'd): where each is and a plan to catch it. */
     val herds: List<PuzzleHerd> = emptyList(),
     /** Boulders to push into their hole (Ice Path B1F): each one drops to the floor below, where it stops slides. */
     val boulderHoles: List<PuzzleBoulderHole> = emptyList(),
+    /**
+     * How to read what only a walkthrough shows of this puzzle (the herds' blind spots and plans...), in our words:
+     * added to [rule] when the agent has a walkthrough, left out otherwise (it would name fields it doesn't get). Null
+     * when the puzzle shows nothing hidden.
+     */
+    val walkthroughRule: String? = null,
 )
 
 /**

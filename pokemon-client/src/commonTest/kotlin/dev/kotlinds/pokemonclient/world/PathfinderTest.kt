@@ -9,7 +9,8 @@ import kotlin.test.assertTrue
 
 /**
  * Areas drawn in ASCII: '.' floor, '#' wall, '"' tall grass, 'v' '^' '<' '>' ledges (jump in that direction),
- * '~' surfable water, 'W' warp, 'H' a second surface 40 units higher (a walkway), '/' stairs (height 20),
+ * '~' surfable water, 'W' warp (taken on entering it), 'M' an exit mat taken by pressing south on it, 'X' a warp nothing
+ * takes (an arrival point), 'H' a second surface 40 units higher (a walkway), '/' stairs (height 20),
  * '*' ice, 'R' 'L' 'U' 'D' spinner arrows (push right, left, up, down), 'S' the spinner stop tile, '@' whirlpool,
  * '|' waterfall, 'C' a Rock Climb wall climbed east-west, 'N' one climbed north-south (height 20), 'B' a floor with
  * two surfaces (0 and 40: a tile under a walkway).
@@ -32,6 +33,8 @@ private fun area(vararg rows: String): Area {
             '>' -> TileInfo(false, TileKind.Ledge(Direction.EAST))
             '~' -> TileInfo(false, TileKind.Water(surfable = true, fishable = true))
             'W' -> TileInfo(false, TileKind.Door, listOf(0)).also { warps += Warp(0, warps.size, x, y, 1, 0) }
+            'M' -> TileInfo(false, TileKind.Door, listOf(0)).also { warps += Warp(0, warps.size, x, y, 1, 0, WarpTrigger.Press(Direction.SOUTH)) }
+            'X' -> TileInfo(false, TileKind.Floor, listOf(0)).also { warps += Warp(0, warps.size, x, y, 1, 0, WarpTrigger.Never) }
             'H' -> TileInfo(false, TileKind.Floor, listOf(40))
             '/' -> TileInfo(false, TileKind.Floor, listOf(20))
             '*' -> TileInfo(false, TileKind.Ice, listOf(0))
@@ -149,6 +152,35 @@ class PathfinderTest {
         assertTrue(around.route.edges.none { it.to.x == 1 && it.to.y == 0 })
         val into = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(1, 0, Node(0, 0), goalTiles = setOf(1 to 0)))
         assertEquals(1, into.route.edges.size)
+    }
+
+    /**
+     * The doormat of the shuffled warps (NOTES-run-map-randomizer: arrived on the tile below the Celadon Dept Store's
+     * exit mat, "no way… not connected" although `step north 2` led back in): an exit mat taken by pressing south is
+     * crossed going north like floor, and never left towards south (that press takes it).
+     */
+    @Test
+    fun anExitMatIsCrossedAnyWayButItsOwn() {
+        val map = area(
+            "...",
+            "#M#",
+            "#.#",
+        )
+        val inside = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(0, 0, Node(1, 2)))
+        assertEquals(1 to 1, inside.route.edges.first().to.let { it.x to it.y })
+        // From the room, the tile below is only reached through the mat going south: that press takes the warp.
+        assertIs<Pathfinder.Result.Failed>(Pathfinder(map).to(1, 2, Node(0, 0)))
+        // Standing on the mat (walls east and west): north is a step, south isn't.
+        val moves = Pathfinder(map).neighbours(Node(1, 1), RouteOptions()).map { it.direction }
+        assertEquals(listOf(Direction.NORTH), moves)
+    }
+
+    /** A warp nothing takes (only an arrival point) is walked like floor. */
+    @Test
+    fun aWarpNothingTakesIsFloor() {
+        val map = area("#X#", ".X.", "#.#")
+        val across = assertIs<Pathfinder.Result.Found>(Pathfinder(map).to(2, 1, Node(0, 1)))
+        assertEquals(2, across.route.edges.size)
     }
 
     @Test
@@ -499,16 +531,16 @@ class PathfinderTest {
             *Array(8) { ".........." },
         )
         val goal = { n: Node -> n.x == 9 && n.y == 0 }
-        val noPlatforms = object : MovingPlatforms {
-            override val poses = emptyList<PlatformPose>()
-            override fun walkTiles(poses: List<PlatformPose>) = emptySet<Pair<Int, Int>>()
-            override fun ride(poses: List<PlatformPose>, x: Int, y: Int): PlatformRide? = null
+        val noPlatforms = object : PuzzleMechanics<List<PlatformPose>> {
+            override val mechanism = PuzzleMechanism.MOVING_PLATFORM
+            override val state = emptyList<PlatformPose>()
+            override fun ride(state: List<PlatformPose>, x: Int, y: Int): MechanismRide<List<PlatformPose>>? = null
         }
         // The corridor is 10 places: within a bound of 12 without ledges, not with the field below the ledge.
         val pushed = assertIs<Route>(PushPlanner(map, Overlay(), maxStates = 12).route(Node(0, 0), RouteOptions(), isGoal = goal))
         assertEquals(Node(9, 0), pushed.end)
         assertTrue(pushed.edges.none { it is Edge.Jump })
-        val ridden = assertIs<Route>(PlatformPlanner(map, Overlay(), noPlatforms, maxStates = 12).route(Node(0, 0), RouteOptions(), isGoal = goal))
+        val ridden = assertIs<Route>(MechanismPlanner(map, Overlay(), noPlatforms, maxStates = 12).route(Node(0, 0), RouteOptions(), isGoal = goal))
         assertEquals(Node(9, 0), ridden.end)
         // A goal beyond the bound either way: still no plan.
         assertEquals(null, PushPlanner(map, Overlay(), maxStates = 12).route(Node(0, 0), RouteOptions()) { it.x == 9 && it.y == 9 })
@@ -522,12 +554,12 @@ class PathfinderTest {
             "#####v",
             "#####.",
         )
-        val noPlatforms = object : MovingPlatforms {
-            override val poses = emptyList<PlatformPose>()
-            override fun walkTiles(poses: List<PlatformPose>) = emptySet<Pair<Int, Int>>()
-            override fun ride(poses: List<PlatformPose>, x: Int, y: Int): PlatformRide? = null
+        val noPlatforms = object : PuzzleMechanics<List<PlatformPose>> {
+            override val mechanism = PuzzleMechanism.MOVING_PLATFORM
+            override val state = emptyList<PlatformPose>()
+            override fun ride(state: List<PlatformPose>, x: Int, y: Int): MechanismRide<List<PlatformPose>>? = null
         }
-        val planner = PlatformPlanner(map, Overlay(), noPlatforms)
+        val planner = MechanismPlanner(map, Overlay(), noPlatforms)
         assertEquals(null, planner.route(Node(0, 0), RouteOptions()) { it.x == 5 && it.y == 2 })
         val route = assertIs<Route>(planner.route(Node(0, 0), RouteOptions(acceptOneWay = true)) { it.x == 5 && it.y == 2 })
         assertTrue(route.edges.any { it is Edge.Jump })

@@ -10,6 +10,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import dev.kotlinds.pokemonclient.state.normalizeName
+import dev.kotlinds.pokemonclient.world.EncounterTables
 
 /**
  * How much the agent may know beyond what the game shows. It changes what is **shown**, never what is computed.
@@ -41,14 +42,33 @@ enum class LookupKind(val required: KnowledgeLevel, val description: String) {
     LEARNSET(KnowledgeLevel.POKEDEX, "the moves a species learns by level"),
     MACHINE(KnowledgeLevel.POKEDEX, "a TM / HM: the move it teaches"),
     TYPE(KnowledgeLevel.POKEDEX, "an attacking type: what it is super effective / not very effective / useless against"),
+
+    /**
+     * The wild Pokémon of a map. At the Pokédex level only the species the player's Pokédex has seen are named (the
+     * others are counted: `unseen`); with a walkthrough, every one.
+     */
+    ENCOUNTERS(KnowledgeLevel.POKEDEX, "the wild Pokémon of a map (id: a map's name or map:<id>; empty or `here`: the current map): by way (walk, surf, " +
+        "rock smash, rods) and time of day, with chances and levels; at the Pokédex level only the species already seen"),
 }
+
+/**
+ * What `lookup encounters` needs besides the game data: the [world]'s tables ([WorldSource.wildEncounters]), the map
+ * names, where the player is ([currentZone]) and the species the player's Pokédex has seen ([seen]: null when unknown,
+ * then nothing is named below the walkthrough level).
+ */
+class EncounterContext(
+    val world: dev.kotlinds.pokemonclient.world.WorldSource,
+    val mapName: (Int) -> dev.kotlinds.pokemonclient.state.MapName,
+    val currentZone: Int?,
+    val seen: Set<SpeciesId>?,
+)
 
 /**
  * Answers `lookup(kind, id)` from the [GameData], within the [KnowledgeLevel]. Ids are the typed ones (`species:25`,
  * `move:85`, `item:17`, `tm01`, `type:fire`); a name is accepted too ("Pikachu", "Thunderbolt", accents and case
  * ignored), as a convenience.
  */
-class Lookup(private val data: GameData, private val level: KnowledgeLevel) {
+class Lookup(private val data: GameData, private val level: KnowledgeLevel, private val encounters: EncounterContext? = null) {
 
     /** The answer, or a failure whose message says why (unknown id, not allowed at this knowledge level). */
     fun lookup(kind: LookupKind, id: String): Result<JsonObject> = runCatching {
@@ -60,6 +80,72 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel) {
             LookupKind.ITEM -> item(findItem(id))
             LookupKind.MACHINE -> machine(id)
             LookupKind.TYPE -> type(findType(id))
+            LookupKind.ENCOUNTERS -> encounters(id)
+        }
+    }
+
+    /**
+     * The wild Pokémon of the map [id] names (`map:<id>`, a map's name or its place: "Route 32", "Union Cave"; empty or
+     * `here`: the current map), every matching map with encounters: one entry per way of meeting them
+     * ([dev.kotlinds.pokemonclient.world.EncounterGroup]). Below the walkthrough level, only the species seen are
+     * named ([EncounterContext.seen]); `unseen` counts the share of a group's encounters left out.
+     */
+    private fun encounters(id: String): JsonObject {
+        val context = encounters ?: throw IllegalArgumentException("No encounter tables for this game")
+        val world = context.world
+        val query = id.trim()
+        val zones = when {
+            query.isEmpty() || query.equals("here", ignoreCase = true) ->
+                listOf(context.currentZone ?: throw IllegalArgumentException("The player isn't on a map: give a map's name"))
+            else -> {
+                val all = 0 until world.zoneCount
+                all.filter { context.mapName(it).isNamed(query) }.ifEmpty { all.filter { context.mapName(it).placeIs(query) } }
+                    .ifEmpty { throw IllegalArgumentException("Unknown map `$id` (a map's name as the state shows it, or map:<id>)") }
+            }
+        }
+        val walkthrough = level.allows(KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH)
+        val seen = context.seen.orEmpty()
+        // Unknown tables say nothing per map: never "no wild Pokémon" (they may appear on any grass, cave floor or water).
+        if (world.encounterTables == EncounterTables.UNKNOWN) return buildJsonObject {
+            put("tables", EncounterTables.UNKNOWN.name.lowercase())
+            putJsonArray("maps") {}
+            put("note", "no encounter tables for this game yet: wild Pokémon may appear on any tall grass, cave floor or water of ${zones.joinToString { context.mapName(it).toString() }}")
+        }
+        val tables = zones.mapNotNull { world.wildEncounters(it) }
+        return buildJsonObject {
+            put("tables", EncounterTables.DECODED.name.lowercase())
+            put("knowledge", if (walkthrough) "every species" else "only the species your Pokédex has seen")
+            putJsonArray("maps") {
+                if (tables.isEmpty()) return@putJsonArray
+                tables.forEach { table ->
+                    add(buildJsonObject {
+                        put("map", context.mapName(table.zoneId).toString())
+                        put("id", dev.kotlinds.pokemonclient.state.MapName.idForm(table.zoneId))
+                        putJsonArray("groups") {
+                            table.groups.forEach { group ->
+                                val shown = group.slots.filter { walkthrough || it.species in seen }
+                                add(buildJsonObject {
+                                    put("method", group.method.name.lowercase())
+                                    group.time?.let { put("time", it.name.lowercase()) }
+                                    group.condition?.let { put("only_when", it.name.lowercase()) }
+                                    group.rate?.let { put("rate", it) }
+                                    putJsonArray("species") {
+                                        shown.forEach { slot ->
+                                            add(kotlinx.serialization.json.JsonPrimitive(
+                                                "species:${slot.species.value} ${data.species(slot.species)?.name ?: "?"} ${slot.chance}% Lv" +
+                                                    if (slot.levels.first == slot.levels.last) "${slot.levels.first}" else "${slot.levels.first}-${slot.levels.last}",
+                                            ))
+                                        }
+                                    }
+                                    val hidden = group.slots - shown.toSet()
+                                    if (hidden.isNotEmpty()) put("unseen", "${hidden.size} species not seen yet (${hidden.sumOf { it.chance }}% of these encounters)")
+                                })
+                            }
+                        }
+                    })
+                }
+            }
+            if (tables.isEmpty()) put("note", "no wild Pokémon on ${zones.joinToString { context.mapName(it).toString() }}")
         }
     }
 

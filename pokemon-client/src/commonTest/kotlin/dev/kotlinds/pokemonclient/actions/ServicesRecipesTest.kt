@@ -153,6 +153,51 @@ class ServicesRecipesTest {
         assertTrue(ui.game.presses.isEmpty())
     }
 
+    /**
+     * A department store floor with two clerks (NOTES, map randomizer run: `buy` used the nearest clerk and listed one
+     * catalog mixing both): the medicine counter next to the player, the ball counter further.
+     */
+    private fun twoClerks(): ScriptedUi {
+        fun item(id: Int, name: String, price: Int) = dev.kotlinds.pokemonclient.state.ShopItem(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.ItemId(id), name), price)
+        val medicine = FieldObject("person:3", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK,
+            catalog = listOf(item(17, "Potion", 300), item(27, "Full Heal", 600)))
+        val balls = FieldObject("person:5", "shop clerk", FieldObjectKind.PERSON, 6, 0, Direction.SOUTH, role = PersonRole.CLERK,
+            catalog = listOf(item(4, "Poké Ball", 200), item(17, "Potion", 300)))
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), world = world(8, 3))
+        ui.field = field(1, 1, Direction.NORTH, listOf(medicine, balls))
+        return ui
+    }
+
+    @Test
+    fun buyWithoutAnItemListsEachClerksOwnStock() {
+        val ui = twoClerks()
+        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        assertEquals(
+            "nothing bought; person:3 sells: item:17 (Potion, ₽300), item:27 (Full Heal, ₽600); person:5 sells: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)",
+            done.detail,
+        )
+        assertTrue(ui.game.presses.isEmpty())
+        // The action list says who sells what, never one list mixing the counters without saying so.
+        val choices = ActionRegistry.of().available(ui.game.state(ui.game.screen), ActionMode.ASSISTED).single { it.name == "buy" }.choices.getValue("item")
+        assertEquals(listOf("Potion ₽300 (person:3, person:5)", "Full Heal ₽600 (person:3)", "Poké Ball ₽200 (person:5)"), choices.map { it.label })
+    }
+
+    @Test
+    fun buyGoesToTheClerkWhoSellsTheItem() {
+        val ui = twoClerks()
+        val state = ui.game.state(ui.game.screen)
+        assertEquals("person:5", (ShopPlans.clerkFor(state, listOf(Purchase(ItemRef("item:4"), 10))) as Step.Done).value?.id)
+        assertEquals("person:3", (ShopPlans.clerkFor(state, listOf(Purchase(ItemRef("Potion"), 1))) as Step.Done).value?.id, "the nearest of those who sell it")
+        // Nobody sells it: refused before moving, with each clerk's items.
+        val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("item:2"), 1))), ui.context()))
+        val error = assertIs<ActionError.InvalidParameter>(failed.error)
+        assertTrue("item:4 (Poké Ball, ₽200, person:5)" in error.allowed, error.allowed.toString())
+        // Sold, but by two different clerks: one buy each.
+        val split = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("item:4"), 1), Purchase(ItemRef("item:27"), 1))), ui.context()))
+        assertEquals(UnavailableReason.NO_STOCK, assertIs<ActionError.Unavailable>(split.error).reason)
+        assertTrue(ui.game.presses.isEmpty())
+    }
+
     @Test
     fun buyWithoutAnItemReadsTheShopListWhenTheCatalogIsUnknown() {
         val clerk = FieldObject("person:0", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK)

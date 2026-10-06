@@ -16,6 +16,7 @@ import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.world.FieldMoveAccess
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.FieldMoveUse
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -336,29 +337,36 @@ object CommonActions {
         Parameter("avoid_tall_grass", ParameterType.BOOLEAN, "Avoid tall grass when another way exists (fewer wild battles).", required = false),
         Parameter("avoid_trainers", ParameterType.BOOLEAN, "Avoid the line of sight of trainers when another way exists.", required = false),
         Parameter("accept_one_way", ParameterType.BOOLEAN, "Allow a way with no way back (ledges you can't come back up by any path). Ledges that are only shortcuts are always taken.", required = false),
-        Parameter("run", ParameterType.BOOLEAN, "Run (hold B) instead of walking.", required = false),
+        Parameter("run", ParameterType.BOOLEAN, "Run (hold B, with the running shoes): true by default; false walks everywhere.", required = false),
+        Parameter(
+            "run_in_encounter_areas", ParameterType.BOOLEAN,
+            "Also run on the tiles where wild Pokémon can appear (tall grass, cave floors...). Off by default: walks walk there " +
+                "when this game makes encounters more frequent running (with the running shoes switched on, the game always runs).",
+            required = false,
+        ),
         Parameter("bike", ParameterType.BOOLEAN, "Ride the Bicycle (from the bag, or Y when registered) where cycling is allowed: faster.", required = false),
     )
 
     val goTo = ActionDefinition(GameAction.GoTo::class, spec(
         name = "go_to",
         description = "Walk to a tile (x, y), or to a target: person:N, item:N, sign:N, hidden_item:N (next to it), warp:N or " +
-            "hole:N (goes through), exit:north|south|east|west (into the neighbouring map that way), a map's name " +
+            "hole:N (goes through), cart:N / teleport:N of the puzzle (rides it), exit:north|south|east|west (into the neighbouring map that way), a map's name " +
             "(\"Route 26\", \"Victory Road 2F\": walks until entering it), or frontier (the nearest way out of this map " +
             "you are not standing at; stops before it). With map, x / y are on that map (another floor or a neighbour). " +
             "Goes through warps, stairs, holes and map edges when needed (a target of this map reachable only by a long detour through other maps is refused before moving, with the way). Walks onto a scene trigger only when it is the " +
             "destination or the only way (and says so). Stops early when something happens (battle, trainer, phone call, script). " +
+            "Runs by default, walking onto the tiles where wild Pokémon can appear (run, run_in_encounter_areas). " +
             "Uses field moves by itself when the party can (a Pokémon knows the move and the badge is owned; a fainted Pokémon " +
             "can still use its field moves outside battle): Surf from the shore, " +
             "Waterfall, Whirlpool, Cut, Rock Smash, Rock Climb (up and down rocky walls), Strength (boulders pushed as needed) and ice blocks; otherwise the error says " +
             "which move or badge is missing and the tile and direction to use it from. Movement puzzles (boulders, ice blocks, " +
-            "moving platforms, lifts) are solved by itself unless the state says movement_puzzles are left to you. " +
+            "moving platforms, lifts, carts and their levers) are solved by itself unless the state says movement_puzzles are left to you. " +
             "When the state says destinations are hidden, only places of the current map are accepted (its warps and exits " +
             "are taken; another map, by name or with map, is refused with DESTINATIONS_HIDDEN) and walks never go through other maps.",
         parameters = listOf(
             Parameter("x", ParameterType.INTEGER, "Tile x (with y).", required = false),
             Parameter("y", ParameterType.INTEGER, "Tile y (with x).", required = false),
-            Parameter("target", ParameterType.STRING, "Instead of x / y: person:N, item:N, warp:N, hole:N, sign:N, hidden_item:N, exit:<direction>, a map's name, or frontier.", required = false),
+            Parameter("target", ParameterType.STRING, "Instead of x / y: person:N, item:N, warp:N, hole:N, sign:N, hidden_item:N, cart:N, teleport:N, exit:<direction>, a map's name, or frontier.", required = false),
             Parameter("map", ParameterType.STRING, "The map x / y are on, when it isn't the current one (its name as exits show it, or map:<id>).", required = false),
         ) + moveParameters,
         modes = assisted,
@@ -385,7 +393,8 @@ object CommonActions {
     val step = ActionDefinition(GameAction.Step::class, spec(
         name = "step",
         description = "Walk a few tiles straight in a direction (turning first if needed: no press is lost to the turn). " +
-            "Stops early when the way is blocked (says where) or something happens (battle, trainer, script).",
+            "Stops early when the way is blocked (says where) or something happens (battle, trainer, script). " +
+            "Runs by default, walking onto the tiles where wild Pokémon can appear (run, run_in_encounter_areas).",
         parameters = listOf(
             Parameter("direction", ParameterType.STRING, "north, south, west or east.", values = Direction.entries.map { it.name.lowercase() }),
             Parameter("tiles", ParameterType.INTEGER, "How many tiles (1-${MovePlans.MAX_STEP_TILES}, default 1).", required = false),
@@ -403,7 +412,7 @@ object CommonActions {
 
     val findEncounter = ActionDefinition(GameAction.FindEncounter::class, spec(
         name = "find_encounter",
-        description = "Walk to the nearest tall grass of this map and pace in it until a wild Pokémon appears.",
+        description = "Walk to the nearest place of this map where wild Pokémon appear (tall grass, a cave's floor; the water while surfing) and pace there until one appears.",
         parameters = emptyList(),
         modes = assisted,
         availability = { state -> if (MovePlans.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden },
@@ -472,9 +481,10 @@ object CommonActions {
 
     val buy = ActionDefinition(GameAction.Buy::class, spec(
         name = "buy",
-        description = "Buy items at this Poké Mart in one visit to the counter (walks to the clerk; also works from the clerk's menu " +
-            "or the shop list): one `item` + `quantity`, or a list `items` of {item, quantity}. Without any item nothing is bought and " +
-            "the answer's `detail` lists what is sold (item id, name, price; it may talk to the clerk to read the list).",
+        description = "Buy items at this Poké Mart in one visit to the counter (walks to the clerk who sells them, when a floor has " +
+            "several; also works from the clerk's menu or the shop list): one `item` + `quantity`, or a list `items` of {item, quantity}. " +
+            "Without any item nothing is bought and the answer's `detail` lists what each clerk sells (item id, name, price; it may talk " +
+            "to a clerk to read the list).",
         parameters = listOf(
             Parameter("item", ParameterType.STRING, "The item: its id (item:4) or its name.", required = false),
             Parameter("quantity", ParameterType.INTEGER, "How many, 1 to 99 (default 1).", required = false),
@@ -483,8 +493,14 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             if (ShopPlans.stage(state) == null) return@spec Availability.Hidden
-            val sold = ShopPlans.catalog(state)
-            Availability.Available(sold?.let { list -> mapOf("item" to list.map { Choice("item:${it.item.id.value}", it.item.name + (it.price?.let { p -> " ₽$p" } ?: "")) }) } ?: emptyMap())
+            // Clerk by clerk (never one list mixing two counters): an item sold by several says by whom.
+            val stock = ShopPlans.stock(state)
+            val sellers = stock.flatMap { s -> s.items.map { it to s.clerk } }.groupBy({ it.first.item.id }, { it })
+            Availability.Available(if (sellers.isEmpty()) emptyMap() else mapOf("item" to sellers.values.map { lines ->
+                val item = lines.first().first
+                val by = lines.mapNotNull { it.second?.id }.takeIf { stock.size > 1 && it.isNotEmpty() }?.joinToString(prefix = " (", postfix = ")") ?: ""
+                Choice("item:${item.item.id.value}", item.item.name + (item.price?.let { p -> " ₽$p" } ?: "") + by)
+            }))
         },
         parse = { json -> GameAction.Buy(purchases(json)) },
     ), ShopPlans.buy)
@@ -632,7 +648,8 @@ object CommonActions {
 
     val fly = ActionDefinition(GameAction.Fly::class, spec(
         name = "fly",
-        description = "Fly to a town already visited (needs a Pokémon knowing Fly and its badge; outdoors only). In HGSS a town of the " +
+        description = "Fly to a town already visited (needs a Pokémon knowing Fly and its badge, on a map that allows it: listed as " +
+            "unavailable where the map's own flag forbids it). In HGSS a town of the " +
             "other region (Johto / Kanto) is reached through Indigo Plateau by itself (two flights) once Indigo Plateau was visited.",
         parameters = listOf(Parameter("destination", ParameterType.STRING, "fly:<map id> as listed on the fly map, or the town's name.")),
         modes = assisted,
@@ -642,7 +659,8 @@ object CommonActions {
             val fly = state.fieldMoves?.get(FieldMoveKind.FLY)
             when {
                 !MovePlans.canWalk(state, hasWorld = true) || fly == null || fly == FieldMoveAccess.Unknown -> Availability.Hidden
-                state.field?.flyAllowed == false -> Availability.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "Fly can't be used here (indoors, in a cave...)", "go outdoors first")
+                fly == FieldMoveAccess.NotSupported -> Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "Fly isn't supported in this game yet (its party menu isn't decoded)")
+                state.field?.flyAllowed == false -> Availability.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "Fly can't be used on this map (the map doesn't allow it)", "go to a map where Fly works")
                 fly == FieldMoveAccess.NoPokemon -> Availability.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly")
                 fly is FieldMoveAccess.NoBadge -> Availability.Unavailable(UnavailableReason.NEEDS_BADGE, "Fly needs the ${fly.badge} Badge")
                 else -> Availability.Available()
@@ -650,6 +668,50 @@ object CommonActions {
         },
         parse = { json -> GameAction.Fly(string(json, "destination")) },
     ), FieldPlans.fly)
+
+    val useFieldMove = ActionDefinition(GameAction.UseFieldMove::class, spec(
+        name = "use_field_move",
+        description = "Use a field move outside battle in one call (Teleport, Dig, Flash, Sweet Scent, Milk Drink / Softboiled...): " +
+            "a Pokémon of the party that knows it is picked for you (read by move id), then party menu → the Pokémon → the move, " +
+            "each menu checked. The game decides whether it works here: a refusal is an error with its message. Fly has its own " +
+            "action (fly); Surf, Cut, Strength... are used by go_to by itself.",
+        parameters = listOf(
+            Parameter("move", ParameterType.STRING, "The field move, as listed (teleport, dig, flash, sweet_scent...).",
+                values = FieldMoveKind.entries.filter { it.use == FieldMoveUse.ACTION }.map { it.wire }),
+            Parameter("target", ParameterType.STRING, "Milk Drink / Softboiled: the Pokémon that gets the HP (mon:…).", required = false),
+        ),
+        modes = assisted,
+        availability = { state ->
+            if (!PartyBagPlans.inField(state)) return@spec Availability.Hidden
+            // The game's rules as the state read them (GameState.fieldMoves: the move known, the badge): the moves of
+            // this action only (Fly and the moves walks use have their own ways).
+            val access = state.fieldMoves.orEmpty().filterKeys { it.use == FieldMoveUse.ACTION }
+            val usable = access.filterValues { it is FieldMoveAccess.Usable }
+            when {
+                usable.isNotEmpty() -> Availability.Available(buildMap {
+                    put("move", usable.map { (kind, a) -> Choice(kind.wire, "${with(FieldMoveWalk) { kind.label() }} (${(a as FieldMoveAccess.Usable).monName})") })
+                    if (usable.keys.any { it.healsAnother }) put("target", monChoices(state))
+                })
+                access.values.any { it is FieldMoveAccess.NoBadge } -> access.entries.first { it.value is FieldMoveAccess.NoBadge }.let { (kind, a) ->
+                    Availability.Unavailable(UnavailableReason.NEEDS_BADGE, "${with(FieldMoveWalk) { kind.label() }} needs the ${(a as FieldMoveAccess.NoBadge).badge} Badge")
+                }
+                access.values.any { it == FieldMoveAccess.NotSupported } ->
+                    Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "field moves aren't supported in this game yet (its party menu isn't decoded)")
+                else -> Availability.Hidden
+            }
+        },
+        parse = { json ->
+            val raw = string(json, "move")
+            val move = FieldMoveKind.parse(raw)?.takeIf { it.use == FieldMoveUse.ACTION }
+                ?: throw ActionException(ActionError.InvalidParameter("move", raw, FieldMoveKind.entries.filter { it.use == FieldMoveUse.ACTION }.map { it.wire }))
+            GameAction.UseFieldMove(move, json["target"]?.jsonPrimitive?.contentOrNull?.let { monId(it) })
+        },
+        // For models picking from a list: the usable moves that need no target (Milk Drink / Softboiled take one).
+        enumerate = { state ->
+            state.fieldMoves.orEmpty().filter { (kind, access) -> kind.use == FieldMoveUse.ACTION && !kind.healsAnother && access is FieldMoveAccess.Usable }
+                .keys.map { GameAction.UseFieldMove(it) }
+        },
+    ), FieldPlans.useFieldMove)
 
     val setOptions = ActionDefinition(GameAction.SetOptions::class, spec(
         name = "set_options",
@@ -687,7 +749,7 @@ object CommonActions {
 
     /** Every common action, in the order they are listed to agents. */
     val definitions: List<ActionDefinition<*>> get() =
-        listOf(advanceDialogue, choose, enterText, attack, switch, throwBall, learnMove, run, keepBattling, goTo, interact, step, findEncounter, heal, fly, fish, buy, setQuantity, deposit, withdraw, pc, reorderParty, useItem, giveItem, takeItem, teach, useKeyItem, registerItem, saveGame, softReset, continueGame, watchHallOfFame, setOptions, chooseStarter, press, touch, wait) +
+        listOf(advanceDialogue, choose, enterText, attack, switch, throwBall, learnMove, run, keepBattling, goTo, interact, step, findEncounter, heal, fly, useFieldMove, fish, buy, setQuantity, deposit, withdraw, pc, reorderParty, useItem, giveItem, takeItem, teach, useKeyItem, registerItem, saveGame, softReset, continueGame, watchHallOfFame, setOptions, chooseStarter, press, touch, wait) +
             MoreActions.definitions + PuzzleActions.definitions + PokegearActions.definitions
 
     // region Helpers
@@ -734,7 +796,8 @@ object CommonActions {
         .filter { it.kind != FieldObjectKind.FOLLOWER }
         .map { Choice(MovePlans.objectTargetId(it), "${it.label} at ${it.x},${it.y}") }
 
-    private fun bool(json: JsonObject, key: String) = json[key]?.jsonPrimitive?.booleanOrNull ?: false
+    /** Boolean parameter [key] of [json], [default] when absent or not a boolean. */
+    private fun bool(json: JsonObject, key: String, default: Boolean = false) = json[key]?.jsonPrimitive?.booleanOrNull ?: default
 
     /** `item` + `quantity`, then every {item, quantity} of `items` (empty when nothing is named: the plan lists the shop). */
     private fun purchases(json: JsonObject): List<Purchase> {
@@ -754,7 +817,8 @@ object CommonActions {
         avoidTallGrass = bool(json, "avoid_tall_grass"),
         avoidTrainers = bool(json, "avoid_trainers"),
         acceptOneWay = bool(json, "accept_one_way"),
-        run = bool(json, "run"),
+        run = bool(json, "run", default = true),
+        runInEncounterAreas = bool(json, "run_in_encounter_areas"),
         bike = bool(json, "bike"),
     )
 

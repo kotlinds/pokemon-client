@@ -86,7 +86,7 @@ internal object PushPlans {
                 // Walk only: no other boulder moved on the way (the plan keeps them where they are).
                 val walker = PlanContext(context.scope, context.game, context.navigator, context.settings.copy(solvePuzzles = false))
                 val walked = MovePlans.walkTo(walker, MovePlans.Target("${standAt.x},${standAt.y}", standAt.x, standAt.y), MoveOptions())
-                if (walked !is MovePlans.Walk.Arrived) return with(MovePlans) { walked.toOutcome(context) { "" } }.withDone(done)
+                if (walked !is MovePlans.Walk.Arrived || walked.through != null) return with(MovePlans) { walked.toOutcome(context) { "" } }.withDone(done)
                 if (walked.field.x != standAt.x || walked.field.y != standAt.y || walked.field.mapId != field.mapId) return@repeat
             }
             if (!strengthUsed) {
@@ -119,6 +119,7 @@ internal object PushPlans {
         is FieldMoveAccess.Usable -> null
         is FieldMoveAccess.NoBadge -> ActionError.Unavailable(UnavailableReason.NEEDS_BADGE, "Strength needs the ${access.badge} Badge")
         FieldMoveAccess.NoPokemon -> ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon of the party knows Strength")
+        FieldMoveAccess.NotSupported -> ActionError.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "using Strength isn't supported in this game yet")
         FieldMoveAccess.Unknown, null -> ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "Strength can't be used in this game")
     }
 

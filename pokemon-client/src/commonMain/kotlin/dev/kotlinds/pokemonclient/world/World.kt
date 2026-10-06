@@ -17,7 +17,10 @@ interface WorldSource {
     /** Number of zones (maps): ids are `0 until zoneCount` (0 when unknown). Used to find a map by name. */
     val zoneCount: Int get() = 0
 
-    /** Whether Fly can be used from zone [zoneId] (outdoors), null when unknown. */
+    /**
+     * Whether Fly can be used from zone [zoneId]: the flag of its map header, as the game checks it (outdoors in the
+     * normal games; a randomizer may allow it anywhere), null when unknown.
+     */
     fun flyAllowed(zoneId: Int): Boolean? = null
 
     /** Whether the bicycle can be ridden in zone [zoneId], null when unknown. */
@@ -27,13 +30,39 @@ interface WorldSource {
     fun regionOf(zoneId: Int): Region? = null
 
     /**
+     * Whether this game's wild encounter tables are decoded ([EncounterTables.DECODED]: [encounterChance] and
+     * [wildEncounters] are the game's, 0 and null mean "none") or not yet ([EncounterTables.UNKNOWN]: they say nothing,
+     * wild Pokémon may appear on every tile whose kind has encounters).
+     */
+    val encounterTables: EncounterTables get() = EncounterTables.UNKNOWN
+
+    /**
      * The chance (0..1) that one encounter check of zone [zoneId] starts a wild battle, as the game rolls it under
      * [conditions]: on its land encounter tiles ([TileInfo.landEncounters]), or surfing on its water ([water],
      * [TileKind.Water.wildEncounters]). The game counts a check on every step onto such a tile and on every turn in
-     * place there. 0 when the zone has no such encounters or the game is unknown (no weight in routes then, see
-     * [StepWeights]).
+     * place there. 0 when the zone has no such encounters, or when the tables are [EncounterTables.UNKNOWN] (no weight
+     * in routes then, see [StepWeights]).
      */
     fun encounterChance(zoneId: Int, water: Boolean, conditions: EncounterConditions): Double = 0.0
+
+    /**
+     * The wild Pokémon of zone [zoneId] ([WildEncounters]), null when it has none, or when the tables are
+     * [EncounterTables.UNKNOWN].
+     */
+    fun wildEncounters(zoneId: Int): WildEncounters? = null
+}
+
+/** Whether a [WorldSource] knows its game's wild encounter tables ([WorldSource.encounterTables]). */
+enum class EncounterTables {
+    /** Decoded from the ROM: a zone without a table, or a chance of 0, really has no wild Pokémon there. */
+    DECODED,
+
+    /**
+     * Not decoded for this game yet: nothing is known per zone. Wild Pokémon may appear on every tile whose kind has
+     * encounters (tall grass, cave floors, surfable water), routes give them no weight, and `lookup encounters` says
+     * the tables are unknown (never "no wild Pokémon").
+     */
+    UNKNOWN,
 }
 
 /** A region of the world (HGSS: Johto, Kanto): [id] is the game's number, [name] is for display only. */
@@ -64,6 +93,8 @@ class Area(
     val scriptWarps: List<ScriptWarp> = emptyList(),
     /** Triggers whose script moves the player to another zone (holes to the floor below). */
     val triggerWarps: List<TriggerWarp> = emptyList(),
+    /** Whether several maps share this coordinate space ([AreaKind.OVERWORLD]) or it is one map alone. */
+    val kind: AreaKind = AreaKind.SINGLE_MAP,
 ) {
     /** The zone (map) id at (x, y), when known. */
     fun zoneAt(x: Int, y: Int): Int? {
@@ -90,10 +121,126 @@ class Area(
         bounds
     }
 
+    /**
+     * The tiles of zone [zone]'s scene triggers active now: the one rule of every reader of the triggers (the game's
+     * state, the walks, the reachability survey). A trigger counts when stepping on it shows something: not a
+     * placeholder ([Trigger.inert]: walked like floor) and [Trigger.startsScene] with the save's variables
+     * ([variableOf]) and flags ([flagOf]).
+     */
+    fun sceneTriggerTiles(zone: Int, variableOf: (Int) -> Int?, flagOf: (Int) -> Boolean?): Set<Pair<Int, Int>> =
+        triggers.filter { it.zone == zone && !it.inert && it.startsScene(variableOf, flagOf) }.flatMapTo(mutableSetOf()) { it.tiles }
+
     fun tile(x: Int, y: Int): TileInfo? {
         if (x < originX || y < originY || x >= originX + width || y >= originY + height) return null
         return tiles[(y - originY) * width + (x - originX)]
     }
+
+    /**
+     * True when (x, y) is drawn as walkable floor but lies in the void around a map loaded alone
+     * ([AreaKind.SINGLE_MAP]): a building's block is 32×32 tiles, its room a corner of it, the rest has no collision
+     * and no surface, and the game never leads there, except one tile past an exit door when a map-randomized warp
+     * arrives on a door taken the other way (the exit step), and the player then walks off into it and may not get back
+     * (NOTES-run-map-randomizer: Goldenrod Underground).
+     *
+     * The rule: the void is what can't be reached, whatever moves it takes (water, ledges, walls to climb, the lava
+     * crossed by platforms), from any place where the game puts the player or something to reach: the warps (where
+     * the player arrives), holes and warp pads, the coordinate triggers (the scripts that move the player: carts,
+     * lifts, platforms), people, signs and hidden items. Never on an [AreaKind.OVERWORLD]: its maps are walked into
+     * each other, and a part of it walled off from every event (a field behind a fence, a beach) is still a place the
+     * map draws for the player, not a void. Moving floors of a puzzle (lift tops, cart stations) are the view's to
+     * keep out of it too ([dev.kotlinds.pokemonclient.view.MapView]).
+     */
+    fun outside(x: Int, y: Int): Boolean {
+        if (kind == AreaKind.OVERWORLD) return false
+        val tile = tile(x, y) ?: return false
+        return !tile.blocked && passable(tile) && !inside[(y - originY) * width + (x - originX)]
+    }
+
+    /**
+     * The void ([outside]) once [places] are places of the area too: the live puzzle's moving floors and landings (a
+     * lift's top, a cart station, a platform), which the static events don't tell. The void tiles connected to them
+     * aren't void. One flood over the void tiles only, per call: built once per view.
+     */
+    fun voidAround(places: Collection<Pair<Int, Int>>): (Int, Int) -> Boolean {
+        if (kind == AreaKind.OVERWORLD) return { _, _ -> false }
+        val reached = HashSet<Int>()
+        val stack = ArrayDeque<Pair<Int, Int>>()
+        fun visit(x: Int, y: Int) {
+            if (!outside(x, y)) return
+            if (reached.add((y - originY) * width + (x - originX))) stack.addLast(x to y)
+        }
+        places.forEach { (x, y) -> SEED_AROUND.forEach { (dx, dy) -> visit(x + dx, y + dy) } }
+        while (stack.isNotEmpty()) {
+            val (x, y) = stack.removeLast()
+            SEED_AROUND.forEach { (dx, dy) -> visit(x + dx, y + dy) }
+        }
+        return { x, y -> outside(x, y) && (y - originY) * width + (x - originX) !in reached }
+    }
+
+    /** The tiles connected to the area's events ([outside]), row-major like the tiles. */
+    private val inside: BooleanArray by lazy {
+        val reached = BooleanArray(width * height)
+        val stack = ArrayDeque<Int>()
+        fun seed(x: Int, y: Int) {
+            // An event on a wall (a sign, a bookshelf) opens onto the tiles around it; one on a passable tile is
+            // only there (the tile past an exit mat may be the void).
+            val own = tile(x, y) ?: return
+            for ((dx, dy) in if (passable(own)) SEED_AROUND.take(1) else SEED_AROUND) {
+                val sx = x + dx
+                val sy = y + dy
+                val t = tile(sx, sy) ?: continue
+                val i = (sy - originY) * width + (sx - originX)
+                if (passable(t) && !reached[i]) { reached[i] = true; stack.addLast(i) }
+            }
+        }
+        warps.forEach { seed(it.x, it.y) }
+        triggerWarps.forEach { seed(it.x, it.y) }
+        scriptWarps.forEach { seed(it.x, it.y) }
+        triggers.forEach { seed(it.x, it.y) }
+        people.forEach { seed(it.x, it.y) }
+        signs.forEach { seed(it.x, it.y) }
+        // An area without any event (a map built by hand, in tests) has no place to tell the void from: all inside.
+        if (stack.isEmpty()) return@lazy BooleanArray(width * height) { true }
+        while (stack.isNotEmpty()) {
+            val i = stack.removeLast()
+            val x = originX + i % width
+            val y = originY + i / width
+            for ((dx, dy) in SEED_AROUND) {
+                if (dx == 0 && dy == 0) continue
+                val nx = x + dx
+                val ny = y + dy
+                val t = tile(nx, ny) ?: continue
+                val n = (ny - originY) * width + (nx - originX)
+                if (!reached[n] && passable(t)) { reached[n] = true; stack.addLast(n) }
+            }
+        }
+        reached
+    }
+
+    private companion object {
+        /** A tile and its four neighbours. */
+        val SEED_AROUND = listOf(0 to 0, 1 to 0, -1 to 0, 0 to 1, 0 to -1)
+
+        /** Tiles a player may cross somehow (walking, surfing, jumping, climbing, through a door, carried over lava). */
+        fun passable(t: TileInfo): Boolean = when (t.kind) {
+            TileKind.Wall, TileKind.Pc, TileKind.Counter -> false
+            TileKind.Door, TileKind.Ladder, is TileKind.Water, TileKind.Waterfall, TileKind.Whirlpool, is TileKind.RockClimb, TileKind.Lava,
+            is TileKind.Ledge, is TileKind.Bridge -> true
+            else -> !t.blocked
+        }
+    }
+}
+
+/** What an [Area] is: a coordinate space several maps share, or one map loaded alone. */
+enum class AreaKind {
+    /**
+     * Several maps in one coordinate space, walked into each other (the Gen 4 overworld matrix: every route and town
+     * of the region): no tile of it is ever void ([Area.outside]).
+     */
+    OVERWORLD,
+
+    /** One map loaded alone (a building, a cave floor, a gym): its block's tiles around the room are the void. */
+    SINGLE_MAP,
 }
 
 /** One tile: collision, what it is, and the heights of the surfaces on it (several on bridges). */
@@ -178,26 +325,112 @@ enum class ClimbAxis(val directions: Set<Direction>) {
 }
 
 /**
- * The field moves a game checks outside battle ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]): those that
- * open a way on the map (what a route needs when the map alone has none, [RouteFailure.NeedsFieldMove]), and [FLY].
+ * The field moves of the Gen 4 games, used outside battle from the party menu ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]
+ * says which ones a game has and what they need): those that open a way on the map (walks use them by themselves,
+ * [FieldMoveUse.ROUTE]), [FLY] (the `fly` action), and the others (the `use_field_move` action, [FieldMoveUse.ACTION]).
  */
-enum class FieldMoveKind {
-    SURF,
-    CUT,
-    ROCK_SMASH,
+enum class FieldMoveKind(val use: FieldMoveUse) {
+    SURF(FieldMoveUse.ROUTE),
+    CUT(FieldMoveUse.ROUTE),
+    ROCK_SMASH(FieldMoveUse.ROUTE),
 
     /** Pushes boulders. */
-    STRENGTH,
-    WHIRLPOOL,
-    WATERFALL,
-    ROCK_CLIMB,
+    STRENGTH(FieldMoveUse.ROUTE),
+    WHIRLPOOL(FieldMoveUse.ROUTE),
+    WATERFALL(FieldMoveUse.ROUTE),
+    ROCK_CLIMB(FieldMoveUse.ROUTE),
 
     /** Flies to a town already visited (the `fly` action): opens no way on a map, routes never use it. */
-    FLY,
+    FLY(FieldMoveUse.FLY),
+
+    /** Lights up a dark cave. */
+    FLASH(FieldMoveUse.ACTION),
+
+    /** Back to the last Pokémon Center used (where the game allows it). */
+    TELEPORT(FieldMoveUse.ACTION),
+
+    /** Out of a cave to its entrance (where the game allows it). */
+    DIG(FieldMoveUse.ACTION),
+
+    /** Lures a wild Pokémon (a battle starts where they appear). */
+    SWEET_SCENT(FieldMoveUse.ACTION),
+
+    /** Gives some of the user's HP to another Pokémon of the party. */
+    MILK_DRINK(FieldMoveUse.ACTION),
+
+    /** Gives some of the user's HP to another Pokémon of the party. */
+    SOFTBOILED(FieldMoveUse.ACTION),
+
+    /** Shakes the tree the player faces (HeartGold / SoulSilver): a wild Pokémon may fall. */
+    HEADBUTT(FieldMoveUse.ACTION),
+
+    /** Plays the recorded cry (Chatot). */
+    CHATTER(FieldMoveUse.ACTION),
+
+    /** Clears the fog of the map (Platinum). */
+    DEFOG(FieldMoveUse.ACTION),
+    ;
+
+    /** Language-independent id of the move on the wire (`teleport`, `sweet_scent`): what `use_field_move` takes. */
+    val wire: String get() = name.lowercase()
+
+    /**
+     * Id of its entry in a Pokémon's party menu (`fieldmove:teleport`), as the party menu decoders name it. A game
+     * whose party menu isn't decoded yet has every field move [FieldMoveAccess.NotSupported] instead (never tried).
+     */
+    val menuEntry: String get() = "fieldmove:" + name.lowercase().replace("_", "")
+
+    /** True for the moves that give HP to another Pokémon of the party ([MILK_DRINK], [SOFTBOILED]): a target is chosen. */
+    val healsAnother: Boolean get() = this == MILK_DRINK || this == SOFTBOILED
+
+    companion object {
+        /** The move of wire id [wire] ([FieldMoveKind.wire], case and spaces ignored), or null. */
+        fun parse(wire: String): FieldMoveKind? {
+            val key = wire.trim().lowercase().removePrefix("fieldmove:").replace(" ", "_").replace("-", "_")
+            return entries.firstOrNull { it.wire == key || it.menuEntry == "fieldmove:$key" }
+        }
+    }
 }
 
-/** A warp: stepping on (x, y) (and, for edge mats, pressing [exitDirection]) leads to [targetZone]. */
-data class Warp(val zone: Int, val id: Int, val x: Int, val y: Int, val targetZone: Int, val targetWarp: Int, val exitDirection: Direction? = null)
+/** How a [FieldMoveKind] is used. */
+enum class FieldMoveUse {
+    /** Opens a way on the map: walks use it by themselves when the party can. */
+    ROUTE,
+
+    /** The `fly` action. */
+    FLY,
+
+    /** The `use_field_move` action. */
+    ACTION,
+}
+
+/** A warp: on (x, y), what its [trigger] asks (stepping on it, or pressing a direction on it) leads to [targetZone]. */
+data class Warp(val zone: Int, val id: Int, val x: Int, val y: Int, val targetZone: Int, val targetWarp: Int, val trigger: WarpTrigger = WarpTrigger.Enter)
+
+/**
+ * What takes a warp, from the game's rules for the behaviour of its tile. The Gen 4 engine checks warps twice
+ * (pokeheartgold / pokeplatinum src/field/field_control.c): at the end of every step onto a tile
+ * (`FieldSystem_CheckTransition`: north entrances, warp panels, ladders down, escalators) and when a direction is
+ * pressed (`FieldSystem_CheckMapTransition`: a door ahead, or the mat / stairs / ladder the player stands on, for its
+ * own direction only). A warp on a tile with neither behaviour is never taken: only arrived at.
+ *
+ * Why it matters for walks: an [Enter] warp can't be crossed (and, standing on it after arriving, only stepping off and
+ * back on takes it: pressing does nothing), while a [Press] tile is plain floor to walk across or stop on, as long as
+ * the player doesn't leave it towards its direction (the "doormat below a door" of the shuffled warps).
+ */
+sealed interface WarpTrigger {
+    /** Entering the tile, from any side, takes it: doors (walked into), warp panels, north entrances, ladders down. */
+    data object Enter : WarpTrigger
+
+    /**
+     * Standing on the tile, a press towards [direction] takes it: exit mats, side stairs, the ladders climbed north or
+     * south (a ladder down a hole is [Enter]).
+     */
+    data class Press(val direction: Direction) : WarpTrigger
+
+    /** Nothing takes it: its tile has no warp behaviour, the warp is only where the other side's warp arrives. */
+    data object Never : WarpTrigger
+}
 
 /** A sign / examinable object read with A, or an item hidden on the ground ([kind]). */
 data class Sign(
@@ -265,6 +498,12 @@ data class Trigger(
      */
     fun startsScene(variableOf: (Int) -> Int?, flagOf: (Int) -> Boolean?): Boolean =
         variableOf(variable) == value && quietWhen?.let { flagOf(it.flag) == it.set } != true
+
+    /** The tiles it covers: its rectangle ([width] × [height], at least one tile). */
+    val tiles: List<Pair<Int, Int>> get() = (x until x + maxOf(1, width)).flatMap { tx -> (y until y + maxOf(1, height)).map { ty -> tx to ty } }
+
+    /** True when it covers ([tx], [ty]). */
+    fun covers(tx: Int, ty: Int): Boolean = tx in x until x + maxOf(1, width) && ty in y until y + maxOf(1, height)
 }
 
 /** An event flag of the game's save having a given state: [flag] is set when [set], clear otherwise. */

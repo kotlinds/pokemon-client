@@ -28,21 +28,61 @@ internal object ShopPlans {
         else -> if (MovePlans.canWalk(state, hasWorld = true) && clerk(state) != null) Stage.OVERWORLD else null
     }
 
-    /** What the shop sells: the list on screen when it's open, else the clerk's catalog when the game data knows it. */
-    fun catalog(state: GameState): List<ShopItem>? {
-        (state.screen as? Screen.Shop)?.let { shop ->
-            return shop.entries.filter { it.id.startsWith("item:") }.map { e ->
-                val id = e.id.removePrefix("item:").toInt()
-                ShopItem(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.ItemId(id), e.label.substringBefore(" ₽")), e.label.substringAfter(" ₽", "").toIntOrNull())
-            }
-        }
-        return (clerkFaced(state) ?: clerk(state))?.catalog
+    /**
+     * What one clerk sells ([clerk] null: the counter the player is at, its list on screen or the clerk faced), as
+     * the game decides it ([FieldObject.catalog]: the clerk's own mart script and the badges, read before talking).
+     */
+    data class Stock(val clerk: FieldObject?, val items: List<ShopItem>)
+
+    /**
+     * What can be bought here, clerk by clerk: the list on screen when the shop is open, the clerk faced (their menu
+     * is open), else every clerk of the map whose catalog is known, nearest first (a floor of a department store has
+     * two: each sells its own list, never mixed).
+     */
+    fun stock(state: GameState): List<Stock> {
+        (state.screen as? Screen.Shop)?.let { shop -> return listOf(Stock(null, shopList(shop))) }
+        if (stage(state) != Stage.OVERWORLD) return listOfNotNull(clerkFaced(state)?.catalog?.let { Stock(null, it) })
+        return clerks(state).mapNotNull { c -> c.catalog?.let { Stock(c, it) } }
+    }
+
+    /** The items of the shop list on screen. */
+    private fun shopList(shop: Screen.Shop): List<ShopItem> = shop.entries.filter { it.id.startsWith("item:") }.map { e ->
+        val id = e.id.removePrefix("item:").toInt()
+        ShopItem(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.ItemId(id), e.label.substringBefore(" ₽")), e.label.substringAfter(" ₽", "").toIntOrNull())
+    }
+
+    /** True when [items] has the item [ref] names (`item:<id>` or its name). */
+    private fun sells(items: List<ShopItem>, ref: ItemRef) = items.any { matchesRef(ref.raw, "item", it.item.id.value, it.item.name) }
+
+    /**
+     * The clerk to buy [purchases] from, walking in from the field: the nearest one whose catalog has them all; else
+     * the nearest whose catalog isn't known (talking shows it). Null when the player is at a counter already (the
+     * shop list or the clerk's menu: that clerk). A known set of clerks none of whom sells them all is refused
+     * before moving, with what each one sells.
+     */
+    internal fun clerkFor(state: GameState, purchases: List<Purchase>): Step<FieldObject?> {
+        if (stage(state) != Stage.OVERWORLD) return Step.Done(null)
+        val all = clerks(state)
+        all.firstOrNull { c -> c.catalog?.let { items -> purchases.all { sells(items, it.item) } } == true }?.let { return Step.Done(it) }
+        all.firstOrNull { it.catalog == null }?.let { return Step.Done(it) }
+        if (all.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no shop clerk here", "go to a Poké Mart"))
+        val missing = purchases.firstOrNull { p -> all.none { c -> sells(c.catalog.orEmpty(), p.item) } } ?: purchases.first()
+        val allowed = all.flatMap { c -> c.catalog.orEmpty().map { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""}, ${c.id})" } }
+        // Every line sold, but by different clerks: one buy per clerk.
+        val split = purchases.all { p -> all.any { c -> sells(c.catalog.orEmpty(), p.item) } }
+        return Step.Failed(
+            if (split) ActionError.Unavailable(UnavailableReason.NO_STOCK, "No single clerk here sells all of ${purchases.joinToString { it.item.raw }}: " +
+                describeStocks(all.mapNotNull { c -> c.catalog?.let { Stock(c, it) } }).removePrefix("nothing bought; "), "buy from each clerk in its own buy")
+            else ActionError.InvalidParameter("item", missing.item.raw, allowed),
+        )
     }
 
     val buy = ActionPlan<GameAction.Buy> { action, context ->
         val start = context.state()
         if (action.purchases.isEmpty()) return@ActionPlan listCatalog(context, start)
-        val opened = openShop(context)
+        val seller = clerkFor(start, action.purchases)
+        if (seller is Step.Failed) return@ActionPlan ActionOutcome.Failed(seller.error)
+        val opened = openShop(context, (seller as Step.Done).value)
         if (opened is Step.Failed) {
             PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
             return@ActionPlan ActionOutcome.Failed(opened.error)
@@ -78,24 +118,38 @@ internal object ShopPlans {
     }
 
     /**
-     * `buy` without an item: nothing is bought, the answer lists what is sold. The clerk's catalog when the game data
-     * knows it (nothing moves), else the shop list read on screen (talk to the clerk, BUY, read, leave).
+     * `buy` without an item: nothing is bought, the answer lists what is sold, clerk by clerk ([stock]): the catalogs
+     * the game data knows (nothing moves); a clerk whose catalog isn't known is talked to and its shop list read on
+     * screen (BUY, read, leave). At a counter already: that clerk's list.
      */
     private fun listCatalog(context: PlanContext, start: GameState): ActionOutcome {
-        catalog(start)?.takeIf { it.isNotEmpty() }?.let { return ActionOutcome.Done(describeCatalog(it)) }
-        val opened = openShop(context)
-        val sold = (opened as? Step.Done)?.value?.let(::catalog)
-        PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
-        return when {
-            opened is Step.Failed -> ActionOutcome.Failed(opened.error)
-            sold.isNullOrEmpty() -> ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_STOCK, "The shop list shows nothing to buy"))
-            else -> ActionOutcome.Done(describeCatalog(sold))
+        val atCounter = stage(start) != Stage.OVERWORLD
+        val known = stock(start).filter { it.items.isNotEmpty() }
+        val unknown = if (atCounter) emptyList() else clerks(start).filter { it.catalog == null }
+        if (known.isNotEmpty() && unknown.isEmpty()) return ActionOutcome.Done(describeStocks(known))
+        val read = mutableListOf<Stock>()
+        for (clerk in if (atCounter) listOf(null) else unknown) {
+            val opened = openShop(context, clerk)
+            val sold = ((opened as? Step.Done)?.value?.screen as? Screen.Shop)?.let(::shopList)
+            PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
+            if (opened is Step.Failed) return ActionOutcome.Failed(opened.error)
+            if (!sold.isNullOrEmpty()) read += Stock(clerk, sold)
         }
+        val all = known + read
+        return if (all.isEmpty()) ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_STOCK, "The shop list shows nothing to buy"))
+        else ActionOutcome.Done(describeStocks(all))
     }
 
-    /** "nothing bought; sold here: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)". */
-    internal fun describeCatalog(sold: List<ShopItem>): String =
-        "nothing bought; sold here: " + sold.joinToString { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""})" }
+    /**
+     * "nothing bought; sold here: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)" for one clerk; with several,
+     * each clerk's own list: "nothing bought; person:3 sells: item:17 (Potion, ₽300); person:5 sells: item:4 (...)".
+     */
+    internal fun describeStocks(stocks: List<Stock>): String {
+        fun items(sold: List<ShopItem>) = sold.joinToString { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""})" }
+        val single = stocks.singleOrNull()
+        return if (single != null) "nothing bought; sold here: " + items(single.items)
+        else "nothing bought; " + stocks.joinToString("; ") { "${it.clerk?.id ?: "this clerk"} sells: " + items(it.items) }
+    }
 
     /**
      * What the bag got besides the [bought] item during a purchase: the clerk's gift (a Premier Ball for 10 Poké
@@ -183,8 +237,8 @@ internal object ShopPlans {
         }
     }
 
-    /** From wherever [stage] says, to the shop list. */
-    private fun openShop(context: PlanContext): Step<GameState> {
+    /** From wherever [stage] says, to the shop list; from the field, talking to [chosen] (else the nearest clerk). */
+    private fun openShop(context: PlanContext, chosen: FieldObject? = null): Step<GameState> {
         var state = context.navigator.settle()
         if (stage(state) == Stage.QUANTITY) {
             // B on the quantity goes back to the list.
@@ -193,7 +247,7 @@ internal object ShopPlans {
             state = context.navigator.settle()
         }
         if (stage(state) == Stage.OVERWORLD) {
-            val clerk = clerk(state) ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no shop clerk here", "go to a Poké Mart"))
+            val clerk = chosen ?: clerk(state) ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no shop clerk here", "go to a Poké Mart"))
             when (val talk = MovePlans.interact.run(GameAction.Interact(clerk.id), context)) {
                 is ActionOutcome.Failed -> return Step.Failed(talk.error)
                 is ActionOutcome.Done -> Unit
@@ -265,9 +319,12 @@ internal object ShopPlans {
     }
 
     /** The clerk of this map (the nearest one). */
-    private fun clerk(state: GameState): FieldObject? {
-        val field = state.field ?: return null
-        return field.objects.filter { it.role == PersonRole.CLERK }.minByOrNull { kotlin.math.abs(it.x - field.x) + kotlin.math.abs(it.y - field.y) }
+    private fun clerk(state: GameState): FieldObject? = clerks(state).firstOrNull()
+
+    /** Every clerk of this map, nearest first. */
+    private fun clerks(state: GameState): List<FieldObject> {
+        val field = state.field ?: return emptyList()
+        return field.objects.filter { it.role == PersonRole.CLERK }.sortedBy { kotlin.math.abs(it.x - field.x) + kotlin.math.abs(it.y - field.y) }
     }
 
     /** The clerk the player faces (next to them, or across the counter: two tiles ahead). */

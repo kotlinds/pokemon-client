@@ -1,5 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import kotlinx.serialization.json.JsonPrimitive
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.actions.ScriptedUi.Companion.OVERWORLD
 import dev.kotlinds.pokemonclient.actions.ScriptedUi.Companion.isStart
@@ -109,12 +111,23 @@ class FieldRecipesTest {
     }
 
     @Test
-    fun withFourMovesTeachWantsToKnowWhatToForget() {
+    fun withFourMovesTeachWantsToKnowWhatToForgetBeforeOpeningAnyMenu() {
+        // NOTES: without `forget`, teach looped on "Should a move be deleted?" and left the yes/no on screen.
         val ui = teachUi(fourMoves)
+        // HM01 teaches Cut: the game never lets it go, so it isn't offered.
+        ui.game.data = StubGameData(machines = mapOf(dev.kotlinds.pokemonclient.data.MachineId(93) to MoveId(15)))
         val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1)), ui.context()))
-        val error = assertIs<ActionError.InvalidParameter>(failed.error)
-        assertEquals("forget", error.parameter)
-        assertEquals(fourMoves.map { it.move.name }, error.allowed)
+        val error = assertIs<ActionError.ForgetNeeded>(failed.error)
+        assertEquals("INVALID_PARAM", error.code)
+        assertEquals(listOf("move:436 Lava Plume", "move:53 Flamethrower", "move:129 Swift"), error.forgettable)
+        assertTrue(ui.game.presses.isEmpty(), "no menu opened: ${ui.game.presses}")
+        assertIs<Screen.Overworld>(ui.game.screen)
+        // An HM move or a move it doesn't know: refused as early.
+        val hm = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("move:15")), ui.context()))
+        assertEquals(ActionError.HmCannotForget("Cut"), hm.error)
+        val unknown = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Tackle")), ui.context()))
+        assertEquals("forget", assertIs<ActionError.InvalidParameter>(unknown.error).parameter)
+        assertTrue(ui.game.presses.isEmpty())
     }
 
     @Test
@@ -239,6 +252,73 @@ class FieldRecipesTest {
         val done = assertIs<ActionOutcome.Done>(PartyBagPlans.registerItem.run(GameAction.RegisterItem(ItemRef("Bicycle")), ui.context()))
         assertEquals("registered on the second touch button (Y keeps Good Rod)", done.detail)
         assertIs<Screen.Overworld>(ui.game.screen)
+    }
+
+    // endregion
+
+    // region use_field_move
+
+    /**
+     * MON1 knows nothing, MON2 knows Teleport (move 100): party → MON2 → TELEPORT. The game then either teleports
+     * (the party closes, an animation, the player on map 7) or refuses with a message on the party menu ([refuse]).
+     */
+    private fun teleportUi(refuse: Boolean = false): ScriptedUi {
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2, moves = listOf(move(100, "Teleport")))))
+        ui.game.fieldMoveRules = hgssFieldMoves
+        ui.field = field(5, 5, Direction.SOUTH, mapId = 3)
+        ui.onA = { screen, id ->
+            when {
+                isStart(screen) && id == "option:pokemon" -> grid(ui.party)
+                screen is Screen.PartyGrid && id == "mon:00000001.00000001" -> menu("option:summary", "option:switch", "option:quit")
+                screen is Screen.PartyGrid && id == "mon:00000002.00000001" -> menu("option:summary", "fieldmove:teleport", "option:switch", "option:quit")
+                screen is Screen.ContextMenu && id == "fieldmove:teleport" -> if (refuse) dialogue("Can't use that here.") else {
+                    ui.field = field(8, 9, Direction.SOUTH, mapId = 7)
+                    OVERWORLD
+                }
+                screen is Screen.Dialogue -> grid(ui.party)
+                else -> screen
+            }
+        }
+        ui.onB = { screen -> if (screen is Screen.ContextMenu) grid(ui.party) else OVERWORLD }
+        return ui
+    }
+
+    @Test
+    fun useFieldMovePicksThePokemonThatKnowsItAndTellsWhereItLed() {
+        val ui = teleportUi()
+        val outcome = FieldPlans.useFieldMove.run(GameAction.UseFieldMove(FieldMoveKind.TELEPORT), ui.context())
+        val detail = assertIs<ActionOutcome.Done>(outcome, outcome.toString()).detail.orEmpty()
+        assertTrue("used Teleport, now in map 7 at 8,9" in detail, detail)
+        assertIs<Screen.Overworld>(ui.game.screen)
+    }
+
+    @Test
+    fun useFieldMoveReportsTheGamesRefusalWithItsMessage() {
+        val ui = teleportUi(refuse = true)
+        val failed = assertIs<ActionOutcome.Failed>(FieldPlans.useFieldMove.run(GameAction.UseFieldMove(FieldMoveKind.TELEPORT), ui.context()))
+        val error = assertIs<ActionError.Unavailable>(failed.error)
+        assertEquals(UnavailableReason.CANNOT_USE_HERE, error.reason)
+        assertTrue("Can't use that here." in error.detail, error.detail)
+        assertIs<Screen.Overworld>(ui.game.screen)
+    }
+
+    @Test
+    fun useFieldMoveIsListedWithTheMovesThePartyCanUse() {
+        val ui = teleportUi()
+        val state = withFieldMoves(ui.game.state(ui.game.screen))
+        val listed = ActionRegistry.of().available(state, ActionMode.ASSISTED).single { it.name == "use_field_move" }
+        assertEquals(listOf("teleport"), listed.choices["move"]?.map { it.value })
+        assertTrue(GameAction.UseFieldMove(FieldMoveKind.TELEPORT) in ActionRegistry.of().enumerate(state, ActionMode.ASSISTED).values)
+        // Nobody knows Dig: refused before any menu.
+        val failed = assertIs<ActionOutcome.Failed>(FieldPlans.useFieldMove.run(GameAction.UseFieldMove(FieldMoveKind.DIG), ui.context()))
+        assertEquals(UnavailableReason.NO_POKEMON_KNOWS_MOVE, assertIs<ActionError.Unavailable>(failed.error).reason)
+        assertTrue(ui.game.presses.isEmpty())
+        // Parsing: the wire id, the menu's id; Fly and the moves of walks aren't this action's.
+        val registry = ActionRegistry.of()
+        fun parse(move: String) = registry.parse(kotlinx.serialization.json.buildJsonObject { put("type", JsonPrimitive("use_field_move")); put("move", JsonPrimitive(move)) }, ActionMode.ASSISTED)
+        assertEquals(GameAction.UseFieldMove(FieldMoveKind.SWEET_SCENT), parse("sweet_scent").getOrThrow())
+        assertEquals(GameAction.UseFieldMove(FieldMoveKind.SWEET_SCENT), parse("fieldmove:sweetscent").getOrThrow())
+        assertTrue(parse("fly").isFailure && parse("surf").isFailure)
     }
 
     // endregion

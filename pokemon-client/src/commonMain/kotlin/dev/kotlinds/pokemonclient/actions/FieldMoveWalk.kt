@@ -172,8 +172,9 @@ internal object FieldMoveWalk {
             FieldMoveKind.WHIRLPOOL -> "a whirlpool blocks the way at ${failure.x},${failure.y}"
             FieldMoveKind.WATERFALL -> "a waterfall is on the way at ${failure.x},${failure.y}"
             FieldMoveKind.ROCK_CLIMB -> "a rocky wall is on the way at ${failure.x},${failure.y}"
-            // Routes never plan a flight (Fly opens no way on a map): kept for a complete answer.
-            FieldMoveKind.FLY -> "the way needs a flight from ${failure.x},${failure.y}"
+            // Routes never plan a flight nor the moves of use_field_move (they open no way on a map): kept for a
+            // complete answer.
+            else -> "the way needs ${failure.move.label()} at ${failure.x},${failure.y}"
         }
         val from = failure.from
         val where = if (from != null && failure.facing != null) " (use it from ${from.x},${from.y} facing ${failure.facing.name.lowercase()})" else ""
@@ -183,6 +184,7 @@ internal object FieldMoveWalk {
             // Usable, but the route still can't use it here (Strength puzzle beyond the search, a whirlpool that
             // isn't crossed in line...): say how to do it by hand.
             is FieldMoveAccess.Usable -> "use ${failure.move.label()} there by hand (${access.monName} knows it)"
+            FieldMoveAccess.NotSupported -> "using ${failure.move.label()} isn't supported in this game yet"
             FieldMoveAccess.Unknown, null -> "it needs ${failure.move.label()}"
         }
         return "$what$where: $missing"
@@ -198,6 +200,15 @@ internal object FieldMoveWalk {
         FieldMoveKind.WATERFALL -> "Waterfall"
         FieldMoveKind.ROCK_CLIMB -> "Rock Climb"
         FieldMoveKind.FLY -> "Fly"
+        FieldMoveKind.FLASH -> "Flash"
+        FieldMoveKind.TELEPORT -> "Teleport"
+        FieldMoveKind.DIG -> "Dig"
+        FieldMoveKind.SWEET_SCENT -> "Sweet Scent"
+        FieldMoveKind.MILK_DRINK -> "Milk Drink"
+        FieldMoveKind.SOFTBOILED -> "Softboiled"
+        FieldMoveKind.HEADBUTT -> "Headbutt"
+        FieldMoveKind.CHATTER -> "Chatter"
+        FieldMoveKind.DEFOG -> "Defog"
     }
 
     /** Longest hold into a boulder before its push starts (a turn first, then the push: about 30 frames). */

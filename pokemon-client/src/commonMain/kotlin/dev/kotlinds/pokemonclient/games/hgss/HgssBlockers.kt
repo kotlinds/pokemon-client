@@ -250,6 +250,16 @@ object HgssBlockers {
             "The Gym is closed: Morty is at the Burned Tower (north-west of Ecruteak). Go there first (rival battle, then the basement scene).",
             StoryCondition.VarAtLeast(HgssStoryTable.Vars.BURNED_TOWER_BEASTS, 1),
         ),
+        // Violet Gym: before Sprout Tower, the Gym guide (obj_T22GYM0101_sunglasses_2, FLAG_HIDE_VIOLET_GYM_GYM_GUY_AFTER_SPROUT,
+        // set by scr_seq_0018_D15R0103 once Elder Li is beaten) stands on the lift's center (15,20), the only way up to
+        // Falkner; talking to him only sends the player to Sprout Tower (msg_0558_T22GYM0101_00006). A map randomizer
+        // can lead there early (NOTES-run-map-randomizer: go_to Falkner said "another height level").
+        Curated(
+            Target.Person(MAP_VIOLET_GYM, 4),
+            "The Gym guide stands on the lift, the only way up to Falkner, until you have trained at Sprout Tower (Violet City): " +
+                "climb it and beat Elder Li at the top, then he makes way.",
+            StoryCondition.FlagSet(HgssStoryTable.Flags.BEAT_SPROUT_ELDER),
+        ),
         // Olivine Lighthouse top: an invisible "stop" object (FLAG_UNK_1D8) keeps the player by Jasmine until they talk.
         Curated(
             Target.Person(MAP_OLIVINE_LIGHTHOUSE_TOP, 4),

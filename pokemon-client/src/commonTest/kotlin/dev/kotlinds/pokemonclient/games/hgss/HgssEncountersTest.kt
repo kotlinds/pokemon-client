@@ -1,6 +1,11 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.state.MovementMode
+import dev.kotlinds.pokemonclient.state.SpeciesId
+import dev.kotlinds.pokemonclient.world.EncounterCondition
+import dev.kotlinds.pokemonclient.world.EncounterMethod
+import dev.kotlinds.pokemonclient.world.EncounterSlot
+import dev.kotlinds.pokemonclient.world.TimeOfDay
 import dev.kotlinds.pokemonclient.world.EncounterConditions
 import dev.kotlinds.pokemonclient.world.LiveObject
 import dev.kotlinds.pokemonclient.world.Node
@@ -28,6 +33,36 @@ class HgssEncountersTest {
         landLevels = listOf(2, 2, 2, 2, 3, 3, 3, 3, 6, 4, 6, 4),
         surfLevels = List(5) { 0..0 },
     )
+
+    /** Route 1's species (gs_enc_data.json R01): Pidgey 16, Rattata 19, Sentret 161, Furret 162, Hoothoot 163 at night. */
+    private val route1Species = route1.copy(
+        landMorning = listOf(16, 19, 16, 19, 161, 161, 16, 16, 162, 16, 162, 16),
+        landDay = listOf(16, 19, 16, 19, 161, 161, 16, 16, 162, 16, 162, 16),
+        landNight = listOf(163, 19, 163, 19, 19, 19, 163, 163, 19, 163, 19, 163),
+        hoennSound = listOf(311, 312),
+        sinnohSound = listOf(403, 403),
+        landSwarm = 261,
+    )
+
+    @Test
+    fun theWildPokemonOfAZoneInTheCommonModel() {
+        val wild = HgssEncounters.wild(9, route1Species)
+        fun group(time: TimeOfDay?, condition: EncounterCondition? = null) =
+            wild.groups.single { it.method == EncounterMethod.WALK && it.time == time && it.condition == condition }
+        // A species in several slots is one line: chances added, levels joined (Pidgey: slots 0, 2, 6, 7, 9, 11).
+        assertEquals(
+            listOf(EncounterSlot(SpeciesId(16), 45, 2..4), EncounterSlot(SpeciesId(19), 30, 2..2), EncounterSlot(SpeciesId(161), 20, 3..3), EncounterSlot(SpeciesId(162), 5, 6..6)),
+            group(TimeOfDay.DAY).slots,
+        )
+        assertEquals(20, group(TimeOfDay.DAY).rate)
+        assertEquals(listOf(SpeciesId(163) to 45, SpeciesId(19) to 55), group(TimeOfDay.NIGHT).slots.map { it.species to it.chance })
+        // What replaces some slots: a swarm (slots 0-1), the radio's sounds (slots 2-3 and 4-5).
+        assertEquals(listOf(EncounterSlot(SpeciesId(261), 40, 2..2)), group(null, EncounterCondition.SWARM).slots)
+        assertEquals(listOf(SpeciesId(311) to 20, SpeciesId(312) to 20), group(null, EncounterCondition.HOENN_SOUND).slots.map { it.species to it.chance })
+        assertEquals(listOf(SpeciesId(403) to 40), group(null, EncounterCondition.SINNOH_SOUND).slots.map { it.species to it.chance })
+        // No water, no rocks, no rods on Route 1.
+        assertTrue(wild.groups.none { it.method != EncounterMethod.WALK })
+    }
 
     private fun assertClose(expected: Double, actual: Double) = assertTrue(abs(expected - actual) < 1e-9, "expected $expected, got $actual")
 
@@ -68,7 +103,13 @@ class HgssEncountersTest {
     fun theRomTablesAreTheDecompsOnes() {
         val world = HgssWorldRom.require()
         // Route 1 (zone 9): bank 111 of a/0/3/7.
-        assertEquals(route1, assertNotNull(world.encounters(9)).copy(surfLevels = route1.surfLevels))
+        val table = assertNotNull(world.encounters(9))
+        assertEquals(route1Species, route1Species.copy(
+            landRate = table.landRate, surfRate = table.surfRate, landLevels = table.landLevels, landMorning = table.landMorning,
+            landDay = table.landDay, landNight = table.landNight, hoennSound = table.hoennSound, sinnohSound = table.sinnohSound,
+            landSwarm = table.landSwarm,
+        ))
+        assertEquals(HgssEncounters.wild(9, table), world.wildEncounters(9))
         // Viridian City (zone 50): surfing only, rate 15.
         val viridian = assertNotNull(world.encounters(50))
         assertEquals(0 to 15, viridian.landRate to viridian.surfRate)

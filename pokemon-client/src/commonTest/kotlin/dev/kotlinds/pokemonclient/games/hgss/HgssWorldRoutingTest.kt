@@ -10,6 +10,7 @@ import dev.kotlinds.pokemonclient.world.RouteOptions
 import dev.kotlinds.pokemonclient.world.SignKind
 import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.TriggerWarp
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.world.WorldLinks
 import dev.kotlinds.pokemonclient.world.WorldRouter
 import kotlin.test.Test
@@ -83,7 +84,7 @@ class HgssWorldRoutingTest {
         val links = WorldLinks.links(w, assertNotNull(w.areaOf(178)), 178)
         val ladder = links.single { it.id == "warp:5" }
         assertEquals(Triple(179, 54, 22), Triple(ladder.targetZone, ladder.toX, ladder.toY))
-        assertEquals(Direction.NORTH, ladder.exitDirection)
+        assertEquals(WarpTrigger.Press(Direction.NORTH), ladder.trigger)
     }
 
     @Test

@@ -26,6 +26,7 @@ internal class HgssServices {
             storage = runCatching { boxes.read(mem, save) }.getOrNull(),
             options = runCatching { save.options() }.getOrNull(),
             startMenu = runCatching { save.startMenu() }.getOrNull(),
+            pokedex = runCatching { save.pokedex() }.getOrNull(),
             player = mapped.player?.copy(
                 pokegearCards = runCatching { HgssPokegearSave.cards(mem, save) }.getOrNull(),
                 momParcels = runCatching { HgssPokegearSave.momParcels(mem, save) }.getOrNull().orEmpty(),

@@ -176,7 +176,7 @@ data class Overlay(
     /** Tiles with live walkable heights (a lift platform's floors), added to [TileInfo.heights] (same units). */
     val surfaces: Map<Pair<Int, Int>, List<Int>> = emptyMap(),
     /**
-     * Tiles walkable right now whatever the ROM says (the Blackthorn Gym's platforms over the lava, [MovingPlatforms]):
+     * Tiles walkable right now whatever the ROM says (the Blackthorn Gym's platforms over the lava, [PuzzleMechanics]):
      * still blocked by people and closed barriers.
      */
     val openTiles: Set<Pair<Int, Int>> = emptySet(),
@@ -239,7 +239,7 @@ internal sealed interface LedgeChoice {
 }
 
 /**
- * The ledge rule of the planners within one area ([Pathfinder], [PushPlanner], [PlatformPlanner]), applied to the
+ * The ledge rule of the planners within one area ([Pathfinder], [PushPlanner], [MechanismPlanner]), applied to the
  * cheapest route [found] with ledges allowed. ([WorldRouter], across maps, keeps the plain rule: ledges only with
  * [RouteOptions.acceptOneWay]; a way back across maps isn't searched.) One way means no way back, not "jumps a ledge": a ledge is just a shortcut while the
  * start can be reached again from the end ([wayBack], by another way: Route 29's ledges towards New Bark). Only a route
@@ -253,7 +253,7 @@ internal fun ledgeRule(found: List<Edge>, options: RouteOptions, wayBack: () -> 
 }
 
 /**
- * The [ledgeRule] over a bounded search ([PushPlanner], [PlatformPlanner]): [plan] with ledges first. "Over the bound"
+ * The [ledgeRule] over a bounded search ([PushPlanner], [MechanismPlanner]): [plan] with ledges first. "Over the bound"
  * isn't "no plan": ledges open more places, so the search with them can reach its bound
  * ([SearchResult.OverBound]) where the one without them (fewer places) still finds a plan; that plan is then taken
  * (no jump: no way back to check). Only an exhausted search ([SearchResult.Exhausted]: no plan at all, even with
@@ -320,6 +320,19 @@ sealed interface RouteFailure {
 }
 
 /**
+ * Everything the way to an unreachable target needs besides walking, found by [Pathfinder.diagnose] (the failure tells
+ * the first of them): what the reachability of the agent's view lists for each target.
+ */
+data class Blockers(
+    /** The field moves the way needs that the party can't use by itself, each once, in the order met. */
+    val fieldMoves: List<FieldMoveKind> = emptyList(),
+    /** Where the first person (or object) standing in the only way is. */
+    val person: Pair<Int, Int>? = null,
+    /** Where the first closed shutter in the only way is. */
+    val barrier: Pair<Int, Int>? = null,
+)
+
+/**
  * Finds routes on an [Area] (Dijkstra over [Node]s), using the static tiles from the ROM and the live [Overlay].
  *
  * Rules:
@@ -331,7 +344,10 @@ sealed interface RouteFailure {
  *   Whirlpool, Cut, Rock Smash, Rock Climb up and down a wall along its axis); the others (and Rock Climb walls
  *   entered across their axis) block, and a failed route tells which one would open the way
  *   ([RouteFailure.NeedsFieldMove]);
- * - warps and ladders are never crossed unless they are the destination; active triggers neither, unless they are the
+ * - warps taken on entering their tile ([WarpTrigger.Enter]: doors, north entrances, panels) and ladders are never
+ *   crossed unless they are the destination; exit mats and side stairs ([WarpTrigger.Press]) are floor, left any way
+ *   but towards their direction (that press takes them: arriving behind a door, the way in crosses its mat), and a
+ *   warp nothing takes ([WarpTrigger.Never]) is floor; active triggers are never crossed, unless they are the
  *   destination or the only way (the route then warns: [RouteWarning.StartsScene]);
  * - bridges: a bridge over water is floor for a player coming from the bridge, water otherwise; railings block the
  *   sides of their tile;
@@ -355,7 +371,15 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     }
 
     private val occupied = overlay.objects.filter { !it.isFollower }.map { it.x to it.y }.toSet()
+    /** Every warp's tile: a slide or a climb never ends on one (the forced move would take it). */
     private val warpTiles = area.warps.map { it.x to it.y }.toSet()
+
+    /** The tiles of warps taken on entering them ([WarpTrigger.Enter]): never walked across. */
+    private val enterWarps = area.warps.filter { it.trigger == WarpTrigger.Enter }.map { it.x to it.y }.toSet()
+
+    /** The exit mats and side stairs ([WarpTrigger.Press]) by tile: floor, never left towards their direction. */
+    private val pressWarps: Map<Pair<Int, Int>, Direction> =
+        area.warps.mapNotNull { w -> (w.trigger as? WarpTrigger.Press)?.let { (w.x to w.y) to it.direction } }.toMap()
     private val obstacles = overlay.objects.mapNotNull { o -> o.clearedBy?.let { (o.x to o.y) to it } }.toMap()
     private val teleportsFrom: Map<Pair<Int, Int>, List<TeleportLink>> = overlay.teleports.groupBy { it.fromX to it.fromY }
     private val inSight: Set<Pair<Int, Int>> by lazy {
@@ -377,14 +401,18 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
      */
     fun nodeOf(field: FieldState): Node = Node(field.x, field.y, levelAt(field.x, field.y, field.height * FIELD_HEIGHT_UNITS))
 
-    /** Cheapest route from [start] to any node satisfying [isGoal] (goal tiles may be warps or triggers). */
-    fun route(start: Node, options: RouteOptions = RouteOptions(), goalTiles: Set<Pair<Int, Int>> = emptySet(), isGoal: (Node) -> Boolean): Result {
+    /**
+     * Cheapest route from [start] to any node satisfying [isGoal] (goal tiles may be warps or triggers). [beside]: the
+     * target is talked to from next to it (a person, an item ball): a failure then never names the target itself as
+     * what blocks the way, and reaching a tile next to it at another height is a height problem ([diagnose]).
+     */
+    fun route(start: Node, options: RouteOptions = RouteOptions(), goalTiles: Set<Pair<Int, Int>> = emptySet(), beside: Beside? = null, isGoal: (Node) -> Boolean): Result {
         if (tile(start.x, start.y) == null) return Result.Failed(RouteFailure.StartUnknown)
         // Active triggers (scenes) only when there is no other way.
         var triggers = false
         val found = search(start, options, goalTiles, isGoal, allowJumps = true)
             ?: search(start, options, goalTiles, isGoal, allowJumps = true, allowTriggers = true).also { triggers = true }
-            ?: return Result.Failed(blockedBy(start, options, goalTiles, isGoal))
+            ?: return diagnose(start, options, goalTiles, beside, isGoal)
         return when (val ledges = ledgeRule(found, options, wayBack = { hasWayBack(found.last().to, start, options, triggers) }) {
             search(start, options, goalTiles, isGoal, allowJumps = false, allowTriggers = triggers)
         }) {
@@ -403,38 +431,82 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     /** The outcome of [route]. */
     sealed interface Result {
         data class Found(val route: Route) : Result
-        data class Failed(val failure: RouteFailure) : Result
+
+        /** No route: [failure] says why (what go_to tells), [blockers] everything the way needs (see [diagnose]). */
+        data class Failed(val failure: RouteFailure, val blockers: Blockers = Blockers()) : Result
     }
 
     /**
-     * Why there is no walking route: searches again letting field moves through (each one very expensive, so the
-     * route needs as few as possible) and names the first one on the way, or [RouteFailure.Unreachable].
+     * A target talked to from next to it ([route]'s `beside`): its own [tile], and the [tiles] next to it (or across a
+     * counter) whatever their height when only the height keeps some of them from being goals (else empty).
      */
-    private fun blockedBy(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, isGoal: (Node) -> Boolean): RouteFailure {
-        val relaxed = search(start, options, goalTiles, isGoal, allowJumps = true, relaxed = true, allowTriggers = true)
+    data class Beside(val tile: Pair<Int, Int>, val tiles: Set<Pair<Int, Int>>)
+
+    /**
+     * Why there is no walking route from [start] to [isGoal]: the one diagnosis of an unreachable target, told by the
+     * go_to / interact errors ([Result.Failed.failure]) and by the reachability of every target in the agent's view
+     * ([Result.Failed.blockers]), so the two never disagree. In order:
+     * - a target talked to from next to it ([beside]) whose side tiles are reached but at another height (a slope
+     *   next to two workers standing on the flat floor: the game answers A only at the same height) is on another
+     *   level ([RouteFailure.DifferentLevel]): never "the person next to it stands in the way", which made two people
+     *   side by side each blame the other (NOTES, Cliff Edge Gate);
+     * - the field moves the way needs (people still block): each one, the first naming where to use it;
+     * - a person standing in the only way (the target itself never counts: [beside]), then a closed shutter;
+     * - a way needing both (Surf and a person to step aside...): everything it crosses;
+     * - reachable only by climbing more than the game allows: on another level; else [RouteFailure.Unreachable].
+     */
+    internal fun diagnose(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, beside: Beside?, isGoal: (Node) -> Boolean): Result.Failed {
+        if (beside != null && beside.tiles.isNotEmpty() && search(start, options, goalTiles, { (it.x to it.y) in beside.tiles }, allowJumps = true, allowTriggers = true) != null) {
+            return Result.Failed(RouteFailure.DifferentLevel)
+        }
+        // The target's own tile is never crossed to reach its other side: it is what the agent wants to talk to.
+        val pathfinder = if (beside == null) this else Pathfinder(area, overlay.copy(forbiddenTiles = overlay.forbiddenTiles + beside.tile))
+        return pathfinder.blockedBy(start, options, goalTiles, isGoal)
+    }
+
+    private fun blockedBy(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, isGoal: (Node) -> Boolean): Result.Failed {
+        fun crossing(relaxed: Boolean = false, ignorePeople: Boolean = false, ignoreBarriers: Boolean = false) =
+            search(start, options, goalTiles, isGoal, allowJumps = true, relaxed = relaxed, allowTriggers = true, ignorePeople = ignorePeople, ignoreBarriers = ignoreBarriers)
+        // Field moves only: each one very expensive, so the way needs as few as possible.
+        crossing(relaxed = true)?.let { path -> blockers(path, start, options).takeIf { it.blockers.fieldMoves.isNotEmpty() }?.let { return it } }
+        // A person standing in the only way (a guard in front of a door...), then a closed shutter.
+        crossing(ignorePeople = true)?.let { path -> blockers(path, start, options).takeIf { it.blockers.person != null }?.let { return it } }
+        if (overlay.blockedTiles.isNotEmpty()) crossing(ignoreBarriers = true)?.let { path -> blockers(path, start, options).takeIf { it.blockers.barrier != null }?.let { return it } }
+        // A way needing several kinds at once (Surf, and a person to step aside).
+        crossing(relaxed = true, ignorePeople = true, ignoreBarriers = true)?.let { path -> blockers(path, start, options).takeIf { it.failure != RouteFailure.Unreachable }?.let { return it } }
+        // Reachable only by climbing more than the game allows: on another height level (a walkway, a platform).
+        val anyHeight = options.copy(maxClimb = Int.MAX_VALUE / 2)
+        if (search(start, anyHeight, goalTiles, isGoal, allowJumps = true, allowTriggers = true) != null) return Result.Failed(RouteFailure.DifferentLevel)
+        return Result.Failed(RouteFailure.Unreachable)
+    }
+
+    /**
+     * What [path] (a route found crossing obstacles) crosses: the field moves it needs (the first one with the tile to
+     * use it from), the first person and the first closed shutter on it. The failure is the first field move, else the
+     * person, else the shutter.
+     */
+    private fun blockers(path: List<Edge>, start: Node, options: RouteOptions): Result.Failed {
+        val moves = mutableListOf<RouteFailure.NeedsFieldMove>()
+        var person: Pair<Int, Int>? = null
+        var barrier: Pair<Int, Int>? = null
         var from = start
-        for (edge in relaxed.orEmpty()) {
+        for (edge in path) {
             var before = from
             for (node in edge.tiles) {
-                val tile = tile(node.x, node.y)
-                val move = tile?.let { gate(it, node.x, node.y, options) }
-                if (move != null) return RouteFailure.NeedsFieldMove(move, node.x, node.y, before, Direction.step(before.x, before.y, node.x, node.y) ?: edge.direction)
+                val at = node.x to node.y
+                tile(node.x, node.y)?.let { gate(it, node.x, node.y, options) }?.let { move ->
+                    if (moves.none { it.move == move }) moves += RouteFailure.NeedsFieldMove(move, node.x, node.y, before, Direction.step(before.x, before.y, node.x, node.y) ?: edge.direction)
+                }
+                if (person == null && at in occupied && obstacles[at] == null) person = at
+                if (barrier == null && at in overlay.blockedTiles) barrier = at
                 before = node
             }
             from = edge.to
         }
-        // A person standing in the only way (a guard in front of a door...).
-        val throughPeople = search(start, options, goalTiles, isGoal, allowJumps = true, allowTriggers = true, ignorePeople = true)
-        throughPeople?.flatMap { it.tiles }?.firstOrNull { (it.x to it.y) in occupied }?.let { return RouteFailure.BlockedByPerson(it.x, it.y) }
-        // A closed shutter in the only way.
-        if (overlay.blockedTiles.isNotEmpty()) {
-            val throughBarriers = search(start, options, goalTiles, isGoal, allowJumps = true, allowTriggers = true, ignoreBarriers = true)
-            throughBarriers?.flatMap { it.tiles }?.firstOrNull { (it.x to it.y) in overlay.blockedTiles }?.let { return RouteFailure.BlockedByBarrier(it.x, it.y) }
-        }
-        // Reachable only by climbing more than the game allows: on another height level (a walkway, a platform).
-        val anyHeight = options.copy(maxClimb = Int.MAX_VALUE / 2)
-        if (search(start, anyHeight, goalTiles, isGoal, allowJumps = true, allowTriggers = true) != null) return RouteFailure.DifferentLevel
-        return RouteFailure.Unreachable
+        val blockers = Blockers(moves.map { it.move }, person, barrier)
+        val failure = moves.firstOrNull() ?: person?.let { RouteFailure.BlockedByPerson(it.first, it.second) }
+            ?: barrier?.let { RouteFailure.BlockedByBarrier(it.first, it.second) } ?: RouteFailure.Unreachable
+        return Result.Failed(failure, blockers)
     }
 
     /**
@@ -451,7 +523,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
 
     /**
      * [edges] as a [Route], with what the agent should know about it (the same for every planner: [PushPlanner] and
-     * [PlatformPlanner] describe their routes here too): the tall grass and trainers' sight it crosses, no way back
+     * [MechanismPlanner] describe their routes here too): the tall grass and trainers' sight it crosses, no way back
      * ([oneWay], see [ledgeRule]), the scene a trigger on the way starts.
      */
     internal fun describe(edges: List<Edge>, oneWay: Boolean = false): Route {
@@ -510,15 +582,43 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     }.found?.labels
 
     /**
-     * Every node reachable from [start] within [maxCost] ([dijkstra] without a goal), with its cost. Ledges are only
-     * jumped when [RouteOptions.acceptOneWay] is set.
+     * Every node reachable from [start] within [maxCost] ([dijkstra] without a goal), with its cost: one search
+     * answering for every target of the map at once (the reachability of the agent's view). Ledges are jumped with
+     * [allowJumps] (by default only when [RouteOptions.acceptOneWay] is set), active triggers walked on with
+     * [allowTriggers]. [goalTiles] may be entered (warps, a neighbouring map's first tiles) but end the way: a door
+     * entered is taken, nothing is reached beyond it. With [crossing], what [diagnose] crosses to tell what blocks a
+     * way is crossed too (field-move obstacles, people, closed shutters): the places no diagnosis can reach.
      */
-    fun reachable(start: Node, options: RouteOptions = RouteOptions(), maxCost: Int = DEFAULT_REACH): Map<Node, Int> {
+    fun reachable(
+        start: Node,
+        options: RouteOptions = RouteOptions(),
+        maxCost: Int = DEFAULT_REACH,
+        allowJumps: Boolean = options.acceptOneWay,
+        allowTriggers: Boolean = false,
+        goalTiles: Set<Pair<Int, Int>> = emptySet(),
+        crossing: Boolean = false,
+    ): Map<Node, Int> {
         val result = dijkstra(start = start, place = { it }, maxCost = maxCost) { node, _ ->
-            neighbours(node, options, allowJumps = options.acceptOneWay).map { SearchMove(it.to, it.cost, it) }
+            if (node != start && (node.x to node.y) in goalTiles) emptyList()
+            else neighbours(node, options, goalTiles, allowJumps = allowJumps, relaxed = crossing, allowTriggers = allowTriggers, ignorePeople = crossing, ignoreBarriers = crossing)
+                .map { SearchMove(it.to, it.cost, it) }
         }
         return (result as? SearchResult.Exhausted)?.costs.orEmpty()
     }
+
+    /**
+     * True when a tile of [goalTiles] (entered as a destination: warps) can be reached from [start] by any way (ledges,
+     * triggers), false when none can, null when more than [maxPlaces] places were explored first (a large map: not
+     * known). The start's own tile doesn't count (a route has at least one move).
+     */
+    fun reaches(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, maxPlaces: Int): Boolean? =
+        when (dijkstra(start = start, place = { it }, isGoal = { (it.x to it.y) in goalTiles }, maxPlaces = maxPlaces) { node, _ ->
+            neighbours(node, options, goalTiles, allowJumps = true, allowTriggers = true).map { SearchMove(it.to, it.cost, it) }
+        }) {
+            is SearchResult.Found -> true
+            is SearchResult.Exhausted -> false
+            SearchResult.OverBound -> null
+        }
 
     /**
      * Moves possible from [node]. With [relaxed], tiles needing a field move ([gate]) are let through at a high
@@ -539,6 +639,8 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         val hereHeight = here.heights.getOrNull(node.level)
         return Direction.entries.mapNotNull { dir ->
             if ((node to dir) in overlay.refused) return@mapNotNull null
+            // Standing on an exit mat, a move towards its direction is the press that takes it: not a step.
+            if (pressWarps[node.x to node.y] == dir) return@mapNotNull null
             val x = node.x + dir.dx
             val y = node.y + dir.dy
             val tile = tile(x, y) ?: return@mapNotNull null
@@ -576,7 +678,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
                 // A lift only starts for a player entering at its height; any other teleport whatever the height.
                 val entering = levelFrom(tile, hereHeight, options)?.let { tile.heights.getOrNull(it) }
                 val link = links.firstOrNull { l -> l.fromHeight == null || (entering != null && kotlin.math.abs(l.fromHeight - entering) <= options.maxClimb) }
-                if (link != null) return@mapNotNull teleport(link, tile, x, y, dir, hereHeight, options)
+                if (link != null) return@mapNotNull teleport(link, tile, x, y, dir, hereHeight, options, ignorePeople, ignoreBarriers)
             }
             if (!isGoalTile && !walkable(tile, x, y, options, goalTiles, relaxed, allowTriggers, ignorePeople, ignoreBarriers)) return@mapNotNull null
             if (isGoalTile && tile.blocked && kind !is TileKind.Door) {
@@ -785,9 +887,18 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         return FieldMoveEdge(to, dir, FieldMoveKind.ROCK_CLIMB, tiles + to, tiles.size + 1 + FIELD_MOVE_USE_COST)
     }
 
-    /** Stepping onto the source of [teleport] at ([x], [y]): an [Edge.Teleport], when the tile can be entered. */
-    private fun teleport(teleport: TeleportLink, tile: TileInfo, x: Int, y: Int, dir: Direction, hereHeight: Int?, options: RouteOptions): Edge? {
-        if (tile.blocked || (x to y) in occupied || (x to y) in overlay.blockedTiles) return null
+    /**
+     * Stepping onto the source of [teleport] at ([x], [y]): an [Edge.Teleport], when the tile can be entered. Like a
+     * plain step, a person on it is crossed (at a high cost) while looking for who stands in the way ([ignorePeople]):
+     * before Sprout Tower, the Violet Gym's guide stands on the lift's center, and the failure must name him rather
+     * than "another height level" (NOTES-run-map-randomizer: go_to Falkner).
+     */
+    private fun teleport(
+        teleport: TeleportLink, tile: TileInfo, x: Int, y: Int, dir: Direction, hereHeight: Int?, options: RouteOptions,
+        ignorePeople: Boolean = false, ignoreBarriers: Boolean = false,
+    ): Edge? {
+        if (tile.blocked || (!ignorePeople && (x to y) in occupied) || (!ignoreBarriers && (x to y) in overlay.blockedTiles)) return null
+        val crossing = (if ((x to y) in occupied) FIELD_MOVE_COST else 0) + (if ((x to y) in overlay.blockedTiles) FIELD_MOVE_COST else 0)
         // The trigger fires on entering the tile whatever its surface (a pit is lower than the floor around it).
         val level = levelFrom(tile, hereHeight, options) ?: 0
         val landing = tile(teleport.toX, teleport.toY) ?: return null
@@ -797,7 +908,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
             teleport.toHeight != null -> landing.heights.indices.minBy { kotlin.math.abs(landing.heights[it] - teleport.toHeight) }
             else -> levelFrom(landing, tile.heights.getOrNull(level), options) ?: 0
         }
-        return Edge.Teleport(Node(teleport.toX, teleport.toY, landingLevel), dir, Node(x, y, level), teleport.cost)
+        return Edge.Teleport(Node(teleport.toX, teleport.toY, landingLevel), dir, Node(x, y, level), teleport.cost + crossing)
     }
 
     private fun walkable(
@@ -816,7 +927,7 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
         if (gate(tile, x, y, options) != null) return relaxed
         if ((x to y) in overlay.openTiles) return (ignorePeople || (x to y) !in occupied) && (ignoreBarriers || (x to y) !in overlay.blockedTiles)
         if (tile.blocked || (!ignorePeople && (x to y) in occupied) || (!ignoreBarriers && (x to y) in overlay.blockedTiles)) return false
-        if ((x to y) in warpTiles || (!allowTriggers && (x to y) in overlay.activeTriggers) || tile.kind == TileKind.Ladder) return false
+        if ((x to y) in enterWarps || (!allowTriggers && (x to y) in overlay.activeTriggers) || tile.kind == TileKind.Ladder) return false
         val kind = tile.kind
         if (kind is TileKind.Water) return kind.surfable
         return kind != TileKind.Wall && kind != TileKind.Lava && kind != TileKind.Pc
@@ -859,7 +970,8 @@ class Pathfinder(private val area: Area, private val overlay: Overlay = Overlay(
     private fun softCost(tile: TileInfo, x: Int, y: Int, options: RouteOptions, diagnosing: Boolean = false): Int {
         val weights = options.weights
         if (diagnosing || weights == StepWeights.NONE) return 0
-        var cost = weights.encounter(tile, area.zoneAt(x, y))
+        // The encounter check, and walking the tile when the trip runs elsewhere ([StepWeights.walkedZones]).
+        var cost = weights.moveOnto(tile, area.zoneAt(x, y))
         if (weights.trainerSight > 0 && (x to y) in inSight) cost += weights.trainerSight
         return cost
     }

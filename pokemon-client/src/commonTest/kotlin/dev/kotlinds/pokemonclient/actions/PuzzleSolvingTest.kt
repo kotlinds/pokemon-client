@@ -128,6 +128,22 @@ class PuzzleSolvingTest {
         assertFalse((2 to 1) in game.visited)
     }
 
+    /**
+     * A puzzle's pad jumps the player across the map like a warp would ([WarpWatch] sees a jump), but it is a ride of
+     * the puzzle ([PuzzleSolving.isRide]): `go_to teleport:N` arrives where it leads, it isn't "stopped on the way".
+     */
+    @Test
+    fun aPadAskedForIsArrivedAtNotAWarpOnTheWay() {
+        val room = area("......")
+        val pad = PuzzleState(PuzzleKind.TELEPORT_PADS, "rule", teleports = listOf(PuzzleTeleport("teleport:0", TeleportKind.PAD, listOf(PuzzleTile(2, 0)), PuzzleTile(5, 0))))
+        val game = PuzzleGame(room, 0, 0, pad, pads = mapOf((2 to 0) to (5 to 0)))
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "teleport:0"), game.context()))
+        val said = done.detail.orEmpty()
+        assertFalse("stopped on the way" in said || "took" in said, said)
+        assertEquals(5 to 0, game.x to game.y)
+        assertEquals(listOf(0 to 0, 1 to 0, 2 to 0, 5 to 0), game.visited)
+    }
+
     @Test
     fun hiddenItemsAreTargetsOnlyWhenRevealed() {
         val map = area("....", signs = listOf(Sign(1, 3, 3, 0, 8001, SignKind.HIDDEN_ITEM, 801)))
@@ -166,7 +182,15 @@ class PuzzleSolvingTest {
 }
 
 /** A field ([GridGame]) where holding a direction moves the player one tile every few frames (walls block), with a [puzzle]. */
-private class PuzzleGame(val area: Area, x: Int, y: Int, val puzzle: PuzzleState?, val examinables: List<FieldExaminable> = emptyList()) : GridGame(x, y) {
+private class PuzzleGame(
+    val area: Area,
+    x: Int,
+    y: Int,
+    val puzzle: PuzzleState?,
+    val examinables: List<FieldExaminable> = emptyList(),
+    /** The puzzle's pads, as the game runs them: stepping onto the key moves the player to the value at once. */
+    val pads: Map<Pair<Int, Int>, Pair<Int, Int>> = emptyMap(),
+) : GridGame(x, y) {
     override val name = "Puzzle"
     override val world = object : WorldSource {
         override fun areaOf(zoneId: Int) = area
@@ -178,5 +202,6 @@ private class PuzzleGame(val area: Area, x: Int, y: Int, val puzzle: PuzzleState
 
     override fun step(direction: Direction) {
         if (area.tile(x + direction.dx, y + direction.dy)?.blocked == false) moveTo(x + direction.dx, y + direction.dy)
+        pads[x to y]?.let { (toX, toY) -> moveTo(toX, toY) }
     }
 }

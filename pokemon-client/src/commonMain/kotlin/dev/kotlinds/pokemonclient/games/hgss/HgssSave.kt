@@ -28,30 +28,18 @@ internal class HgssSave(private val mem: HgssMemory) {
     /** `SaveData *`, or null before the save is loaded. */
     private val saveData: Long? = mem.ptr(mem.version.saveDataPtr)
 
+    /** The Gen 4 save reader on this save ([A.SAVE_LAYOUT]), or null before the save is loaded. */
+    private val gen4: dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData? =
+        saveData?.let { dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData(mem, it, A.SAVE_LAYOUT) }
+
     /** Address of save array [id], or null. */
-    fun array(id: Int): Long? {
-        val sd = saveData ?: return null
-        val hdr = sd + A.SAVE_ARRAY_HEADERS + id * A.SAH_SIZE
-        if (mem.s32(hdr + A.SAH_ID) != id) return null
-        val addr = sd + A.SAVE_DYNAMIC_REGION + mem.u32(hdr + A.SAH_OFFSET)
-        return addr.takeIf { mem.inRam(it, mem.u32(hdr + A.SAH_LENGTH).coerceAtLeast(1)) }
-    }
+    fun array(id: Int): Long? = gen4?.table(id)
 
-    private val flags: Long? by lazy { array(A.SAVE_FLAGS) }
-
-    /** Event flag [id] (`Save_VarsFlags_CheckFlagInArray`), null when unreadable. */
-    fun flag(id: Int): Boolean? {
-        if (id !in 0 until A.NUM_SAVE_FLAGS) return null
-        val vf = flags ?: return null
-        return mem.u8(vf + A.FLAGS_OFFSET + id / 8) shr (id % 8) and 1 == 1
-    }
+    /** Event flag [id] (`Save_VarsFlags_CheckFlagInArray`, [dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData.flag]), null when unreadable. */
+    fun flag(id: Int): Boolean? = gen4?.flag(id)
 
     /** Save script variable [id] (`0x4000` until `0x4170`, `Save_VarsFlags_GetVarAddr`), null when unreadable. */
-    fun variable(id: Int): Int? {
-        if (id !in A.VAR_BASE until A.VAR_BASE + NUM_SAVE_VARS) return null
-        val vf = flags ?: return null
-        return mem.u16(vf + 2L * (id - A.VAR_BASE))
-    }
+    fun variable(id: Int): Int? = gen4?.variable(id)
 
     /** Whether trainer [trainerId] was beaten (`TrainerFlagCheck`, src/fieldmap.c: flag `TRAINER_FLAG_BASE + id`). */
     fun trainerDefeated(trainerId: Int): Boolean? = flag(TRAINER_FLAG_BASE + trainerId)
@@ -96,15 +84,15 @@ internal class HgssSave(private val mem: HgssMemory) {
         return mem.u16(local + LFD_HAS_RUNNING_SHOES) != 0 && mem.u16(local + LFD_RUNNING_SHOES_LOCK) != 0
     }
 
+    /** The Pokédex's seen and caught species ([dev.kotlinds.pokemonclient.games.gen4.Gen4SaveData.pokedex]), null when unreadable. */
+    fun pokedex(): dev.kotlinds.pokemonclient.state.PokedexState? = gen4?.pokedex()
+
     /** `PCStorage *` (SAVE_PCSTORAGE), or null. */
     fun pcStorage(): Long? = array(SAVE_PCSTORAGE)
 
     companion object {
         /** `FLAG_GOT_BAG` (include/constants/flags.h); the next three unlock TRAINER CARD, SAVE and OPTIONS. */
         const val FLAG_GOT_BAG = 0x11B
-
-        /** `NUM_VARS` (include/constants/vars.h). */
-        const val NUM_SAVE_VARS = 0x170
 
         /** `TRAINER_FLAG_BASE` (include/constants/flags.h). */
         const val TRAINER_FLAG_BASE = 0x550

@@ -12,8 +12,11 @@ import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u8
 import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldFiles
 import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldSource
 import dev.kotlinds.pokemonclient.state.MapName
+import dev.kotlinds.pokemonclient.world.EncounterConditions
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.WildEncounters
 import dev.kotlinds.pokemonclient.world.TileKind
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 
 /**
  * The text banks of Platinum (`msgdata/pl_msg.narc`, member = `TEXT_BANK_*` of the decomp's generated
@@ -57,6 +60,8 @@ data class PlatinumMapHeader(
     val locationName: Int,
     /** `mapType` (7 bits). */
     val mapType: Int,
+    /** `wildEncountersArchiveID`: member of the encounter NARC ([PlatinumWorldSource.ENCOUNTER_NARC]), 0xFFFF when none. */
+    val wildEncounterBank: Int,
     override val bikeAllowed: Boolean,
     override val flyAllowed: Boolean,
 ) : Gen4MapHeader
@@ -88,6 +93,7 @@ object PlatinumMapHeaders {
                 eventsBank = u16(arm9, o + 16),
                 locationName = u8(arm9, o + 18),
                 mapType = flags and 0x7F,
+                wildEncounterBank = u16(arm9, o + 14),
                 bikeAllowed = (flags shr 12) and 1 == 1,
                 flyAllowed = (flags shr 15) and 1 == 1,
             )
@@ -137,20 +143,26 @@ object PlatinumTileBehaviors {
         else -> if (blocked) TileKind.Wall else TileKind.Floor
     }
 
-    /** The direction to press on a warp tile (exit mats, side stairs), null when stepping on it is enough (doors). */
-    fun warpDirection(behavior: Int): Direction? = when (behavior) {
-        0x62, 0x6C, 0x5E -> Direction.EAST
-        0x63, 0x6D, 0x5F -> Direction.WEST
-        0x64, 0x6E -> Direction.NORTH
-        0x65, 0x6F -> Direction.SOUTH
-        else -> null
+    /**
+     * What takes a warp on a tile of [behavior], by the same rules as HGSS (src/overlay005/field_control.c,
+     * `Field_CheckMapTransition` and the step's transition check): a press towards its direction on the east / west /
+     * south mats and side stairs (0x5E, 0x5F, 0x62, 0x63, 0x65, 0x6C, 0x6D, 0x6F), the end of a step onto a north
+     * entrance, a warp panel or an escalator (0x64, 0x6E, 0x67, 0x6A, 0x6B), a door walked into (0x69); nothing elsewhere.
+     */
+    fun warpTrigger(behavior: Int): WarpTrigger = when (behavior) {
+        0x62, 0x6C, 0x5E -> WarpTrigger.Press(Direction.EAST)
+        0x63, 0x6D, 0x5F -> WarpTrigger.Press(Direction.WEST)
+        0x65, 0x6F -> WarpTrigger.Press(Direction.SOUTH)
+        0x64, 0x6E, 0x67, 0x69, 0x6A, 0x6B -> WarpTrigger.Enter
+        else -> WarpTrigger.Never
     }
 }
 
 /**
  * The static world of Platinum, decoded from the ROM by the Gen 4 decoder ([Gen4WorldSource]: map matrices, land
  * data, zone events, the same file formats as HGSS). Platinum's own: the header table ([PlatinumMapHeaders]), the NARC
- * paths, the tile behaviours ([PlatinumTileBehaviors]), the obstacle sprites, the hidden item flags and the names.
+ * paths, the tile behaviours ([PlatinumTileBehaviors]), the obstacle sprites, the hidden item flags, the names and the
+ * wild encounter tables ([PlatinumEncounters]).
  *
  * Not done yet: what needs Platinum's script bytecode (its commands are not HGSS's): triggers that do nothing, script
  * warps and holes ([Gen4WorldSource.scriptWarps], [Gen4WorldSource.triggerWarps]); region / dynamic matrices (the
@@ -180,7 +192,7 @@ class PlatinumWorldSource(rom: NdsRom, private val version: PlatinumVersion) : G
 
     override fun tileKind(behavior: Int, blocked: Boolean): TileKind = PlatinumTileBehaviors.kind(behavior, blocked)
 
-    override fun warpDirection(behavior: Int): Direction? = PlatinumTileBehaviors.warpDirection(behavior)
+    override fun warpTrigger(behavior: Int): WarpTrigger = PlatinumTileBehaviors.warpTrigger(behavior)
 
     /**
      * `OBJ_EVENT_GFX_STRENGTH_BOULDER`, `_ROCK_SMASH`, `_CUT_TREE` (enum ObjectEventGfx, the pokeplatinum decomp's
@@ -193,6 +205,21 @@ class PlatinumWorldSource(rom: NdsRom, private val version: PlatinumVersion) : G
         else -> null
     }
 
+    /** The wild encounter tables, by `wildEncountersArchiveID` (null where a member can't be read). */
+    private val encounterBanks: List<PlatinumEncounterTable?> by lazy { narc(ENCOUNTER_NARC).map { PlatinumEncounterTable.parse(it) } }
+
+    /** The wild encounter table of zone [zoneId], or null when it has none (`MapHeader_HasWildEncounters`). */
+    fun encounters(zoneId: Int): PlatinumEncounterTable? =
+        header(zoneId)?.wildEncounterBank?.takeIf { it != NO_ENCOUNTERS }?.let { encounterBanks.getOrNull(it) }
+
+    override val encounterTables = dev.kotlinds.pokemonclient.world.EncounterTables.DECODED
+
+    override fun encounterChance(zoneId: Int, water: Boolean, conditions: EncounterConditions): Double =
+        encounters(zoneId)?.let { PlatinumEncounters.chance(it, water, conditions) } ?: 0.0
+
+    override fun wildEncounters(zoneId: Int): WildEncounters? =
+        encounters(zoneId)?.let { PlatinumEncounters.wild(zoneId, it) }?.takeIf { it.groups.isNotEmpty() }
+
     /** The location name of zone [zoneId] (e.g. "Twinleaf Town"), null when unknown. */
     fun locationName(zoneId: Int): String? = header(zoneId)?.let { text.line(PlatinumText.LOCATION_NAMES, it.locationName) }
 
@@ -200,5 +227,11 @@ class PlatinumWorldSource(rom: NdsRom, private val version: PlatinumVersion) : G
         const val SPRITE_STRENGTH_BOULDER = 84
         const val SPRITE_ROCK_SMASH = 85
         const val SPRITE_CUT_TREE = 86
+
+        /** The wild encounter tables (`NARC_INDEX_FIELDDATA__ENCOUNTDATA__PL_ENC_DATA`, src/map_header_data.c). */
+        const val ENCOUNTER_NARC = "fielddata/encountdata/pl_enc_data.narc"
+
+        /** `wildEncountersArchiveID` of a zone without wild encounters (`MapHeader_HasWildEncounters`). */
+        const val NO_ENCOUNTERS = 0xFFFF
     }
 }

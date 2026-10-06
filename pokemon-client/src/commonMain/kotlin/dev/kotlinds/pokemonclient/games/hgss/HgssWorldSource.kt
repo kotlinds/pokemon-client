@@ -2,7 +2,6 @@ package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.NdsRom
-import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.games.gen4.Gen4MessageFile
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs
 import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldFiles
@@ -10,6 +9,7 @@ import dev.kotlinds.pokemonclient.games.gen4.Gen4WorldSource
 import dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents
 import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.world.Region
+import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.ScriptWarp
 import dev.kotlinds.pokemonclient.world.TileKind
@@ -61,7 +61,7 @@ class HgssWorldSource(rom: NdsRom, private val version: HgssVersion) : Gen4World
 
     override fun tileKind(behavior: Int, blocked: Boolean): TileKind = HgssTileBehaviors.kind(behavior, blocked)
 
-    override fun warpDirection(behavior: Int): Direction? = HgssTileBehaviors.warpDirection(behavior)
+    override fun warpTrigger(behavior: Int): WarpTrigger = HgssTileBehaviors.warpTrigger(behavior)
 
     /** The obstacles by sprite name (include/constants/sprites.h): the sprite ids are HGSS's. */
     override fun obstacle(sprite: Int): FieldMoveKind? = when (HgssData.spriteName(sprite)) {
@@ -74,16 +74,21 @@ class HgssWorldSource(rom: NdsRom, private val version: HgssVersion) : Gen4World
     private val scriptFiles: List<ByteArray> by lazy { narc(HgssWorldAddresses.SCRIPT_NARC) }
 
     /** The wild encounter tables, by `wildEncounterBank` (null where a member can't be read). */
-    private val encounterTables: List<HgssEncounterTable?> by lazy {
+    private val encounterBanks: List<HgssEncounterTable?> by lazy {
         narc(HgssWorldAddresses.encounterNarc(version.gameCode)).map { HgssEncounterTable.parse(it) }
     }
 
     /** The wild encounter table of zone [zoneId], or null when it has none (`ENCDATA_NA`). */
     fun encounters(zoneId: Int): HgssEncounterTable? =
-        header(zoneId)?.wildEncounterBank?.takeIf { it != NO_ENCOUNTERS }?.let { encounterTables.getOrNull(it) }
+        header(zoneId)?.wildEncounterBank?.takeIf { it != NO_ENCOUNTERS }?.let { encounterBanks.getOrNull(it) }
+
+    override val encounterTables = dev.kotlinds.pokemonclient.world.EncounterTables.DECODED
 
     override fun encounterChance(zoneId: Int, water: Boolean, conditions: dev.kotlinds.pokemonclient.world.EncounterConditions): Double =
         encounters(zoneId)?.let { HgssEncounters.chance(it, water, conditions) } ?: 0.0
+
+    override fun wildEncounters(zoneId: Int): dev.kotlinds.pokemonclient.world.WildEncounters? =
+        encounters(zoneId)?.let { HgssEncounters.wild(zoneId, it) }?.takeIf { it.groups.isNotEmpty() }
 
     override fun regionOf(zoneId: Int): Region? = header(zoneId)?.region?.let { Region(it, if (it == HgssMapHeaders.REGION_KANTO) "Kanto" else "Johto") }
 
