@@ -1,9 +1,6 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.state.ObstacleKind
-
-import dev.kotlinds.pokemonclient.state.GameState
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -14,13 +11,14 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * They are the agent's own act (it chose which boulder and where it goes), so they run whatever
  * [ActionSettings.solvePuzzles] says: that setting only stops the walks from operating mechanisms by themselves.
- * Listed with the common actions ([CommonActions.definitions]); the recipe is [MoveRecipes.push].
+ * Listed with the common actions ([CommonActions.definitions]); the recipe is [MoveRecipes.push], its availability
+ * [MoveRecipes.pushAvailability].
  */
 object PuzzleActions {
 
     private val assisted = setOf(ActionMode.ASSISTED)
 
-    val push = ActionDefinition(GameAction.Push::class, object : ActionSpec<GameAction.Push> {
+    val push = ActionDefinition(GameAction.Push::class, Recipes::pushAvailability, object : ActionSpec<GameAction.Push> {
         override val name = "push"
         override val description = "Push a Strength boulder: one tile towards `direction` (walks to its other side first), or, without a " +
             "direction, into its own hole (puzzle.boulder_holes, Ice Path B1F: it drops to the floor below, where it stops slides on " +
@@ -33,16 +31,6 @@ object PuzzleActions {
                 "boulder of puzzle.boulder_holes into its hole.", required = false, values = Direction.entries.map { it.name.lowercase() }),
         )
         override val modes = assisted
-        override fun availability(state: GameState): Availability {
-            if (!ActionConditions.canWalk(state, hasWorld = true)) return Availability.Hidden
-            val field = state.field ?: return Availability.Hidden
-            val holes = field.puzzle?.boulderHoles.orEmpty().filter { !it.fallen }.associateBy { it.boulder }
-            val boulders = field.objects.filter { it.obstacle == ObstacleKind.BOULDER }
-            if (boulders.isEmpty()) return Availability.Hidden
-            return Availability.Available(mapOf("boulder" to boulders.map { b ->
-                Choice(b.id, "boulder at ${b.x},${b.y}" + (holes[b.id]?.let { " (its hole: ${it.hole.x},${it.hole.y})" } ?: ""))
-            }))
-        }
         override fun parse(json: JsonObject): GameAction.Push {
             val boulder = json["boulder"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: throw ActionException(ActionError.InvalidParameter("boulder", "missing"))
             val raw = json["direction"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }

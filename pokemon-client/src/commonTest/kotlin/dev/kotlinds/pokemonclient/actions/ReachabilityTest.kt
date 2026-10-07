@@ -41,6 +41,7 @@ class ReachabilityTest {
     private class MapGame(val areas: Map<Int, Area>) : PokemonGame {
         override val name = "Maps"
         override val inputProbe = InputProbe { emptySet() }
+        override val recipes = Recipes()
         override val world = object : WorldSource {
             override fun areaOf(zoneId: Int) = areas[zoneId]
             override val zoneCount get() = 10

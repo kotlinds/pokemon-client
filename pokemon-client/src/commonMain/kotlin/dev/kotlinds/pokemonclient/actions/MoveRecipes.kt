@@ -32,10 +32,42 @@ import dev.kotlinds.pokemonclient.world.WarpTrigger
  * (routes on the ROM's maps with the live people on top, walked one tile at a time and checked after each step:
  * [MovePlans], [WorldTravel], [FieldControl], [WalkSegments], [FieldMoveWalk], [PuzzleSolving]...) stays stateless
  * beside the chain, and carries out the actions it needs as steps (a Repel used again on the way, the bicycle...)
- * through the game's own recipes ([PlanContext.recipes]). Where each action can start from is the common contract
- * ([ActionConditions.canWalk]).
+ * through the game's own recipes ([RecipeBase.perform]). Where each action can start from is the availability methods
+ * below (the common rule [ActionConditions.canWalk]).
  */
 abstract class MoveRecipes internal constructor() : BagPartyRecipes() {
+
+    // region Availability: when each action of this family can run (read by the listing and the execution alike)
+
+    /** `go_to`: walking freely ([ActionConditions.canWalk]), the map's people, items and signs as targets. */
+    internal open fun goToAvailability(state: GameState): Availability =
+        if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to ActionConditions.targetChoices(state))) else Availability.Hidden
+
+    /** `interact`: walking freely, the map's people, items and signs as targets. */
+    internal open fun interactAvailability(state: GameState): Availability =
+        if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to ActionConditions.targetChoices(state))) else Availability.Hidden
+
+    /** `step`: walking freely. */
+    internal open fun stepAvailability(state: GameState): Availability =
+        if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden
+
+    /** `find_encounter`: walking freely. */
+    internal open fun findEncounterAvailability(state: GameState): Availability =
+        if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden
+
+    /** `push`: walking freely on a map with Strength boulders (their holes said, Ice Path B1F). */
+    internal open fun pushAvailability(state: GameState): Availability {
+        if (!ActionConditions.canWalk(state, hasWorld = true)) return Availability.Hidden
+        val field = state.field ?: return Availability.Hidden
+        val holes = field.puzzle?.boulderHoles.orEmpty().filter { !it.fallen }.associateBy { it.boulder }
+        val boulders = field.objects.filter { it.obstacle == ObstacleKind.BOULDER }
+        if (boulders.isEmpty()) return Availability.Hidden
+        return Availability.Available(mapOf("boulder" to boulders.map { b ->
+            Choice(b.id, "boulder at ${b.x},${b.y}" + (holes[b.id]?.let { " (its hole: ${it.hole.x},${it.hole.y})" } ?: ""))
+        }))
+    }
+
+    // endregion
 
     /** Walks to a tile or a target, on this map or another one ([WorldTravel]: through warps, holes and map edges). */
     override fun goTo(action: GameAction.GoTo, context: PlanContext): ActionOutcome = WorldTravel.goTo(action, context)

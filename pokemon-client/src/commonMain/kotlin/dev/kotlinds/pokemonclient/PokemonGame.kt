@@ -77,14 +77,18 @@ interface PokemonGame {
     val pcFacing: dev.kotlinds.pokemonclient.Direction? get() = null
 
     /**
-     * How this game carries out the actions ([dev.kotlinds.pokemonclient.actions.Recipes]): the common recipes by
-     * default; a generation or a game whose screens really differ gives its own subclass, overriding only what
-     * differs (`Gen4Game` requires its [dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes]). Only *how* actions are
-     * done changes: their specs (names, parameters, availability, descriptions: what agents see) are the common ones,
-     * so the contract is the same for every game. Every action is played through here, also when the walking engine
-     * carries out an action as one of its steps ([dev.kotlinds.pokemonclient.actions.PlanContext.recipes]).
+     * How this game carries out the actions, and when each can run ([dev.kotlinds.pokemonclient.actions.Recipes]):
+     * its own instance, a subclass of the common recipes overriding only what differs (`Gen4Game` requires its
+     * [dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes]). Required, with no default: there is no shared recipes
+     * object, so a game's recipes are only ever reached through the game (and its contexts,
+     * [dev.kotlinds.pokemonclient.actions.PlanContext.recipes]), never combined with another game's. The constructor of
+     * the recipes is internal: games live in this module. Only *how* actions are done and, where the game itself
+     * differs, *when* (an availability method overridden, documented on the override) change: their specs (names,
+     * parameters, ids, errors, descriptions: what agents see) are the common ones, so the contract is the same for
+     * every game. Every action is played and listed through here, also when the walking engine carries out an action
+     * as one of its steps.
      */
-    val recipes: dev.kotlinds.pokemonclient.actions.Recipes get() = dev.kotlinds.pokemonclient.actions.Recipes.COMMON
+    val recipes: dev.kotlinds.pokemonclient.actions.Recipes
 
     /** The item id of the bicycle (a key item ridden from the field), or null when this game has none. */
     val bicycleItem: Int? get() = null

@@ -29,7 +29,7 @@ class IcePathPuzzleHintTest {
 
     private fun goToBlackthorn(saved: Map<Int, PuzzleState>, settings: ActionSettings = ActionSettings()): String {
         val game = RomStanding(ICE_PATH_1F, 11, 58, saved = saved)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Blackthorn City"), game.context(settings)))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(null, null, "Blackthorn City"), game.context(settings)))
         return assertIs<ActionError.Unavailable>(failed.error).message
     }
 
@@ -48,7 +48,7 @@ class IcePathPuzzleHintTest {
     @Test
     fun `while destinations are hidden it isn't named either`() {
         val game = RomStanding(ICE_PATH_1F, 11, 58, saved = boulders())
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:1"), game.context(ActionSettings(hideDestinations = true))))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(null, null, "warp:1"), game.context(ActionSettings(hideDestinations = true))))
         assertFalse("boulder puzzle" in failed.error.message, failed.error.message)
     }
 

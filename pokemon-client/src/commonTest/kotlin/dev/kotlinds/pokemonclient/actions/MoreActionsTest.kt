@@ -45,7 +45,7 @@ class MoreActionsTest {
     @Test
     fun releaseNeedsAnExplicitConfirmation() {
         val game = FakeGame(Screen.Overworld(awaiting = Awaiting.INPUT))
-        val outcome = Recipes.COMMON.release(GameAction.Release(MonId.parse("mon:c50a0956.76f3a6fb")!!, confirm = false), game.context())
+        val outcome = RecipeBase.perform(GameAction.Release(MonId.parse("mon:c50a0956.76f3a6fb")!!, confirm = false), game.context())
         val error = assertIs<ActionError.InvalidParameter>(assertIs<ActionOutcome.Failed>(outcome).error)
         assertEquals("confirm", error.parameter)
         assertTrue(game.presses.isEmpty())
@@ -54,7 +54,7 @@ class MoreActionsTest {
     @Test
     fun aDragHoldsTheStylusAllTheWayToTheEnd() {
         val game = FakeGame(Screen.Unknown("alph_puzzle", Awaiting.INPUT))
-        val outcome = Recipes.COMMON.drag(GameAction.Drag(TouchPoint(48, 112), TouchPoint(104, 88), 10), game.context())
+        val outcome = RecipeBase.perform(GameAction.Drag(TouchPoint(48, 112), TouchPoint(104, 88), 10), game.context())
         assertIs<ActionOutcome.Done>(outcome)
         assertEquals(1, game.touches.size, "one continuous touch, never lifted on the way")
         assertEquals(TouchPoint(48, 112), game.touchFrames.first())
@@ -68,7 +68,7 @@ class MoreActionsTest {
         val game = FakeGame(Screen.Dialogue(TextSource.FIELD, null, "Hi", Awaiting.INPUT))
         game.onFrame = { frame, screen -> if (frame == 40L) Screen.Overworld(awaiting = Awaiting.INPUT) else screen }
         val scope = game.scope()
-        val outcome = Recipes.COMMON.wait(GameAction.Wait(untilChange = true), PlanContext(scope, game))
+        val outcome = RecipeBase.perform(GameAction.Wait(untilChange = true), PlanContext(scope, game))
         assertEquals(ActionOutcome.Done(), outcome)
         assertTrue(scope.framesUsed < 60, "stopped right after the change, not after the whole wait (${scope.framesUsed})")
     }
@@ -76,7 +76,7 @@ class MoreActionsTest {
     @Test
     fun waitUntilChangeSaysWhenNothingChanged() {
         val game = FakeGame(Screen.Unknown("alph_puzzle", Awaiting.INPUT))
-        val outcome = assertIs<ActionOutcome.Done>(Recipes.COMMON.wait(GameAction.Wait(30, untilChange = true), game.context()))
+        val outcome = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Wait(30, untilChange = true), game.context()))
         assertTrue(outcome.detail!!.startsWith("nothing changed"))
     }
 

@@ -49,9 +49,9 @@ internal object BikeRide {
 
     /** Uses the bicycle [item] and tells whether the movement became [wanted] ([RODE]) or why not. */
     private fun toggle(context: PlanContext, item: Int, wanted: MovementMode): String {
-        val used = context.recipes.activateKeyItem(context, ItemRef("item:$item"))
+        val used = RecipeBase.activateKeyItem(context, ItemRef("item:$item"))
         // A refusal is a message ("no cycling here"): read it, back to the field.
-        context.recipes.closeToOverworld(context)
+        RecipeBase.closeToOverworld(context)
         val now = context.navigator.settle().field
         val on = wanted == MovementMode.BIKE
         return when {

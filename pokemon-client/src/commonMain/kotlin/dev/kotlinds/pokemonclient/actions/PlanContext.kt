@@ -13,10 +13,11 @@ class PlanContext(
     val settings: ActionSettings = ActionSettings(),
 ) {
     /**
-     * The recipes of [game] ([PokemonGame.recipes]): what the walking engine ([MovePlans], [WorldTravel],
-     * [FieldMoveWalk]...) calls when it needs an action or a menu step (a Repel used again on the way, the start menu
-     * opened for the bicycle...). Always the game's own, never given apart from it, so no context can play another
-     * game's recipes. Inside the chain of recipes, a recipe calls the others on itself (virtual calls), never here.
+     * The recipes of [game] ([PokemonGame.recipes]): the only recipes this context runs. The entries of the recipes
+     * ([RecipeBase.perform], [RecipeBase.closeToOverworld], [RecipeBase.activateKeyItem]: the registry, the walking
+     * engine) run them through here, and the availability of every action is read on them; never given apart from
+     * the game, so no context can play another game's recipes. Inside the chain of recipes, a recipe calls the others
+     * on itself (virtual calls: itself is this object, the only way in).
      */
     val recipes: Recipes get() = game.recipes
 

@@ -4,8 +4,9 @@ import dev.kotlinds.pokemonclient.state.GameState
 import kotlinx.serialization.json.JsonObject
 
 /**
- * One action type as agents see it: its wire name, description, parameters, when it is available, how to parse
- * it from JSON and how to enumerate its concrete instances (for models that pick among a list, like Jev).
+ * One action type as agents see it, the same for every game: its wire name, description, parameters, how to parse it
+ * from JSON and how to enumerate its concrete instances (for models that pick among a list, like Jev). When it can
+ * run is not here: it is the game's recipes' method for it ([ActionDefinition.availability]).
  */
 interface ActionSpec<A : GameAction> {
     /** Wire name, e.g. `attack` (the JSON `type`). */
@@ -19,9 +20,6 @@ interface ActionSpec<A : GameAction> {
 
     /** Modes where the action is offered. */
     val modes: Set<ActionMode>
-
-    /** Whether the action can be used now, and with which parameter values. */
-    fun availability(state: GameState): Availability
 
     /** Parses the JSON parameters (already validated as an object with this `type`). */
     fun parse(json: JsonObject): A

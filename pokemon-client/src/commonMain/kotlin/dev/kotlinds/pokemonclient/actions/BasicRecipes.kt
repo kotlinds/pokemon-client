@@ -20,6 +20,41 @@ import dev.kotlinds.pokemonclient.state.sameAs
  */
 abstract class BasicRecipes internal constructor() : RecipeBase() {
 
+    // region Availability: when each action of this family can run (read by the listing and the execution alike)
+
+    /** `press`: always (a raw button, like a human). */
+    internal open fun pressAvailability(state: GameState): Availability = Availability.Available()
+
+    /** `touch`: always. */
+    internal open fun touchAvailability(state: GameState): Availability = Availability.Available()
+
+    /** `wait`: always. */
+    internal open fun waitAvailability(state: GameState): Availability = Availability.Available()
+
+    /** `drag`: always. */
+    internal open fun dragAvailability(state: GameState): Availability = Availability.Available()
+
+    /** `advance_dialogue`: on a message, or an incoming call; accepted as a no-op on a choice. */
+    internal open fun advanceDialogueAvailability(state: GameState): Availability = when (val screen = state.screen) {
+        is Screen.Dialogue, is Screen.PressToContinue -> Availability.Available()
+        is Screen.Overworld -> if (screen.incomingCall?.answer != null) Availability.Available() else Availability.Hidden
+        // Nothing to read: accepted as a no-op, so a chain like `press a` → `advance_dialogue` doesn't fail.
+        is Screen.Selectable -> Availability.Available(listed = false)
+        else -> Availability.Hidden
+    }
+
+    /** `choose`: on any menu, its selectable entries. */
+    internal open fun chooseAvailability(state: GameState): Availability {
+        val menu = state.screen as? Screen.Selectable ?: return Availability.Hidden
+        return Availability.Available(mapOf("entry" to menu.entries.filter { it.selectable }.map { Choice(it.id, it.label) }))
+    }
+
+    /** `enter_text`: on the naming keyboard. */
+    internal open fun enterTextAvailability(state: GameState): Availability =
+        if (state.screen is Screen.Keyboard) Availability.Available() else Availability.Hidden
+
+    // endregion
+
     /** One self-checking tap, then wait for the game to react. */
     override fun press(action: GameAction.Press, context: PlanContext): ActionOutcome {
         val before = context.state().screen
@@ -113,7 +148,7 @@ abstract class BasicRecipes internal constructor() : RecipeBase() {
      * A step of `advance_dialogue` a game may override: how a call is picked up is a game's own procedure (the
      * Pokégear of HeartGold / SoulSilver; Platinum has no phone calls).
      */
-    internal open fun answerCall(context: PlanContext, call: IncomingCall): Step<Screen> {
+    protected open fun answerCall(context: PlanContext, call: IncomingCall): Step<Screen> {
         val point = call.answer ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "No way to answer ${call.caller}'s call is known"))
         repeat(ANSWER_TRIES) {
             context.scope.touch(point)

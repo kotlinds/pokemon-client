@@ -70,14 +70,14 @@ class BattleSwitchRecipesTest {
     @Test
     fun switchFromTheCommandMenuGoesThroughPokemonThenShift() {
         val (ui, sentIn) = battleUi(command)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.switch(GameAction.Switch(MonId(3, 1)), ui.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Switch(MonId(3, 1)), ui.context()))
         assertEquals(MonId(3, 1), sentIn())
     }
 
     @Test
     fun switchAnswersWillYouSwitchWithSwitch() {
         val (ui, sentIn) = battleUi(switchOrKeep)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.switch(GameAction.Switch(MonId(2, 1)), ui.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Switch(MonId(2, 1)), ui.context()))
         assertEquals(MonId(2, 1), sentIn())
     }
 
@@ -91,7 +91,7 @@ class BattleSwitchRecipesTest {
             listOf(Entry(fainted.id.toString(), "MON1 FAINTED", selectable = false), Entry("mon:00000002.00000001", "MON2"), Entry("mon:00000003.00000001", "MON3"), Entry("option:cancel", "CANCEL", selectable = false)),
             Cursor.At(0), Topology.vertical(4), CancelBehavior.NONE,
         )
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.switch(GameAction.Switch(MonId(2, 1)), ui.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Switch(MonId(2, 1)), ui.context()))
         assertEquals(MonId(2, 1), sentIn())
     }
 
@@ -100,7 +100,7 @@ class BattleSwitchRecipesTest {
         val (ui, sentIn) = battleUi(Screen.Dialogue(TextSource.BATTLE, null, "HO-OH gained 384 Exp. Points!", Awaiting.INPUT))
         next += Screen.Dialogue(TextSource.BATTLE, null, "Will is about to use JYNX. Will you change Pokémon?", Awaiting.INPUT)
         next += switchOrKeep
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.keepBattling(GameAction.KeepBattling, ui.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.KeepBattling, ui.context()))
         assertEquals(null, sentIn())
         assertIs<Screen.BattleCommand>(ui.game.screen)
     }
@@ -110,7 +110,7 @@ class BattleSwitchRecipesTest {
         // Battle style SET (or a wild battle): no question, the command menu comes back.
         val (ui, _) = battleUi(Screen.Dialogue(TextSource.BATTLE, null, "The foe's XATU fainted!", Awaiting.INPUT))
         next += command
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.keepBattling(GameAction.KeepBattling, ui.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.KeepBattling, ui.context()))
         assertTrue("foe sent its next" in done.detail.orEmpty(), done.detail)
     }
 
@@ -135,7 +135,7 @@ class BattleSwitchRecipesTest {
 
     @Test
     fun runFollowsTheEscapeToTheEndOfTheBattle() {
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.run(GameAction.Run, runUi(escapes = true).context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Run, runUi(escapes = true).context()))
         assertEquals(null, done.stopsChain)
         assertEquals("got away safely", done.detail)
     }
@@ -144,7 +144,7 @@ class BattleSwitchRecipesTest {
     fun aFailedEscapeIsDoneButStopsTheChain() {
         // "Can't escape!": the turn was used (done), the battle goes on, so the steps after the run must not start.
         val ui = runUi(escapes = false)
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.run(GameAction.Run, ui.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Run, ui.context()))
         assertEquals("ESCAPE_FAILED", assertIs<ChainStop.EscapeFailed>(done.stopsChain).code)
         assertIs<Screen.BattleCommand>(ui.game.screen)
     }

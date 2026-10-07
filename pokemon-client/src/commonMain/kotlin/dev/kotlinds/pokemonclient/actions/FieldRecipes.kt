@@ -11,14 +11,17 @@ import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.PartyMon
+import dev.kotlinds.pokemonclient.state.PokegearCard
 import dev.kotlinds.pokemonclient.state.PokegearRadio
 import dev.kotlinds.pokemonclient.state.RadioStation
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.StartMenuFeature
 import dev.kotlinds.pokemonclient.state.TextSource
 import dev.kotlinds.pokemonclient.state.ViewerApp
 import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.world.FieldMoveAccess
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.FieldMoveUse
 import dev.kotlinds.pokemonclient.world.FieldMoves
 import dev.kotlinds.pokemonclient.world.TileKind
 
@@ -30,6 +33,105 @@ import dev.kotlinds.pokemonclient.world.TileKind
  * [activateKeyItem]: a game whose menus differ overrides those steps, never these recipes.
  */
 abstract class FieldRecipes internal constructor() : ServiceRecipes() {
+
+    // region Availability: when each action of this family can run (read by the listing and the execution alike)
+
+    /** `set_options`: in the field or on the OPTIONS screen, once the start menu has OPTIONS. */
+    internal open fun setOptionsAvailability(state: GameState): Availability {
+        ActionConditions.locked(state, StartMenuFeature.OPTIONS)?.let { return it }
+        if (!ActionConditions.inField(state) && !ActionConditions.isOptionsScreen(state)) return Availability.Hidden
+        val now = state.options
+        return Availability.Available(now?.let {
+            mapOf(
+                "text_speed" to listOf(Choice(it.textSpeed.name.lowercase(), "now")),
+                "battle_scene" to listOf(Choice(if (it.battleScene) "on" else "off", "now")),
+                "battle_style" to listOf(Choice(it.battleStyle.name.lowercase(), "now")),
+            )
+        } ?: emptyMap())
+    }
+
+    /** `open_menu`: walking or on the start menu, once it opens; accepted, never offered. */
+    internal open fun openMenuAvailability(state: GameState): Availability {
+        val walking = FieldControl.inControl(state)
+        val inMenu = (state.screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU
+        return when {
+            !walking && !inMenu -> Availability.Hidden
+            state.startMenu?.contains(StartMenuFeature.BAG) == false ->
+                Availability.Unavailable(UnavailableReason.NOT_UNLOCKED_YET, "The start menu doesn't open yet", "the story unlocks it (Mom gives it at the start)")
+            else -> Availability.Available(listed = false)
+        }
+    }
+
+    /** `save_game`: in the field, once the start menu has SAVE. */
+    internal open fun saveGameAvailability(state: GameState): Availability =
+        ActionConditions.locked(state, StartMenuFeature.SAVE) ?: if (ActionConditions.inField(state)) Availability.Available() else Availability.Hidden
+
+    /** `fish`: walking freely, with a rod in the bag ([ActionConditions.RODS]). */
+    internal open fun fishAvailability(state: GameState): Availability {
+        if (!ActionConditions.canWalk(state, hasWorld = true)) return Availability.Hidden
+        val rods = state.bag.orEmpty().flatMap { it.items }.filter { it.item.id.value in ActionConditions.RODS }
+        return if (rods.isEmpty()) Availability.Hidden else Availability.Available(mapOf("rod" to rods.map { Choice("item:${it.item.id.value}", it.item.name) }))
+    }
+
+    /** `fly`: walking freely, by the game's Fly rule as the state read it ([GameState.fieldMoves]) and the map's flag. */
+    internal open fun flyAvailability(state: GameState): Availability {
+        // The game's Fly rule (the move, the badge by id: never its shown name, the game may be in French).
+        // Null (a state not read by its game, tests) can't tell: hidden like a game without Fly.
+        val fly = state.fieldMoves?.get(FieldMoveKind.FLY)
+        return when {
+            !ActionConditions.canWalk(state, hasWorld = true) || fly == null || fly == FieldMoveAccess.Unknown -> Availability.Hidden
+            fly == FieldMoveAccess.NotSupported -> Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "Fly isn't supported in this game yet (its party menu isn't decoded)")
+            state.field?.flyAllowed == false -> Availability.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "Fly can't be used on this map (the map doesn't allow it)", "go to a map where Fly works")
+            fly == FieldMoveAccess.NoPokemon -> Availability.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly")
+            fly is FieldMoveAccess.NoBadge -> Availability.Unavailable(UnavailableReason.NEEDS_BADGE, "Fly needs the ${fly.badge} Badge")
+            else -> Availability.Available()
+        }
+    }
+
+    /** `use_field_move`: in the field, the moves of this action ([FieldMoveUse.ACTION]) the party can use now. */
+    internal open fun useFieldMoveAvailability(state: GameState): Availability {
+        if (!ActionConditions.inField(state)) return Availability.Hidden
+        // The game's rules as the state read them (GameState.fieldMoves: the move known, the badge): the moves of
+        // this action only (Fly and the moves walks use have their own ways).
+        val access = state.fieldMoves.orEmpty().filterKeys { it.use == FieldMoveUse.ACTION }
+        val usable = access.filterValues { it is FieldMoveAccess.Usable }
+        return when {
+            usable.isNotEmpty() -> Availability.Available(buildMap {
+                put("move", usable.map { (kind, a) -> Choice(kind.wire, "${with(FieldMoveWalk) { kind.label() }} (${(a as FieldMoveAccess.Usable).monName})") })
+                if (usable.keys.any { it.healsAnother }) put("target", ActionConditions.monChoices(state))
+            })
+            access.values.any { it is FieldMoveAccess.NoBadge } -> access.entries.first { it.value is FieldMoveAccess.NoBadge }.let { (kind, a) ->
+                Availability.Unavailable(UnavailableReason.NEEDS_BADGE, "${with(FieldMoveWalk) { kind.label() }} needs the ${(a as FieldMoveAccess.NoBadge).badge} Badge")
+            }
+            access.values.any { it == FieldMoveAccess.NotSupported } ->
+                Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "field moves aren't supported in this game yet (its party menu isn't decoded)")
+            else -> Availability.Hidden
+        }
+    }
+
+    /**
+     * `tune_radio`: walking, or on the Pokégear's radio or map (or its phone), in a game that has a Pokégear
+     * ([GameState.pokegear]: a game without one, Platinum, refuses it, typed) once it has the Radio Card. Offered on the
+     * radio itself; from the field it is accepted (it opens the Pokégear) without being offered.
+     */
+    internal open fun tuneRadioAvailability(state: GameState): Availability {
+        val screen = state.screen
+        val radio = (screen as? Screen.Viewer)?.radio
+        val onGear = screen is Screen.Viewer && screen.app in POKEGEAR_VIEWERS ||
+            (screen as? Screen.ListMenu)?.kind == MenuKind.PHONE_CONTACTS
+        val walking = FieldControl.inControl(state)
+        if (!onGear && !walking) return Availability.Hidden
+        if (state.pokegear == false) {
+            return Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "This game has no Pokégear (so no radio)")
+        }
+        if (state.player?.pokegearCards?.contains(PokegearCard.RADIO) == false) {
+            return Availability.Unavailable(UnavailableReason.NOT_UNLOCKED_YET, "The Pokégear has no Radio Card yet", "the Goldenrod Radio Tower's quiz gives it")
+        }
+        val stations = radio?.channels?.flatMap { it.stations } ?: RadioStation.entries.filter { it != RadioStation.COMMERCIALS }
+        return Availability.Available(mapOf("station" to stations.map { Choice(it.wire, it.wire) }), listed = radio != null)
+    }
+
+    // endregion
 
     /**
      * The OPTIONS screen: start menu → OPTIONS, then for each setting asked for, the row (UP / DOWN) and the value
@@ -646,6 +748,9 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
 
         const val RADIO_APP = "app:radio"
         const val GEAR_ENTRY = "option:pokegear"
+
+        /** The Pokégear apps `tune_radio` starts from besides the field (the phone is a list menu). */
+        val POKEGEAR_VIEWERS = setOf(ViewerApp.POKEGEAR_RADIO, ViewerApp.POKEGEAR_MAP)
         const val MAX_OPEN_STEPS = 8
         const val MAX_CORRECTIONS = 3
         const val SETTLE_FRAMES = 120

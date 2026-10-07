@@ -9,6 +9,7 @@ import dev.kotlinds.pokemonclient.state.AnimationKind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.ContinueReason
 import dev.kotlinds.pokemonclient.state.FieldState
+import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.HallOfFameStage
 import dev.kotlinds.pokemonclient.state.IntroInputs
 import dev.kotlinds.pokemonclient.state.IntroStage
@@ -25,16 +26,45 @@ import dev.kotlinds.pokemonclient.state.sameAs
  * the item, USE..."), written once for every game. They never press blindly: every choice goes through the
  * [Navigator], which reads the cursor, moves one tap at a time and confirms only on the target.
  *
- * What a game plays ([dev.kotlinds.pokemonclient.PokemonGame.recipes], [COMMON] by default); a generation or a game
- * whose screens really differ extends it and overrides what differs
- * ([dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes], then the game's own). The availability of an action is not a
- * recipe: it is the common contract ([ActionSpec.availability], built on [ActionConditions]), the same for every game.
+ * What a game plays ([dev.kotlinds.pokemonclient.PokemonGame.recipes]: every game gives its own instance, there is no
+ * shared one); a generation or a game whose screens really differ extends it and overrides what differs
+ * ([dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes], then the game's own). Each action also has its availability
+ * method here (`<action>Availability`, the common rule by default, built on [ActionConditions]): the one place that
+ * decides when the action can run, read by the listing and the execution alike ([ActionDefinition.availability]). A
+ * game overrides one only when the game itself differs, documented on the override (docs/adding-a-game.md,
+ * "Overriding a condition"); the contract (names, parameters, ids, errors) never varies.
  *
  * The top of the chain of families ([BasicRecipes], [BattleRecipes], [BagPartyRecipes], [MoveRecipes],
  * [ServiceRecipes], [FieldRecipes]): it holds the recipes of the game as a whole (soft reset, continuing the saved
  * game, the starter, the Hall of Fame).
  */
 open class Recipes internal constructor() : FieldRecipes() {
+
+    // region Availability: when each action of this family can run (read by the listing and the execution alike)
+
+    /** `soft_reset`: anywhere but while the game saves by itself; accepted on the intro screens, not offered there. */
+    internal open fun softResetAvailability(state: GameState): Availability = when {
+        state.screen is Screen.Intro -> Availability.Available(listed = false)
+        // The game refuses the reset while it saves by itself (after the Hall of Fame).
+        (state.screen as? Screen.Animation)?.kind == AnimationKind.SAVING -> Availability.Hidden
+        else -> Availability.Available()
+    }
+
+    /** `continue_game`: on the intro movie, the title screen, the main menu or the loading between them. */
+    internal open fun continueGameAvailability(state: GameState): Availability =
+        if (ActionConditions.beforeTheGame(state)) Availability.Available() else Availability.Hidden
+
+    /** `choose_starter`: on the professor's machine, its starters. */
+    internal open fun chooseStarterAvailability(state: GameState): Availability {
+        val screen = state.screen as? Screen.StarterChoice ?: return Availability.Hidden
+        return Availability.Available(mapOf("starter" to screen.starters.map { Choice("species:${it.id.value}", it.name) }))
+    }
+
+    /** `watch_hall_of_fame`: on the registration in the Hall of Fame, or the save after it. */
+    internal open fun watchHallOfFameAvailability(state: GameState): Availability =
+        if (ActionConditions.hallOfFameOffered(state)) Availability.Available() else Availability.Hidden
+
+    // endregion
 
     // region System: the console and the game as a whole
 
@@ -263,10 +293,7 @@ open class Recipes internal constructor() : FieldRecipes() {
 
     // endregion
 
-    companion object {
-        /** The common recipes alone: what a game plays when nothing of it differs (the default of [dev.kotlinds.pokemonclient.PokemonGame.recipes]). */
-        internal val COMMON: Recipes = Recipes()
-
+    private companion object {
         /** The soft reset of the DS Pokémon games: L + R + START + SELECT held together (src/main.c main loop). */
         private val RESET_COMBO = InputFrame(setOf(Button.L, Button.R, Button.START, Button.SELECT))
 

@@ -35,7 +35,7 @@ import kotlin.test.assertTrue
  * The shared steps of the recipes ([RecipeBase.openStartMenuEntry], [RecipeBase.bagItem], [RecipeBase.closeToOverworld],
  * [BattleRecipes.forgetRefusal], [ServiceRecipes.openStorage]...) are methods of the chain: a game overriding one of
  * them ([dev.kotlinds.pokemonclient.PokemonGame.recipes]) has it played by every recipe going through it, and by the
- * walking engine ([PlanContext.recipes]), without copying any recipe; a game without the override keeps the common
+ * walking engine ([RecipeBase.perform], on the context's game), without copying any recipe; a game without the override keeps the common
  * step. The guard against static copies of a step beside the chain (they would skip the game's own).
  */
 class RecipeStepsTest {
@@ -58,15 +58,15 @@ class RecipeStepsTest {
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2)), bag = listOf(BagPocket("items", listOf(item(17, "Potion")))))
         ui.game.recipes = ownStartMenu()
         val recipes = ui.game.recipes
-        stopped(recipes.setOptions(GameAction.SetOptions(textSpeed = TextSpeed.FAST), ui.context()))
-        stopped(recipes.openMenu(GameAction.OpenMenu("option:pokedex"), ui.context()))
+        stopped(RecipeBase.perform(GameAction.SetOptions(textSpeed = TextSpeed.FAST), ui.context()))
+        stopped(RecipeBase.perform(GameAction.OpenMenu("option:pokedex"), ui.context()))
         // Through the party ([RecipeBase.openParty]) and the bag ([RecipeBase.bagItem]): their common steps open the
         // start menu the game's own way.
-        stopped(recipes.reorderParty(GameAction.ReorderParty(MonId(2, 1), 1), ui.context()))
-        stopped(recipes.takeItem(GameAction.TakeItem(MonId(1, 1)), ui.context()))
-        stopped(recipes.giveItem(GameAction.GiveItem(MonId(1, 1), ItemRef("Potion")), ui.context()))
+        stopped(RecipeBase.perform(GameAction.ReorderParty(MonId(2, 1), 1), ui.context()))
+        stopped(RecipeBase.perform(GameAction.TakeItem(MonId(1, 1)), ui.context()))
+        stopped(RecipeBase.perform(GameAction.GiveItem(MonId(1, 1), ItemRef("Potion")), ui.context()))
         // The Pokégear's radio, opened from the field.
-        stopped(recipes.tuneRadio(TuneRadio(RadioStation.POKE_FLUTE), ui.context()))
+        stopped(RecipeBase.perform(TuneRadio(RadioStation.POKE_FLUTE), ui.context()))
         // Through the registry (every host), `save_game` too.
         stopped(ActionRegistry.of().execute(GameAction.SaveGame, ui.game.scope(), ui.game))
         assertEquals(listOf("option:options", "option:pokedex", "option:pokemon", "option:pokemon", "option:bag", "option:pokegear", "option:save"), asked)
@@ -75,7 +75,7 @@ class RecipeStepsTest {
         // Another game (the common recipes): the common start menu, X then the entry.
         val other = ScriptedUi(OVERWORLD, party = listOf(mon(1)))
         other.onA = { screen, id -> if (ScriptedUi.isStart(screen) && id == "option:bag") bag("items", emptyList()) else screen }
-        assertIs<ActionOutcome.Done>(other.game.recipes.openMenu(GameAction.OpenMenu("option:bag"), other.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.OpenMenu("option:bag"), other.context()))
         assertEquals(7, asked.size)
         assertEquals(Button.X, other.game.presses.first())
     }
@@ -90,21 +90,22 @@ class RecipeStepsTest {
             }
         }
         val recipes = ui.game.recipes
-        stopped(recipes.giveItem(GameAction.GiveItem(MonId(1, 1), ItemRef("give")), ui.context()))
-        stopped(recipes.useItem(GameAction.UseItem(ItemRef("use"), MonId(1, 1)), ui.context()))
-        stopped(recipes.teach(GameAction.Teach(ItemRef("teach"), MonId(1, 1)), ui.context()))
-        stopped(recipes.useKeyItem(GameAction.UseKeyItem(ItemRef("key")), ui.context()))
-        stopped(recipes.registerItem(GameAction.RegisterItem(ItemRef("register")), ui.context()))
+        stopped(RecipeBase.perform(GameAction.GiveItem(MonId(1, 1), ItemRef("give")), ui.context()))
+        stopped(RecipeBase.perform(GameAction.UseItem(ItemRef("use"), MonId(1, 1)), ui.context()))
+        stopped(RecipeBase.perform(GameAction.Teach(ItemRef("teach"), MonId(1, 1)), ui.context()))
+        stopped(RecipeBase.perform(GameAction.UseKeyItem(ItemRef("key")), ui.context()))
+        stopped(RecipeBase.perform(GameAction.RegisterItem(ItemRef("register")), ui.context()))
         // The selling bag, opened by the clerk, is searched the game's own way too.
         val selling = ScriptedUi(bag("items", listOf(Entry("item:17", "Potion"))), bag = listOf(BagPocket("items", listOf(item(17, "Potion", 3)))))
         selling.game.recipes = recipes
-        stopped(recipes.sell(GameAction.Sell(ItemRef("Potion"), 1), selling.context()))
+        stopped(RecipeBase.perform(GameAction.Sell(ItemRef("Potion"), 1), selling.context()))
         assertEquals(listOf("give", "use", "teach", "key", "register", "Potion"), asked)
 
         // Another game: the common bag (start menu → BAG), the item found on its pocket.
         val other = ScriptedUi(OVERWORLD, bag = listOf(BagPocket("items", listOf(item(17, "Potion")))))
         other.onA = { screen, id -> if (ScriptedUi.isStart(screen) && id == "option:bag") bag("items", listOf(Entry("item:17", "Potion"))) else screen }
-        assertEquals("item:17", assertIs<Step.Done<Entry>>(other.game.recipes.bagItem(other.context(), ItemRef("Potion"))).value.id)
+        val common = BagStepRecipes().also { other.game.recipes = it }
+        assertEquals("item:17", assertIs<Step.Done<Entry>>(common.bagItemOf(other.context(), ItemRef("Potion"))).value.id)
         assertEquals(6, asked.size)
     }
 
@@ -135,15 +136,15 @@ class RecipeStepsTest {
             }
         }
         // An item that isn't in the bag: refused, and whatever was opened closed the game's own way.
-        val failed = assertIs<ActionOutcome.Failed>(ui.game.recipes.useItem(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), ui.context()))
         assertEquals(UnavailableReason.UNKNOWN_ITEM, assertIs<ActionError.Unavailable>(failed.error).reason)
         // The PC's session leaves the game's own way after a failed boot (no PC here), with its own number of presses.
-        assertIs<ActionOutcome.Failed>(ui.game.recipes.deposit(GameAction.Deposit(MonId(1, 1)), ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2))).also { it.game.recipes = ui.game.recipes }.context()))
+        assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Deposit(MonId(1, 1)), ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2))).also { it.game.recipes = ui.game.recipes }.context()))
         assertEquals(listOf(8, 16), closed)
 
         // Another game: the common way back, never the other game's.
         val other = ScriptedUi(OVERWORLD, party = listOf(mon(1)))
-        assertIs<ActionOutcome.Failed>(other.game.recipes.useItem(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), other.context()))
+        assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), other.context()))
         assertEquals(listOf(8, 16), closed)
     }
 
@@ -159,7 +160,7 @@ class RecipeStepsTest {
                 return STEP_ERROR
             }
         }
-        stopped(ui.game.recipes.teach(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Tackle")), ui.context()))
+        stopped(RecipeBase.perform(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Tackle")), ui.context()))
         val list = Screen.MoveSelect(
             MoveContext.FORGET_IN_BATTLE, MonId(1, 1), Named(MoveId(53), "Flamethrower"),
             listOf(Entry("move:33", "Tackle"), Entry("move:45", "Growl"), Entry("move:15", "Cut", selectable = false), Entry("move:85", "Thunderbolt"), Entry("move:53", "Flamethrower"), Entry("option:cancel", "CANCEL")),
@@ -167,13 +168,13 @@ class RecipeStepsTest {
         )
         val learning = ScriptedUi(list, party = listOf(learner))
         learning.game.recipes = ui.game.recipes
-        stopped(learning.game.recipes.learnMove(GameAction.LearnMove(MoveRef("Growl")), learning.context()))
+        stopped(RecipeBase.perform(GameAction.LearnMove(MoveRef("Growl")), learning.context()))
         assertEquals(listOf("Tackle", "Growl"), asked)
         assertTrue(ui.game.presses.isEmpty() && learning.game.presses.isEmpty())
 
         // Another game: the common check (an HM move is never forgotten), not the other game's.
         val other = ScriptedUi(list, party = listOf(learner))
-        assertIs<ActionError.HmCannotForget>(assertIs<ActionOutcome.Failed>(other.game.recipes.learnMove(GameAction.LearnMove(MoveRef("Cut")), other.context())).error)
+        assertIs<ActionError.HmCannotForget>(assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.LearnMove(MoveRef("Cut")), other.context())).error)
         assertEquals(2, asked.size)
     }
 
@@ -197,20 +198,20 @@ class RecipeStepsTest {
             }
         }
         val recipes = ui.game.recipes
-        stopped(recipes.deposit(GameAction.Deposit(MonId(2, 1)), ui.context()))
-        stopped(recipes.withdraw(GameAction.Withdraw(MonId(7, 1)), ui.context()))
-        stopped(recipes.pc(GameAction.Pc(listOf(PcOperation.Deposit(MonId(2, 1)))), ui.context()))
-        stopped(recipes.release(GameAction.Release(MonId(2, 1), confirm = true), ui.context()))
+        stopped(RecipeBase.perform(GameAction.Deposit(MonId(2, 1)), ui.context()))
+        stopped(RecipeBase.perform(GameAction.Withdraw(MonId(7, 1)), ui.context()))
+        stopped(RecipeBase.perform(GameAction.Pc(listOf(PcOperation.Deposit(MonId(2, 1)))), ui.context()))
+        stopped(RecipeBase.perform(GameAction.Release(MonId(2, 1), confirm = true), ui.context()))
         val shopList = Screen.Shop(3000, listOf(ShopItem(Named(ItemId(17), "Potion"), 300)), listOf(Entry("item:17", "Potion ₽300"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
         val shop = ScriptedUi(shopList, party = listOf(mon(1)), bag = listOf(BagPocket("items", listOf(item(17, "Potion", 3)))))
         shop.game.recipes = recipes
-        stopped(recipes.buy(GameAction.Buy(listOf(Purchase(ItemRef("Potion"), 1))), shop.context()))
-        stopped(recipes.sell(GameAction.Sell(ItemRef("Potion"), 1), shop.context()))
+        stopped(RecipeBase.perform(GameAction.Buy(listOf(Purchase(ItemRef("Potion"), 1))), shop.context()))
+        stopped(RecipeBase.perform(GameAction.Sell(ItemRef("Potion"), 1), shop.context()))
         assertEquals(listOf("storage", "storage", "storage", "storage", "shop", "selling bag"), asked)
 
         // Another game: the common counter (the shop list on screen is bought from), not the other game's.
         val other = ScriptedUi(shopList, party = listOf(mon(1)))
-        val failed = assertIs<ActionOutcome.Failed>(other.game.recipes.buy(GameAction.Buy(listOf(Purchase(ItemRef("Ultra Ball"), 1))), other.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Buy(listOf(Purchase(ItemRef("Ultra Ball"), 1))), other.context()))
         assertIs<ActionError.InvalidParameter>(failed.error, "the common shop step reached the list and refused an item it doesn't sell")
         assertEquals(6, asked.size)
     }

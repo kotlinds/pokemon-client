@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.data.MachineId
 import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.BattleKind
 import dev.kotlinds.pokemonclient.state.BattleOutcome
 import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.BattlerRef
@@ -11,6 +12,7 @@ import dev.kotlinds.pokemonclient.state.ItemId
 import dev.kotlinds.pokemonclient.state.LearnQuestion
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MonId
+import dev.kotlinds.pokemonclient.state.MoveContext
 import dev.kotlinds.pokemonclient.state.PartyMon
 import dev.kotlinds.pokemonclient.state.PartyPurpose
 import dev.kotlinds.pokemonclient.state.Screen
@@ -22,6 +24,76 @@ import dev.kotlinds.pokemonclient.state.TextSource
  * PP items, [forgetRefusal]). A family of the chain of [RecipeBase], above [BasicRecipes].
  */
 abstract class BattleRecipes internal constructor() : BasicRecipes() {
+
+    // region Availability: when each action of this family can run (read by the listing and the execution alike)
+
+    /** `attack`: from the command menu, or from the battle's move list already open (a previous attempt left it there). */
+    internal open fun attackAvailability(state: GameState): Availability {
+        val battle = state.battle ?: return Availability.Hidden
+        if (state.screen !is Screen.BattleCommand && (state.screen as? Screen.MoveSelect)?.context != MoveContext.BATTLE) return Availability.Hidden
+        val actor = battle.battlers.firstOrNull { it.ref == (battle.actor ?: BattlerRef.PLAYER_LEFT) } ?: return Availability.Hidden
+        return Availability.Available(mapOf("move" to BattleMoveChoice.choices(actor).map { (id, label) -> Choice(id, label) }))
+    }
+
+    /** `run`: from the command menu of a wild battle. */
+    internal open fun runAvailability(state: GameState): Availability {
+        val battle = state.battle
+        return when {
+            battle == null || state.screen !is Screen.BattleCommand -> Availability.Hidden
+            battle.kind != BattleKind.WILD -> Availability.Unavailable(UnavailableReason.TRAINER_BATTLE, "There's no running from a trainer battle")
+            else -> Availability.Available()
+        }
+    }
+
+    /** `keep_battling`: on the switch-or-keep question; accepted while the messages before it still scroll. */
+    internal open fun keepBattlingAvailability(state: GameState): Availability {
+        val screen = state.screen
+        return when {
+            (screen as? Screen.ListMenu)?.kind == MenuKind.BATTLE_SWITCH_OR_KEEP -> Availability.Available()
+            // The foe's Pokémon fainted: EXP / level-up messages come before the question.
+            state.battle?.kind == BattleKind.TRAINER && (screen is Screen.Dialogue || screen is Screen.PressToContinue || screen is Screen.Battle) ->
+                Availability.Available(listed = false)
+            else -> Availability.Hidden
+        }
+    }
+
+    /** `switch`: on the screens a switch starts from ([ActionConditions.canSwitch]), unless trapped or no one else can battle. */
+    internal open fun switchAvailability(state: GameState): Availability {
+        if (state.battle == null || !ActionConditions.canSwitch(state)) return Availability.Hidden
+        // A voluntary switch (command menu) is refused while the active Pokémon is trapped (Mean Look, Spider Web,
+        // a binding move, Ingrain); a replacement after a K.O. never is.
+        val actorRef = (state.screen as? Screen.BattleCommand)?.actor ?: state.battle.actor ?: BattlerRef.PLAYER_LEFT
+        val trapped = state.battle.battlers.firstOrNull { it.ref == actorRef }?.volatile?.any { it is dev.kotlinds.pokemonclient.state.VolatileStatus.Trapped } == true
+        if (state.screen is Screen.BattleCommand && trapped) {
+            return Availability.Unavailable(UnavailableReason.TRAPPED, "The active Pokémon is trapped: it can't be switched out", "a Shed Shell, Baton Pass or U-turn still work")
+        }
+        // Every Pokémon on the field (two in doubles) is already in battle.
+        val active = state.battle.battlers.filter { it.ref.isPlayerSide && it.hp > 0 }.mapNotNull { it.mon }.toSet() + listOfNotNull(state.battle.partyOrder.firstOrNull())
+        val choices = state.party.filter { it.id !in active && !it.fainted && !it.isEgg }.map { Choice(it.id.toString(), "${it.displayName} Lv${it.level} ${it.hp}/${it.maxHp}") }
+        return if (choices.isEmpty()) Availability.Unavailable(UnavailableReason.NO_STOCK, "No other Pokémon can battle") else Availability.Available(mapOf("pokemon" to choices))
+    }
+
+    /** `throw_ball`: from the command menu of a wild battle, with balls in the bag. */
+    internal open fun throwBallAvailability(state: GameState): Availability {
+        val battle = state.battle ?: return Availability.Hidden
+        if (state.screen !is Screen.BattleCommand) return Availability.Hidden
+        if (battle.trainers.isNotEmpty()) return Availability.Unavailable(UnavailableReason.TRAINER_BATTLE, "You can't catch a trainer's Pokémon")
+        val balls = ActionConditions.ballsInBag(state)
+        return if (balls.isEmpty()) Availability.Unavailable(UnavailableReason.NO_STOCK, "No Poké Balls in the bag", "buy some at a Poké Mart")
+        else Availability.Available(mapOf("ball" to balls.map { Choice("item:${it.item.id.value}", "${it.item.name} x${it.quantity}") }))
+    }
+
+    /** `learn_move`: on the question about a new move, or the list of moves to forget. */
+    internal open fun learnMoveAvailability(state: GameState): Availability {
+        if (!ActionConditions.isLearnPrompt(state)) return Availability.Hidden
+        // On the list itself, the moves the game lets go of (not HMs, not the new one).
+        val list = state.screen as? Screen.MoveSelect
+        val choices = list?.entries?.filter { it.selectable && it.id.startsWith("move:") && it.id != "move:${list.newMove?.id?.value}" }
+            ?.map { Choice(it.id, it.label) }
+        return Availability.Available(choices?.let { mapOf("forget" to it) } ?: emptyMap())
+    }
+
+    // endregion
 
     /**
      * FIGHT, then the move (checked by id / name), then the target in doubles. The move is checked against the active
@@ -378,7 +450,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
      * when the teaching can go on (fewer than four moves: [forget] isn't needed and is ignored). A step of
      * `learn_move` and `teach`.
      */
-    internal open fun forgetRefusal(context: PlanContext, mon: PartyMon, forget: MoveRef?): ActionError? {
+    protected open fun forgetRefusal(context: PlanContext, mon: PartyMon, forget: MoveRef?): ActionError? {
         if (mon.moves.size < MAX_MOVES) return null
         // HM moves, by id from the game's machine table (never by name): the moves of HM01..HM08.
         val hms = context.game.data?.let { data -> MachineId.all.filter { it.isHm }.mapNotNull(data::machineMove).toSet() }.orEmpty()
@@ -410,7 +482,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
      * The battle half of `use_item` ([useItem] plays it when a battle is on), not an action of its own: a step a game
      * may override when its battle bag differs, without rewriting the field half.
      */
-    internal open fun useItemInBattle(action: GameAction.UseItem, context: PlanContext): ActionOutcome {
+    protected open fun useItemInBattle(action: GameAction.UseItem, context: PlanContext): ActionOutcome {
         if (action.batch.isNotEmpty()) {
             return ActionOutcome.Failed(ActionError.InvalidParameter("items", "${action.uses.size} items", listOf("one item per turn in battle")))
         }
@@ -467,14 +539,14 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
      * "Restore which move?" lists: the field one (moves + QUIT) and the battle one (moves + CANCEL). A step of
      * `use_item` (both halves).
      */
-    internal open fun isMoveList(screen: Screen): Boolean =
+    protected open fun isMoveList(screen: Screen): Boolean =
         screen is Screen.ListMenu && screen.entries.any { it.id.startsWith("move:") } && screen.entries.all { it.id.startsWith("move:") || it.id.startsWith("option:") || it.id.startsWith("slot:") }
 
     /**
      * Picks [move] on a "Restore which move?" list (typed error listing the moves when it's missing or unknown). A step
      * of `use_item` (both halves).
      */
-    internal open fun chooseMove(context: PlanContext, list: Screen.Selectable, move: MoveRef?): Step<GameState> {
+    protected open fun chooseMove(context: PlanContext, list: Screen.Selectable, move: MoveRef?): Step<GameState> {
         val moves = list.entries.filter { it.id.startsWith("move:") }
         val entry = move?.let { ref ->
             moves.firstOrNull { e -> matchesRef(ref.raw, "move", e.id.removePrefix("move:").toIntOrNull() ?: -1, e.label.substringBefore(" (")) }

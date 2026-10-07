@@ -221,11 +221,11 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
     /** The actions possible now (names only in a compact answer), and those shown but not possible, with why. */
     private fun JsonObjectBuilder.actions(state: GameState, mode: ActionMode, detail: Detail) {
         if (detail == Detail.COMPACT) {
-            put("actions", JsonArray(registry.available(state, mode).map { JsonPrimitive(it.name) }))
+            put("actions", JsonArray(registry.available(state, mode, game).map { JsonPrimitive(it.name) }))
             return
         }
         put("actions", buildJsonArray {
-            registry.available(state, mode).forEach { a ->
+            registry.available(state, mode, game).forEach { a ->
                 add(buildJsonObject {
                     put("type", a.name)
                     if (detail == Detail.FULL) put("description", a.description)
@@ -235,7 +235,7 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
                 })
             }
         })
-        val unavailable = registry.unavailable(state, mode)
+        val unavailable = registry.unavailable(state, mode, game)
         if (unavailable.isNotEmpty()) {
             put("unavailable", JsonArray(unavailable.map { JsonPrimitive("${it.name}: ${it.detail}" + (it.hint?.let { h -> " ($h)" } ?: "")) }))
         }

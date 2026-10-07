@@ -8,42 +8,49 @@ import dev.kotlinds.pokemonclient.state.PartyPurpose
 import dev.kotlinds.pokemonclient.state.Screen
 
 /**
- * The root of every game's recipes: one method per action type, and [perform], the single dispatch from an action
- * to its method.
+ * The root of every game's recipes: one method per action type, the single dispatch from an action to its method, and
+ * the entries the rest of the library reaches them by ([perform], [closeToOverworld], [activateKeyItem]).
  *
- * The recipes of a game are one object ([dev.kotlinds.pokemonclient.PokemonGame.recipes]): a chain of classes, the
- * common recipes ([Recipes]) at the bottom, then a generation's ([dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes]),
- * then a game's own. A game that carries out an action differently overrides that action's method; the action's
- * spec (name, parameters, availability, description: what agents see, [CommonActions]) stays the common one, so the
- * contract never varies per game.
+ * The recipes of a game are one object ([dev.kotlinds.pokemonclient.PokemonGame.recipes], each game its own: there is
+ * no shared instance): a chain of classes, the common recipes ([Recipes]) at the bottom, then a generation's
+ * ([dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes]), then a game's own. A game that carries out an action
+ * differently overrides that action's method; the action's spec (name, parameters, description: what agents see,
+ * [CommonActions]) stays the common one, so the contract never varies per game. When each action can run is a method
+ * of the chain too (`<action>Availability`, see [Recipes]).
  *
  * Safety by construction:
- * - [perform] is an exhaustive `when` over the sealed [GameAction], without `else`: a new action type doesn't
+ * - the dispatch is an exhaustive `when` over the sealed [GameAction], without `else`: a new action type doesn't
  *   compile until every game has a recipe for it;
+ * - the recipes and the shared steps are `protected`: outside the chain they are reached only through the entries of
+ *   the companion ([perform], [closeToOverworld], [activateKeyItem]), which take the context alone and run the
+ *   recipes of the context's own game ([PlanContext.recipes]). No code can combine one game's recipes with another
+ *   game's context: a recipe always runs on the recipes its context's game plays;
  * - a recipe that carries out another action as one of its steps (talking to the nurse for `heal`, typing a
- *   nickname for `throw_ball`...) calls that action's method on the same object (`enterText(...)`, a virtual call),
- *   and the walking engine, which lives beside the chain, calls it on the game's recipes ([PlanContext.recipes]: a
- *   Repel used again on the way); so the game's own recipe is played there too, never the common one behind its
- *   back. This is also why the families of recipes are a chain of classes and never delegate (`by`): in a delegate,
- *   `this` is the delegate, and its nested calls would skip the game's overrides;
+ *   nickname for `throw_ball`...) calls that action's method on the same object (`enterText(...)`, a virtual call:
+ *   the object is the context's game's recipes, since that is the only way in), and the walking engine, which lives
+ *   beside the chain, goes through the entries ([perform]: a Repel used again on the way); so the game's own recipe
+ *   is played there too, never the common one behind its back. This is also why the families of recipes are a chain
+ *   of classes and never delegate (`by`): in a delegate, `this` is the delegate, and its nested calls would skip the
+ *   game's overrides;
  * - the screens many recipes go through (the start menu, the party, the bag, the way back to the field...) are steps
- *   of the chain, `internal open` methods ([openStartMenuEntry], [openParty], [bagItem], [closeToOverworld], and the
- *   families' own), called the same virtual way by the recipes and by the walking engine ([PlanContext.recipes]): a
- *   game whose menu differs overrides that one step, and every recipe going through it plays the game's own way,
- *   none of them copied. There is one method per step, never a static copy of it beside the chain.
+ *   of the chain, `protected open` methods ([openStartMenuEntry], [openParty], [bagItem], [closeToOverworld],
+ *   [activateKeyItem], and the families' own), called the same virtual way by the recipes and by the walking engine
+ *   (through the entries): a game whose menu differs overrides that one step, and every recipe going through it
+ *   plays the game's own way, none of them copied. There is one method per step, never a static copy of it beside
+ *   the chain.
  *
- * Every member is `internal`: the recipes run only through [ActionRegistry.execute] (availability checked first) or
+ * Every entry is `internal`: the recipes run only through [ActionRegistry.execute] (availability checked first) or
  * as a step of another recipe; they are not part of the library's API, and every game lives in this module. The
  * constructor is internal too: no recipes can be made outside it.
  *
- * Recipes are stateless (one instance is shared by every session and thread): what an action needs to remember
- * lives in its local variables or in its [PlanContext]. They are blocking (not `suspend`), like the
+ * Recipes are stateless (one instance per game, shared by its sessions and threads): what an action needs to
+ * remember lives in its local variables or in its [PlanContext]. They are blocking (not `suspend`), like the
  * [dev.kotlinds.pokemonclient.runtime.ActionScope] they drive.
  */
 abstract class RecipeBase internal constructor() {
 
-    /** Carries out [action] with this game's recipe for its type. No availability check (see [ActionRegistry.execute]). */
-    internal fun perform(action: GameAction, context: PlanContext): ActionOutcome = when (action) {
+    /** Carries out [action] with this game's recipe for its type (reached by [perform], on the context's recipes). */
+    private fun dispatch(action: GameAction, context: PlanContext): ActionOutcome = when (action) {
         is GameAction.Press -> press(action, context)
         is GameAction.Touch -> touch(action, context)
         is GameAction.Wait -> wait(action, context)
@@ -93,160 +100,160 @@ abstract class RecipeBase internal constructor() {
     // region Basic: buttons, touch screen, text
 
     /** `press`. */
-    internal abstract fun press(action: GameAction.Press, context: PlanContext): ActionOutcome
+    protected abstract fun press(action: GameAction.Press, context: PlanContext): ActionOutcome
 
     /** `touch`. */
-    internal abstract fun touch(action: GameAction.Touch, context: PlanContext): ActionOutcome
+    protected abstract fun touch(action: GameAction.Touch, context: PlanContext): ActionOutcome
 
     /** `wait`. */
-    internal abstract fun wait(action: GameAction.Wait, context: PlanContext): ActionOutcome
+    protected abstract fun wait(action: GameAction.Wait, context: PlanContext): ActionOutcome
 
     /** `drag`. */
-    internal abstract fun drag(action: GameAction.Drag, context: PlanContext): ActionOutcome
+    protected abstract fun drag(action: GameAction.Drag, context: PlanContext): ActionOutcome
 
     /** `advance_dialogue`. */
-    internal abstract fun advanceDialogue(action: GameAction.AdvanceDialogue, context: PlanContext): ActionOutcome
+    protected abstract fun advanceDialogue(action: GameAction.AdvanceDialogue, context: PlanContext): ActionOutcome
 
     /** `choose`. */
-    internal abstract fun choose(action: GameAction.Choose, context: PlanContext): ActionOutcome
+    protected abstract fun choose(action: GameAction.Choose, context: PlanContext): ActionOutcome
 
     /** `enter_text`. */
-    internal abstract fun enterText(action: GameAction.EnterText, context: PlanContext): ActionOutcome
+    protected abstract fun enterText(action: GameAction.EnterText, context: PlanContext): ActionOutcome
 
     // endregion
 
     // region Battle
 
     /** `attack`. */
-    internal abstract fun attack(action: GameAction.Attack, context: PlanContext): ActionOutcome
+    protected abstract fun attack(action: GameAction.Attack, context: PlanContext): ActionOutcome
 
     /** `switch`. */
-    internal abstract fun switch(action: GameAction.Switch, context: PlanContext): ActionOutcome
+    protected abstract fun switch(action: GameAction.Switch, context: PlanContext): ActionOutcome
 
     /** `keep_battling`. */
-    internal abstract fun keepBattling(action: GameAction.KeepBattling, context: PlanContext): ActionOutcome
+    protected abstract fun keepBattling(action: GameAction.KeepBattling, context: PlanContext): ActionOutcome
 
     /** `run`. */
-    internal abstract fun run(action: GameAction.Run, context: PlanContext): ActionOutcome
+    protected abstract fun run(action: GameAction.Run, context: PlanContext): ActionOutcome
 
     /** `throw_ball`. */
-    internal abstract fun throwBall(action: GameAction.ThrowBall, context: PlanContext): ActionOutcome
+    protected abstract fun throwBall(action: GameAction.ThrowBall, context: PlanContext): ActionOutcome
 
     /** `learn_move`. */
-    internal abstract fun learnMove(action: GameAction.LearnMove, context: PlanContext): ActionOutcome
+    protected abstract fun learnMove(action: GameAction.LearnMove, context: PlanContext): ActionOutcome
 
     // endregion
 
     // region Bag and party
 
     /** `use_item`, in the field or in battle. */
-    internal abstract fun useItem(action: GameAction.UseItem, context: PlanContext): ActionOutcome
+    protected abstract fun useItem(action: GameAction.UseItem, context: PlanContext): ActionOutcome
 
     /** `teach`. */
-    internal abstract fun teach(action: GameAction.Teach, context: PlanContext): ActionOutcome
+    protected abstract fun teach(action: GameAction.Teach, context: PlanContext): ActionOutcome
 
     /** `reorder_party`. */
-    internal abstract fun reorderParty(action: GameAction.ReorderParty, context: PlanContext): ActionOutcome
+    protected abstract fun reorderParty(action: GameAction.ReorderParty, context: PlanContext): ActionOutcome
 
     /** `give_item`. */
-    internal abstract fun giveItem(action: GameAction.GiveItem, context: PlanContext): ActionOutcome
+    protected abstract fun giveItem(action: GameAction.GiveItem, context: PlanContext): ActionOutcome
 
     /** `take_item`. */
-    internal abstract fun takeItem(action: GameAction.TakeItem, context: PlanContext): ActionOutcome
+    protected abstract fun takeItem(action: GameAction.TakeItem, context: PlanContext): ActionOutcome
 
     /** `use_key_item`. */
-    internal abstract fun useKeyItem(action: GameAction.UseKeyItem, context: PlanContext): ActionOutcome
+    protected abstract fun useKeyItem(action: GameAction.UseKeyItem, context: PlanContext): ActionOutcome
 
     /** `register_item`. */
-    internal abstract fun registerItem(action: GameAction.RegisterItem, context: PlanContext): ActionOutcome
+    protected abstract fun registerItem(action: GameAction.RegisterItem, context: PlanContext): ActionOutcome
 
     // endregion
 
     // region Moving
 
     /** `go_to`. */
-    internal abstract fun goTo(action: GameAction.GoTo, context: PlanContext): ActionOutcome
+    protected abstract fun goTo(action: GameAction.GoTo, context: PlanContext): ActionOutcome
 
     /** `interact`. */
-    internal abstract fun interact(action: GameAction.Interact, context: PlanContext): ActionOutcome
+    protected abstract fun interact(action: GameAction.Interact, context: PlanContext): ActionOutcome
 
     /** `step`. */
-    internal abstract fun step(action: GameAction.Step, context: PlanContext): ActionOutcome
+    protected abstract fun step(action: GameAction.Step, context: PlanContext): ActionOutcome
 
     /** `find_encounter`. */
-    internal abstract fun findEncounter(action: GameAction.FindEncounter, context: PlanContext): ActionOutcome
+    protected abstract fun findEncounter(action: GameAction.FindEncounter, context: PlanContext): ActionOutcome
 
     /** `push`. */
-    internal abstract fun push(action: GameAction.Push, context: PlanContext): ActionOutcome
+    protected abstract fun push(action: GameAction.Push, context: PlanContext): ActionOutcome
 
     // endregion
 
     // region Services: Pokémon Center, PC, Poké Mart
 
     /** `heal`. */
-    internal abstract fun heal(action: GameAction.Heal, context: PlanContext): ActionOutcome
+    protected abstract fun heal(action: GameAction.Heal, context: PlanContext): ActionOutcome
 
     /** `pc`. */
-    internal abstract fun pc(action: GameAction.Pc, context: PlanContext): ActionOutcome
+    protected abstract fun pc(action: GameAction.Pc, context: PlanContext): ActionOutcome
 
     /** `deposit`. */
-    internal abstract fun deposit(action: GameAction.Deposit, context: PlanContext): ActionOutcome
+    protected abstract fun deposit(action: GameAction.Deposit, context: PlanContext): ActionOutcome
 
     /** `withdraw`. */
-    internal abstract fun withdraw(action: GameAction.Withdraw, context: PlanContext): ActionOutcome
+    protected abstract fun withdraw(action: GameAction.Withdraw, context: PlanContext): ActionOutcome
 
     /** `release`. */
-    internal abstract fun release(action: GameAction.Release, context: PlanContext): ActionOutcome
+    protected abstract fun release(action: GameAction.Release, context: PlanContext): ActionOutcome
 
     /** `buy`. */
-    internal abstract fun buy(action: GameAction.Buy, context: PlanContext): ActionOutcome
+    protected abstract fun buy(action: GameAction.Buy, context: PlanContext): ActionOutcome
 
     /** `sell`. */
-    internal abstract fun sell(action: GameAction.Sell, context: PlanContext): ActionOutcome
+    protected abstract fun sell(action: GameAction.Sell, context: PlanContext): ActionOutcome
 
     /** `set_quantity`. */
-    internal abstract fun setQuantity(action: GameAction.SetQuantity, context: PlanContext): ActionOutcome
+    protected abstract fun setQuantity(action: GameAction.SetQuantity, context: PlanContext): ActionOutcome
 
     // endregion
 
     // region Field: field moves, menus, Pokégear
 
     /** `fly`. */
-    internal abstract fun fly(action: GameAction.Fly, context: PlanContext): ActionOutcome
+    protected abstract fun fly(action: GameAction.Fly, context: PlanContext): ActionOutcome
 
     /** `fish`. */
-    internal abstract fun fish(action: GameAction.Fish, context: PlanContext): ActionOutcome
+    protected abstract fun fish(action: GameAction.Fish, context: PlanContext): ActionOutcome
 
     /** `use_field_move`. */
-    internal abstract fun useFieldMove(action: GameAction.UseFieldMove, context: PlanContext): ActionOutcome
+    protected abstract fun useFieldMove(action: GameAction.UseFieldMove, context: PlanContext): ActionOutcome
 
     /** `save_game`. */
-    internal abstract fun saveGame(action: GameAction.SaveGame, context: PlanContext): ActionOutcome
+    protected abstract fun saveGame(action: GameAction.SaveGame, context: PlanContext): ActionOutcome
 
     /** `set_options`. */
-    internal abstract fun setOptions(action: GameAction.SetOptions, context: PlanContext): ActionOutcome
+    protected abstract fun setOptions(action: GameAction.SetOptions, context: PlanContext): ActionOutcome
 
     /** `open_menu`. */
-    internal abstract fun openMenu(action: GameAction.OpenMenu, context: PlanContext): ActionOutcome
+    protected abstract fun openMenu(action: GameAction.OpenMenu, context: PlanContext): ActionOutcome
 
     /** `tune_radio`. */
-    internal abstract fun tuneRadio(action: TuneRadio, context: PlanContext): ActionOutcome
+    protected abstract fun tuneRadio(action: TuneRadio, context: PlanContext): ActionOutcome
 
     // endregion
 
     // region System and story
 
     /** `soft_reset`. */
-    internal abstract fun softReset(action: GameAction.SoftReset, context: PlanContext): ActionOutcome
+    protected abstract fun softReset(action: GameAction.SoftReset, context: PlanContext): ActionOutcome
 
     /** `continue_game`. */
-    internal abstract fun continueGame(action: GameAction.ContinueGame, context: PlanContext): ActionOutcome
+    protected abstract fun continueGame(action: GameAction.ContinueGame, context: PlanContext): ActionOutcome
 
     /** `choose_starter`. */
-    internal abstract fun chooseStarter(action: GameAction.ChooseStarter, context: PlanContext): ActionOutcome
+    protected abstract fun chooseStarter(action: GameAction.ChooseStarter, context: PlanContext): ActionOutcome
 
     /** `watch_hall_of_fame`. */
-    internal abstract fun watchHallOfFame(action: GameAction.WatchHallOfFame, context: PlanContext): ActionOutcome
+    protected abstract fun watchHallOfFame(action: GameAction.WatchHallOfFame, context: PlanContext): ActionOutcome
 
     // endregion
 
@@ -255,10 +262,10 @@ abstract class RecipeBase internal constructor() {
     // How the start menu, the party and the bag are reached and left: the steps a game whose menus differ overrides
     // (a start menu read as a list instead of touched...), so every recipe going through them plays the game's own way
     // without being copied. Here, the lowest layer, because recipes of every family (and the walking engine, through
-    // [PlanContext.recipes]) use them.
+    // the entries of the companion) use them.
 
     /** Opens the start menu (X) from the overworld and picks [entryId], or does nothing if already there. */
-    internal open fun openStartMenuEntry(context: PlanContext, entryId: String): Step<GameState> {
+    protected open fun openStartMenuEntry(context: PlanContext, entryId: String): Step<GameState> {
         var state = context.navigator.settle()
         if (state.screen is Screen.Overworld) {
             context.scope.tap(Button.X)
@@ -272,7 +279,7 @@ abstract class RecipeBase internal constructor() {
     }
 
     /** The field party grid (from the overworld, or already open). */
-    internal open fun openParty(context: PlanContext): Step<GameState> {
+    protected open fun openParty(context: PlanContext): Step<GameState> {
         val state = context.navigator.settle()
         if ((state.screen as? Screen.PartyGrid)?.purpose == PartyPurpose.FIELD) return Step.Done(state)
         return openStartMenuEntry(context, "option:pokemon")
@@ -281,7 +288,7 @@ abstract class RecipeBase internal constructor() {
     /**
      * Opens the bag on the pocket holding [item] and turns pages until the item is on screen; returns its entry.
      */
-    internal open fun bagItem(context: PlanContext, item: ItemRef): Step<Entry> {
+    protected open fun bagItem(context: PlanContext, item: ItemRef): Step<Entry> {
         val owned = context.state().bag.orEmpty().flatMap { pocket -> pocket.items.map { pocket.name to it } }
             .firstOrNull { (_, stack) -> matchesRef(item.raw, "item", stack.item.id.value, stack.item.name) }
             ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_ITEM, "There's no ${item.raw} in the bag"))
@@ -309,8 +316,15 @@ abstract class RecipeBase internal constructor() {
         return Step.Failed(ActionError.NotOnScreen(stack.item.name, "the $pocket pocket", bag.entries.map { it.label }))
     }
 
+    /**
+     * Starts using key item [item] from the field (with Y when it is registered there, else bag → the item → USE) and
+     * returns as soon as the game reacts; the value says which way it went. Implemented by [BagPartyRecipes]; declared
+     * here so the walking engine reaches it ([Companion.activateKeyItem]: the bicycle, [BikeRide]).
+     */
+    protected abstract fun activateKeyItem(context: PlanContext, item: ItemRef): Step<String>
+
     /** Presses B until the player can walk again (at most a few times), reading every message on the way. */
-    internal open fun closeToOverworld(context: PlanContext, maxPresses: Int = MAX_CLOSE_PRESSES) {
+    protected open fun closeToOverworld(context: PlanContext, maxPresses: Int = MAX_CLOSE_PRESSES) {
         repeat(maxPresses) {
             val state = context.navigator.settle()
             when (state.screen) {
@@ -328,7 +342,27 @@ abstract class RecipeBase internal constructor() {
 
     // endregion
 
-    private companion object {
-        const val MAX_CLOSE_PRESSES = 8
+    /**
+     * The entries of the recipes for the rest of the library (the registry, the walking engine): each takes the
+     * context alone and plays the recipes of the context's game ([PlanContext.recipes]), so a recipe can never run
+     * on another game's recipes than its context's.
+     */
+    internal companion object {
+        private const val MAX_CLOSE_PRESSES = 8
+
+        /**
+         * Carries out [action] with the recipe of [context]'s game for its type. No availability check: that is
+         * [ActionRegistry.execute]'s (every host), or the recipe's caller's (a step of the walking engine).
+         */
+        fun perform(action: GameAction, context: PlanContext): ActionOutcome = context.chain.dispatch(action, context)
+
+        /** [RecipeBase.closeToOverworld] of [context]'s game. */
+        fun closeToOverworld(context: PlanContext) = context.chain.closeToOverworld(context)
+
+        /** [RecipeBase.activateKeyItem] of [context]'s game. */
+        fun activateKeyItem(context: PlanContext, item: ItemRef): Step<String> = context.chain.activateKeyItem(context, item)
+
+        /** [PlanContext.recipes] seen as the root of the chain, where the entries' methods are declared. */
+        private val PlanContext.chain: RecipeBase get() = recipes
     }
 }

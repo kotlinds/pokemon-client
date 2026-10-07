@@ -414,7 +414,7 @@ private class Bench(
             "reveal" -> options = options.copy(knowledge = if (arg != "off") KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH else KnowledgeLevel.POKEDEX)
             "hide" -> options = options.copy(hideDestinations = arg != "off")
             "view" -> agentView().forEach { (k, v) -> println("  $k: $v") }
-            "actions" -> registry.available(game.state(scope.memory()), options.mode).forEach { println("  $it") }
+            "actions" -> registry.available(game.state(scope.memory()), options.mode, game).forEach { println("  $it") }
             "pausemusic" -> pauseMusic.check(arg)
             "pausemusicstats" -> pauseMusic.stats(arg)
             "pausemusicload" -> pauseMusic.load(arg)

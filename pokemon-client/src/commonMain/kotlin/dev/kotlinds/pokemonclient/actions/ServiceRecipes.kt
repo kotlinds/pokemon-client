@@ -24,9 +24,77 @@ import dev.kotlinds.pokemonclient.state.ShopItem
  * `release`) and the Poké Mart (`buy`, `sell`, `set_quantity`). A family of the chain of [RecipeBase], above
  * [MoveRecipes]. Whoever serves is talked to with the game's own `interact` (a virtual call: a game's override is
  * played there too); the counters are reached through steps a game may override ([openStorage], [openShop],
- * [openSellBag]). Where each action can start from is the common contract ([ActionConditions]).
+ * [openSellBag]). Where each action can start from is the availability methods below (built on [ActionConditions]).
  */
 abstract class ServiceRecipes internal constructor() : MoveRecipes() {
+
+    // region Availability: when each action of this family can run (read by the listing and the execution alike)
+
+    /** `heal`: walking freely in a Pokémon Center (a nurse on the map). */
+    internal open fun healAvailability(state: GameState): Availability = when {
+        !ActionConditions.canWalk(state, hasWorld = true) -> Availability.Hidden
+        state.field?.objects?.any { it.role == PersonRole.NURSE } != true -> Availability.Hidden
+        else -> Availability.Available()
+    }
+
+    /** `deposit`: walking freely where a PC may be, with two Pokémon or more. */
+    internal open fun depositAvailability(state: GameState): Availability =
+        if (ActionConditions.canWalk(state, hasWorld = true) && state.field?.hasPc != false && state.party.size > 1) Availability.Available(mapOf("pokemon" to ActionConditions.monChoices(state)))
+        else Availability.Hidden
+
+    /** `withdraw`: walking freely where a PC may be, with room in the party. */
+    internal open fun withdrawAvailability(state: GameState): Availability = when {
+        !ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false -> Availability.Hidden
+        state.party.size >= 6 -> Availability.Unavailable(UnavailableReason.PARTY_FULL, "The party is full", "deposit one first, or swap them in one `pc` session")
+        else -> Availability.Available(state.storage?.let { mapOf("pokemon" to ActionConditions.storedChoices(it)) } ?: emptyMap())
+    }
+
+    /** `pc`: walking freely where a PC may be. */
+    internal open fun pcAvailability(state: GameState): Availability {
+        if (!ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return Availability.Hidden
+        return Availability.Available(buildMap {
+            put("party", ActionConditions.monChoices(state))
+            state.storage?.let { put("stored", ActionConditions.storedChoices(it)) }
+        })
+    }
+
+    /** `release`: walking freely where a PC may be; accepted, never offered (dangerous). */
+    internal open fun releaseAvailability(state: GameState): Availability {
+        if (!ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return Availability.Hidden
+        return Availability.Available(mapOf("pokemon" to (state.party.map { Choice(it.id.toString(), "${it.displayName} Lv${it.level} (party)") } +
+            state.storage?.boxes.orEmpty().flatMap { box -> box.mons.map { Choice(it.id.toString(), "${it.displayName} (${box.name})") } })), listed = false)
+    }
+
+    /** `buy`: at a Poké Mart ([ActionConditions.shopStage]), what each clerk sells. */
+    internal open fun buyAvailability(state: GameState): Availability {
+        if (ActionConditions.shopStage(state) == null) return Availability.Hidden
+        // Clerk by clerk (never one list mixing two counters): an item sold by several says by whom.
+        val stock = ActionConditions.shopStock(state)
+        // A line sold out is shown by the list but can't be bought: not offered.
+        val sellers = stock.flatMap { s -> s.items.filter { !it.soldOut }.map { Triple(it, s.clerk, s.currency) } }.groupBy({ it.first.item.id }, { it })
+        return Availability.Available(if (sellers.isEmpty()) emptyMap() else mapOf("item" to sellers.values.map { lines ->
+            val (item, _, currency) = lines.first()
+            val by = lines.mapNotNull { it.second?.id }.takeIf { stock.size > 1 && it.isNotEmpty() }?.joinToString(prefix = " (", postfix = ")") ?: ""
+            Choice("item:${item.item.id.value}", item.item.name + (item.price?.let { p -> " " + currency.format(p.toLong()) } ?: "") + by)
+        }))
+    }
+
+    /** `sell`: at a Poké Mart (walking there, the clerk's menu or the selling bag), the bag's items but the key items. */
+    internal open fun sellAvailability(state: GameState): Availability {
+        val atShop = ActionConditions.shopStage(state).let { it == ShopStage.OVERWORLD || it == ShopStage.CLERK_MENU } ||
+            (state.screen is Screen.Bag && state.field != null && ActionConditions.shopStage(state.copy(screen = Screen.Overworld(awaiting = Awaiting.INPUT))) != null)
+        if (!atShop) return Availability.Hidden
+        return Availability.Available(mapOf("item" to state.bag.orEmpty().filter { it.name != "key_items" }.flatMap { it.items }
+            .map { Choice("item:${it.item.id.value}", "${it.item.name} x${it.quantity}") }))
+    }
+
+    /** `set_quantity`: on a quantity screen. */
+    internal open fun setQuantityAvailability(state: GameState): Availability {
+        val screen = state.screen as? Screen.Quantity ?: return Availability.Hidden
+        return Availability.Available(mapOf("value" to listOf(Choice("${screen.min}..${screen.max}", "now ${screen.value}"))))
+    }
+
+    // endregion
 
     // region Pokémon Center
 
@@ -356,7 +424,7 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     // region Menus
 
     /** Walks to the PC, boots it and opens the storage menu. */
-    internal open fun openStorage(context: PlanContext): Step<GameState> {
+    protected open fun openStorage(context: PlanContext): Step<GameState> {
         when (val booted = interact(GameAction.Interact(MovePlans.PC), context)) {
             is ActionOutcome.Failed -> return Step.Failed(booted.error)
             is ActionOutcome.Done -> Unit
@@ -667,7 +735,7 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     }
 
     /** Talks to the clerk (unless the clerk's menu is open) and picks SELL, up to the bag the game opens for selling. */
-    internal open fun openSellBag(context: PlanContext): Step<GameState> {
+    protected open fun openSellBag(context: PlanContext): Step<GameState> {
         var state = context.navigator.settle()
         if (state.screen is Screen.Bag) return Step.Done(state)
         if (ActionConditions.shopStage(state) == ShopStage.OVERWORLD) {
@@ -697,7 +765,7 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     }
 
     /** From wherever [ActionConditions.shopStage] says, to the shop list; from the field, talking to [chosen] (else the nearest clerk). */
-    internal open fun openShop(context: PlanContext, chosen: FieldObject? = null): Step<GameState> {
+    protected open fun openShop(context: PlanContext, chosen: FieldObject? = null): Step<GameState> {
         var state = context.navigator.settle()
         if (ActionConditions.shopStage(state) == ShopStage.QUANTITY) {
             // B on the quantity goes back to the list.

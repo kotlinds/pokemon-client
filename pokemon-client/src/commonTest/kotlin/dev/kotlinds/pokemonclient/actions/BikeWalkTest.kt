@@ -41,6 +41,7 @@ private class BikeRoad(var x: Int) : PokemonGame {
 
     override val name = "Bike road"
     override val inputProbe = InputProbe { held }
+    override val recipes = Recipes()
     override fun state(memory: Memory): GameState {
         val moving = direction != null
         val field = FieldState(1, MapName(1, map = "Road"), x, 0, 0, Direction.EAST, MovementMode.BIKE, moving = moving)

@@ -53,8 +53,11 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
     /** The bicycle's item id (none by default). */
     override var bicycleItem: Int? = null
 
-    /** How the game carries out the actions ([PokemonGame.recipes]): the common recipes by default. */
-    override var recipes: Recipes = Recipes.COMMON
+    /**
+     * How the game carries out the actions ([PokemonGame.recipes]): this game's own instance of the common recipes by
+     * default (never one shared with another game); a test replaces it with a subclass overriding what it checks.
+     */
+    override var recipes: Recipes = Recipes()
 
     /** The game's data, when a test needs some (see [StubGameData]). */
     override var data: GameData? = null
@@ -108,3 +111,14 @@ val hgssFieldMoves: (FieldMoveKind) -> FieldMoveRule? = { Gen4FieldMoves.rule(it
 /** [state] with its field moves under [rules], as a real game reads it ([GameState.fieldMoves]). */
 fun withFieldMoves(state: GameState, rules: (FieldMoveKind) -> FieldMoveRule? = hgssFieldMoves): GameState =
     state.copy(fieldMoves = FieldMoves.access(state, rules))
+
+/**
+ * The common recipes with the shared bag step ([RecipeBase.bagItem], protected) opened to a test, played on the game
+ * they are given to ([PokemonGame.recipes]): [bagItemOf] refuses a context of another game.
+ */
+internal class BagStepRecipes : Recipes() {
+    fun bagItemOf(context: PlanContext, item: ItemRef): Step<dev.kotlinds.pokemonclient.state.Entry> {
+        check(context.recipes === this) { "a context of another game" }
+        return bagItem(context, item)
+    }
+}

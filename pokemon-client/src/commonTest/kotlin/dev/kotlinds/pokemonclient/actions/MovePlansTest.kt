@@ -254,7 +254,7 @@ class MovePlansTest {
     @Test
     fun goToWalksAroundWallsToTheTile() {
         val game = WalkingGame(listOf(".....", ".###.", "....."), x = 0, y = 0)
-        val outcome = Recipes.COMMON.goTo(GameAction.GoTo(4, 2, null), game.context())
+        val outcome = RecipeBase.perform(GameAction.GoTo(4, 2, null), game.context())
         assertIs<ActionOutcome.Done>(outcome)
         assertEquals(4 to 2, game.x to game.y)
     }
@@ -266,7 +266,7 @@ class MovePlansTest {
         val game = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
         game.facing = Direction.EAST
         val before = game.console.frame
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(4, 0, null), game.context()))
         assertEquals(listOf(1 to 0, 2 to 0, 3 to 0, 4 to 0), game.visited.drop(1))
         assertEquals(listOf(false, false, true, true), game.ran)
         // One hold: B pressed or let go tile by tile as the step before starts, never a stop at the edge of the grass
@@ -275,18 +275,18 @@ class MovePlansTest {
         assertTrue(frames < 4 * GridGame.STEP_FRAMES + 30, "took $frames frames")
         // step too, one straight line whose pace changes on the way.
         val stepped = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 4), stepped.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Step(Direction.EAST, 4), stepped.context()))
         assertEquals(listOf(false, false, true, true), stepped.ran)
         // Asked to run there too: B all along.
         val running = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null, MoveOptions(runInEncounterAreas = true)), running.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(4, 0, null, MoveOptions(runInEncounterAreas = true)), running.context()))
         assertEquals(listOf(true, true, true, true), running.ran)
         // Grass where nothing appears (no encounter table) is run through; run = false walks everywhere.
         val empty = WalkingGame(rows, x = 0, y = 0)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), empty.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(4, 0, null), empty.context()))
         assertEquals(listOf(true, true, true, true), empty.ran)
         val walking = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null, MoveOptions(run = false)), walking.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(4, 0, null, MoveOptions(run = false)), walking.context()))
         assertEquals(listOf(false, false, false, false), walking.ran)
     }
 
@@ -297,18 +297,18 @@ class MovePlansTest {
         val rows = listOf(".\"\"\"\".")
         val game = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1, repelSteps = 2)
         game.facing = Direction.EAST
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(5, 0, null), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(5, 0, null), game.context()))
         assertEquals(listOf(true, true, false, false, true), game.ran)
         // step counts the same way.
         val stepped = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1, repelSteps = 2)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 5), stepped.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Step(Direction.EAST, 5), stepped.context()))
         assertEquals(listOf(true, true, false, false, true), stepped.ran)
         // A Repel lasting the whole way: run all along; without Repel, the grass is walked.
         val lasting = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1, repelSteps = 10)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(5, 0, null), lasting.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(5, 0, null), lasting.context()))
         assertEquals(listOf(true, true, true, true, true), lasting.ran)
         val none = WalkingGame(rows, x = 0, y = 0, landEncounters = 0.1)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(5, 0, null), none.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(5, 0, null), none.context()))
         assertEquals(listOf(false, false, false, false, true), none.ran)
     }
 
@@ -328,7 +328,7 @@ class MovePlansTest {
     fun aRefusedStepIsLearnedAndTheRouteComputedAgain() {
         // The map says (2,0) is free, the game refuses it: the walker goes around through the bottom row.
         val game = WalkingGame(listOf(".....", "....."), x = 0, y = 0, invisibleWalls = setOf(2 to 0))
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(4, 0, null), game.context()))
         assertEquals(4 to 0, game.x to game.y)
         assertTrue((2 to 0) !in game.visited)
     }
@@ -341,7 +341,7 @@ class MovePlansTest {
     fun aWalkGivingUpTellsWhichStepsWereRefusedAndWhy() {
         // A corridor whose only way is refused by the game although the map allows it.
         val game = WalkingGame(listOf("....."), x = 0, y = 0, invisibleWalls = setOf(2 to 0))
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(4, 0, null), game.context()))
         val detail = failed.error.message
         assertTrue("the game refused 1 step(s): east from 1,0 (nothing on the map explains it at 2,0" in detail, detail)
     }
@@ -351,27 +351,27 @@ class MovePlansTest {
         // Someone on the next tile, then a tile on another level (a raised shore: height 2 against the floor's 0).
         val follower = FieldObject("person:9", "Pikachu", FieldObjectKind.FOLLOWER, 1, 0, Direction.WEST)
         val blocked = WalkingGame(listOf("...."), x = 0, y = 0, invisibleWalls = setOf(1 to 0), people = listOf(follower.copy(kind = FieldObjectKind.PERSON, label = "boy")))
-        val person = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 2), blocked.context())).error.message
+        val person = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 2), blocked.context())).error.message
         assertTrue("blocked after 0 tile(s) at 0,0: can't go east from there (person:9 (boy) stands on 1,0)" in person, person)
         val withFollower = WalkingGame(listOf("...."), x = 0, y = 0, invisibleWalls = setOf(1 to 0), people = listOf(follower))
-        val pet = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 2), withFollower.context())).error.message
+        val pet = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 2), withFollower.context())).error.message
         assertTrue("your Pokémon following you stands on 1,0" in pet, pet)
         val cliff = WalkingGame(listOf(".www"), x = 0, y = 0, invisibleWalls = setOf(1 to 0))
-        val level = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 1), cliff.context())).error.message
+        val level = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 1), cliff.context())).error.message
         assertTrue("1,0 is on another level (height 6 there, 0 here" in level, level)
     }
 
     @Test
     fun aWildBattleInterruptsTheWalk() {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, battleTile = 2 to 0)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(4, 0, null), game.context()))
         assertEquals(InterruptionCause.WILD_BATTLE, assertIs<ActionError.Interrupted>(failed.error).by)
     }
 
     @Test
     fun aTrainerSeeingThePlayerInterruptsTheWalkWithTrainerSight() {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, sightTile = 2 to 0)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(4, 0, null), game.context()))
         assertEquals(InterruptionCause.TRAINER_SIGHT, assertIs<ActionError.Interrupted>(failed.error).by)
     }
 
@@ -380,7 +380,7 @@ class MovePlansTest {
         // The "!" keeps the overworld on screen while the direction is still held: the walk stops there (no refused
         // step, no new plan) and tells the tiles really walked (NOTES: "after: 0 step(s)" after surfing ten tiles).
         val game = WalkingGame(listOf(".........."), x = 0, y = 0, sightTile = 6 to 0, approachFrames = 30)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(9, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(9, 0, null), game.context()))
         val error = assertIs<ActionError.Interrupted>(failed.error)
         assertEquals(InterruptionCause.TRAINER_SIGHT, error.by)
         assertTrue(error.performed.startsWith("6 step(s)"), error.performed)
@@ -391,7 +391,7 @@ class MovePlansTest {
         val bert = FieldObject("person:4", "Bird Keeper Bert", FieldObjectKind.PERSON, 9, 0, Direction.WEST,
             trainer = FieldTrainer(583, "Bird Keeper", "Bert", defeated = false, sightRange = 3))
         val game = WalkingGame(listOf(".........."), x = 0, y = 0, people = listOf(bert), sightTile = 6 to 0, approachFrames = 30, spotterId = 583)
-        val outcome = Recipes.COMMON.interact(GameAction.Interact("person:4"), game.context())
+        val outcome = RecipeBase.perform(GameAction.Interact("person:4"), game.context())
         val detail = assertIs<ActionOutcome.Done>(outcome).detail.orEmpty()
         assertTrue("the battle you asked for" in detail && "6 step(s)" in detail, detail)
     }
@@ -408,7 +408,7 @@ class MovePlansTest {
         val game = WalkingGame(listOf("..", ".#", ".."), x = 0, y = 2, people = listOf(joey), approachFrames = 30, spotterId = 583,
             sightOnTurn = (0 to 0) to Direction.EAST)
         game.facing = Direction.NORTH
-        val detail = assertIs<ActionOutcome.Done>(Recipes.COMMON.interact(GameAction.Interact("person:4"), game.context())).detail.orEmpty()
+        val detail = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Interact("person:4"), game.context())).detail.orEmpty()
         assertTrue("the battle you asked for" in detail && "2 step(s)" in detail, "$detail at ${game.x},${game.y}")
     }
 
@@ -447,7 +447,7 @@ class MovePlansTest {
         val bert = FieldObject("person:4", "Bird Keeper Bert", FieldObjectKind.PERSON, 9, 0, Direction.WEST,
             trainer = FieldTrainer(583, "Bird Keeper", "Bert", defeated = false, sightRange = 3))
         val game = WalkingGame(listOf(".........."), x = 0, y = 0, people = listOf(bert), sightTile = 6 to 0, approachFrames = 30, spotterId = 584)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.interact(GameAction.Interact("person:4"), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Interact("person:4"), game.context()))
         assertEquals(InterruptionCause.TRAINER_SIGHT, assertIs<ActionError.Interrupted>(failed.error).by)
     }
 
@@ -457,7 +457,7 @@ class MovePlansTest {
         // nothing, from the raised one (4,0) it works, although it is farther.
         val fisherman = FieldObject("person:1", "fisherman", FieldObjectKind.PERSON, 3, 0, Direction.WEST, height = 2)
         val game = WalkingGame(listOf(",,,^^", ",,,,^"), x = 0, y = 0, people = listOf(fisherman))
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.interact(GameAction.Interact("person:1"), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Interact("person:1"), game.context()))
         assertEquals(4 to 0, game.x to game.y)
     }
 
@@ -466,7 +466,7 @@ class MovePlansTest {
         val nurse = FieldObject("person:0", "nurse", FieldObjectKind.PERSON, 3, 0, Direction.SOUTH)
         val game = WalkingGame(listOf("....", "...."), x = 0, y = 1, people = listOf(nurse))
         // Nothing happens on A in this fake: facing the person, that's "nothing to say", not a failure to get there.
-        val outcome = Recipes.COMMON.interact(GameAction.Interact("person:0"), game.context())
+        val outcome = RecipeBase.perform(GameAction.Interact("person:0"), game.context())
         assertTrue("nothing to say" in assertIs<ActionOutcome.Done>(outcome).detail.orEmpty(), outcome.toString())
         assertTrue(game.x to game.y in setOf(2 to 0, 3 to 1), "next to the person, not on it: ${game.x},${game.y}")
     }
@@ -480,7 +480,7 @@ class MovePlansTest {
         val nurse = FieldObject("person:0", "nurse", FieldObjectKind.PERSON, 3, 0, Direction.SOUTH)
         // The straight way ends on 3,1 facing east; the player must turn north there, which this game refuses.
         val game = WalkingGame(listOf("....", "...."), x = 0, y = 1, people = listOf(nurse), frozenTile = 3 to 1)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.interact(GameAction.Interact("person:0"), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Interact("person:0"), game.context()))
         val error = assertIs<ActionError.VerificationFailed>(failed.error)
         assertEquals("north", error.expected)
         assertEquals("east", error.actual)
@@ -492,7 +492,7 @@ class MovePlansTest {
     fun unknownTargetsListTheKnownOnes() {
         val nurse = FieldObject("person:0", "nurse", FieldObjectKind.PERSON, 3, 0, Direction.SOUTH)
         val game = WalkingGame(listOf("...."), x = 0, y = 0, people = listOf(nurse))
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "person:9"), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(null, null, "person:9"), game.context()))
         assertEquals(listOf("person:0", "frontier"), assertIs<ActionError.InvalidParameter>(failed.error).allowed)
     }
 
@@ -500,7 +500,7 @@ class MovePlansTest {
     fun findEncounterWalksToTheGrassAndPacesUntilABattle() {
         val game = WalkingGame(listOf(".\"\""), x = 0, y = 0, battleTile = 1 to 0, landEncounters = 0.1)
         // The battle starts on the first grass tile: that's the success of this action.
-        assertEquals("wild battle", assertIs<ActionOutcome.Done>(Recipes.COMMON.findEncounter(GameAction.FindEncounter, game.context())).detail)
+        assertEquals("wild battle", assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.FindEncounter, game.context())).detail)
     }
 
     /** NOTES (map randomizer run): "find_encounter doesn't work in caves (no way to tall grass)". */
@@ -508,7 +508,7 @@ class MovePlansTest {
     fun findEncounterPacesOnACaveFloor() {
         // No grass at all: the cave floor (2,0) is where wild Pokémon appear; the battle starts on stepping back onto it.
         val game = WalkingGame(listOf("..c."), x = 0, y = 0, battleTile = 2 to 0, landEncounters = 0.1)
-        assertEquals("wild battle", assertIs<ActionOutcome.Done>(Recipes.COMMON.findEncounter(GameAction.FindEncounter, game.context())).detail)
+        assertEquals("wild battle", assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.FindEncounter, game.context())).detail)
     }
 
     @Test
@@ -516,7 +516,7 @@ class MovePlansTest {
         // One grass tile: pacing steps off it and back onto it (each entry rolls).
         val game = WalkingGame(listOf("\"."), x = 1, y = 0, landEncounters = 0.1)
         val walk = game.visited.size
-        assertIs<ActionOutcome.Failed>(Recipes.COMMON.findEncounter(GameAction.FindEncounter, game.context()))
+        assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.FindEncounter, game.context()))
         assertTrue(game.visited.drop(walk).count { it == 0 to 0 } > 10, "paced onto the grass tile")
     }
 
@@ -524,7 +524,7 @@ class MovePlansTest {
     fun findEncounterSaysWhenTheMapHasNoWildPokemon() {
         // Grass, but the map's tables have nobody for it: nothing to pace for.
         val game = WalkingGame(listOf(".\"\""), x = 0, y = 0)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.findEncounter(GameAction.FindEncounter, game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.FindEncounter, game.context()))
         assertTrue("no tall grass or cave floor with wild Pokémon" in assertIs<ActionError.Unavailable>(failed.error).detail, failed.toString())
     }
 
@@ -535,7 +535,7 @@ class MovePlansTest {
     @Test
     fun findEncounterUsesTheTileKindsWhenTheTablesAreUnknown() {
         val game = WalkingGame(listOf(".\"\""), x = 0, y = 0, battleTile = 1 to 0, encounterTables = dev.kotlinds.pokemonclient.world.EncounterTables.UNKNOWN)
-        assertEquals("wild battle", assertIs<ActionOutcome.Done>(Recipes.COMMON.findEncounter(GameAction.FindEncounter, game.context())).detail)
+        assertEquals("wild battle", assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.FindEncounter, game.context())).detail)
     }
 
     @Test
@@ -545,7 +545,7 @@ class MovePlansTest {
         val game = WalkingGame(listOf("............."), x = 0, y = 0)
         game.facing = Direction.EAST
         val before = game.console.frame
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(12, 0, null), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(12, 0, null), game.context()))
         assertEquals(12 to 0, game.x to game.y)
         val frames = game.console.frame - before
         assertTrue(frames < 12 * GridGame.STEP_FRAMES + 30, "took $frames frames")
@@ -555,7 +555,7 @@ class MovePlansTest {
     @Test
     fun aTurnStartsANewSegmentAndTheWalkEndsOnTheTarget() {
         val game = WalkingGame(listOf(".....", "....."), x = 0, y = 0)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 1, null), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(4, 1, null), game.context()))
         assertEquals(4 to 1, game.x to game.y)
         assertEquals(5, game.visited.size - 1, "no tile walked twice: ${game.visited}")
     }
@@ -563,7 +563,7 @@ class MovePlansTest {
     @Test
     fun waterWithoutSurfSaysWhereToUseItFromAndWhatIsMissing() {
         val game = WalkingGame(listOf("..~~.."), x = 0, y = 0)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(5, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(5, 0, null), game.context()))
         val hint = assertIs<ActionError.Unavailable>(failed.error).hint.orEmpty()
         assertTrue("from 1,0 facing east" in hint, hint)
         assertTrue("no Pokémon" in hint, hint)
@@ -578,7 +578,7 @@ class MovePlansTest {
     fun byDefaultAWalkStopsWhereTheRepelWoreOffAndSaysWhatElseItCanDo() {
         // Nathan: like the end of a battle, the agent decides (NOTES, Codex ×8: "Interrupted by script" for it).
         val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(goTo(4), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(goTo(4), game.context()))
         val error = assertIs<ActionError.Interrupted>(failed.error)
         assertEquals(InterruptionCause.REPEL_ENDED, error.by)
         assertEquals(2 to 0, game.x to game.y)
@@ -590,7 +590,7 @@ class MovePlansTest {
     @Test
     fun onRepelEndContinueClosesTheMessageAndWalksOn() {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1)
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(goTo(4, RepelEnd.CONTINUE), game.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(goTo(4, RepelEnd.CONTINUE), game.context()))
         assertEquals(4 to 0, game.x to game.y)
         assertEquals(1, game.superRepels)
         assertTrue("the Repel wore off at 2,0 (message closed), walked on" in done.detail.orEmpty(), done.detail)
@@ -599,7 +599,7 @@ class MovePlansTest {
     @Test
     fun onRepelEndReapplyUsesARepelFromTheBagThenWalksOn() {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 2)
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(goTo(4, RepelEnd.REAPPLY), game.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(goTo(4, RepelEnd.REAPPLY), game.context()))
         assertEquals(4 to 0, game.x to game.y)
         assertEquals(1, game.superRepels)
         assertEquals(200, game.repelNow)
@@ -608,7 +608,7 @@ class MovePlansTest {
 
     /**
      * The Repel is used again with the game's own `use_item` ([dev.kotlinds.pokemonclient.PokemonGame.recipes]): the
-     * walk carries it out as one of its steps (on [PlanContext.recipes]), never the common recipe behind the game's back.
+     * walk carries it out as one of its steps ([RecipeBase.perform], on the context's game), never the common recipe behind the game's back.
      */
     @Test
     fun onRepelEndReapplyPlaysTheGamesOwnUseItem() {
@@ -620,7 +620,7 @@ class MovePlansTest {
                 return super.useItem(action, context)
             }
         }
-        assertIs<ActionOutcome.Done>(game.recipes.goTo(goTo(4, RepelEnd.REAPPLY), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(goTo(4, RepelEnd.REAPPLY), game.context()))
         assertEquals(listOf("item:76"), used)
         assertEquals(4 to 0, game.x to game.y)
         assertEquals(1, game.superRepels)
@@ -629,7 +629,7 @@ class MovePlansTest {
     @Test
     fun onRepelEndReapplyWithNoRepelLeftStopsThere() {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(goTo(4, RepelEnd.REAPPLY), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(goTo(4, RepelEnd.REAPPLY), game.context()))
         val error = assertIs<ActionError.Interrupted>(failed.error)
         assertEquals(InterruptionCause.REPEL_ENDED, error.by)
         assertTrue("no Repel left in the bag" in error.performed, error.performed)
@@ -640,13 +640,13 @@ class MovePlansTest {
     fun onRepelEndAutoReappliesOnlyWhenWildPokemonLieAhead() {
         // Grass ahead: a Repel used, the walk goes on.
         val grass = WalkingGame(listOf("..\"\"\""), x = 0, y = 0, messageTile = 1 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1, landEncounters = 0.1)
-        val used = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(goTo(4, RepelEnd.AUTO), grass.context()))
+        val used = assertIs<ActionOutcome.Done>(RecipeBase.perform(goTo(4, RepelEnd.AUTO), grass.context()))
         assertEquals(4 to 0, grass.x to grass.y)
         assertEquals(0, grass.superRepels)
         assertTrue("used a Super Repel" in used.detail.orEmpty(), used.detail)
         // Nothing appears on the rest of the way: walked on, the Repel kept.
         val floor = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 1 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1, landEncounters = 0.1)
-        val kept = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(goTo(4, RepelEnd.AUTO), floor.context()))
+        val kept = assertIs<ActionOutcome.Done>(RecipeBase.perform(goTo(4, RepelEnd.AUTO), floor.context()))
         assertEquals(4 to 0, floor.x to floor.y)
         assertEquals(1, floor.superRepels)
         assertTrue("no wild Pokémon on the rest of the way" in kept.detail.orEmpty(), kept.detail)
@@ -657,13 +657,13 @@ class MovePlansTest {
         // The same message without the Repel's script: a scene, never pressed through, never a Repel used.
         for (mode in RepelEnd.entries) {
             val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageBusy = 4, superRepels = 1)
-            val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(goTo(4, mode), game.context()))
+            val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(goTo(4, mode), game.context()))
             assertEquals(InterruptionCause.SCRIPT, assertIs<ActionError.Interrupted>(failed.error).by, mode.wire)
             assertEquals(2 to 0, game.x to game.y)
             assertEquals(0, game.messagePresses)
             assertEquals(1, game.superRepels)
             val stepped = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageBusy = 4, superRepels = 1)
-            val stopped = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = mode)), stepped.context()))
+            val stopped = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = mode)), stepped.context()))
             assertEquals(InterruptionCause.SCRIPT, assertIs<ActionError.Interrupted>(stopped.error).by, mode.wire)
             assertEquals(0, stepped.messagePresses)
         }
@@ -672,16 +672,16 @@ class MovePlansTest {
     @Test
     fun stepStopsWhereTheRepelWoreOffByDefaultOrWalksTheRestOfItsLine() {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 4), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 4), game.context()))
         assertEquals(InterruptionCause.REPEL_ENDED, assertIs<ActionError.Interrupted>(failed.error).by)
         assertEquals(2 to 0, game.x to game.y)
         val walking = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4)
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = RepelEnd.CONTINUE)), walking.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = RepelEnd.CONTINUE)), walking.context()))
         assertEquals(4 to 0, walking.x to walking.y)
         assertEquals(1, walking.messagePresses)
         assertTrue("the Repel wore off at 2,0" in done.detail.orEmpty(), done.detail)
         val reapplying = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1)
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = RepelEnd.REAPPLY)), reapplying.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = RepelEnd.REAPPLY)), reapplying.context()))
         assertEquals(4 to 0, reapplying.x to reapplying.y)
         assertEquals(0, reapplying.superRepels)
     }
@@ -691,12 +691,12 @@ class MovePlansTest {
         // NOTES (Codex, Elm's lab): "blocked after 4 tile(s) at 4,11" while the aide talked. The field reads as free
         // for a while after the player stops (the D-pad ignored), then the scene shows: an interruption.
         val game = WalkingGame(listOf("......."), x = 0, y = 0, messageTile = 2 to 0, messageQuiet = 30, messageBusy = 20)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 4), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 4), game.context()))
         assertEquals(InterruptionCause.SCRIPT, assertIs<ActionError.Interrupted>(failed.error).by)
         assertEquals(0, game.messagePresses)
         // A wall stays a wall: blocked, with where.
         val wall = WalkingGame(listOf("...#..."), x = 0, y = 0)
-        val blocked = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 4), wall.context()))
+        val blocked = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 4), wall.context()))
         assertTrue("blocked after 2 tile(s) at 2,0" in assertIs<ActionError.Unavailable>(blocked.error).detail, blocked.error.toString())
     }
 
@@ -704,9 +704,9 @@ class MovePlansTest {
     fun stepWalksStraightAndSaysWhereItWasBlocked() {
         val game = WalkingGame(listOf("...#."), x = 0, y = 0)
         // Facing south: the step turns east by itself and walks both tiles.
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 2), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Step(Direction.EAST, 2), game.context()))
         assertEquals(2 to 0, game.x to game.y)
-        val blocked = assertIs<ActionOutcome.Failed>(Recipes.COMMON.step(GameAction.Step(Direction.EAST, 2), game.context()))
+        val blocked = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Step(Direction.EAST, 2), game.context()))
         assertTrue("at 2,0" in assertIs<ActionError.Unavailable>(blocked.error).detail, blocked.error.toString())
     }
 }

@@ -39,6 +39,13 @@ data class GameState(
     /** What the start menu offers yet (the story unlocks it bit by bit), null when unknown. */
     val startMenu: Set<StartMenuFeature>? = null,
     /**
+     * Whether this game has a Pokégear (the phone, map and radio of HeartGold / SoulSilver): false for a game without
+     * one (Platinum has a Pokétch instead), whose Pokégear actions (`tune_radio`) are then refused as
+     * NOT_SUPPORTED_BY_GAME; null when unknown (a state built without its game: taken as present). Which cards it has
+     * is [PlayerInfo.pokegearCards].
+     */
+    val pokegear: Boolean? = null,
+    /**
      * The field moves of the game ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]) as the party and the badges
      * allow them now ([dev.kotlinds.pokemonclient.world.FieldMoves.access]): what the action list needs (Fly) without
      * the game at hand, and what the walks use. Every game fills it in its `state()` (every kind present, those it

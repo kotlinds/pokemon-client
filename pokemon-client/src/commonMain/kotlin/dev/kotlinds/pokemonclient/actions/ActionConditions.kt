@@ -16,13 +16,16 @@ import dev.kotlinds.pokemonclient.state.ShopCurrency
 import dev.kotlinds.pokemonclient.state.ShopItem
 import dev.kotlinds.pokemonclient.state.StartMenuFeature
 import dev.kotlinds.pokemonclient.state.ViewerApp
+import dev.kotlinds.pokemonclient.state.FieldObjectKind
+import dev.kotlinds.pokemonclient.state.PcStorage
 
 /**
- * The screens each action starts from, read from the state: what the specs' availability ([CommonActions]) is built
- * on, and what the recipes check before acting.
+ * The common predicates the actions' availability is built on (the screens each action starts from, read from the
+ * state, and the valid parameter values offered there), and what the recipes check before acting.
  *
- * Static on purpose, never methods of the recipes ([RecipeBase]): an action's availability is the common contract,
- * the same for every game; a game's recipes may carry an action out differently, never decide when it can be done.
+ * Helpers, not entry points: when an action can run is decided by one method per action in the game's recipes
+ * (`<action>Availability`, e.g. [FieldRecipes.tuneRadioAvailability]), whose common default calls these; both the
+ * listing and the execution read that method ([ActionDefinition.availability]), never these helpers directly.
  */
 internal object ActionConditions {
 
@@ -183,6 +186,41 @@ internal object ActionConditions {
         is Screen.Viewer -> screen.app == ViewerApp.HALL_OF_FAME_REGISTER
         is Screen.Animation -> screen.kind == AnimationKind.SAVING
         else -> false
+    }
+
+    // endregion
+    // region Choices: the valid parameter values offered with an available action
+
+    /** Old Rod, Good Rod, Super Rod (Gen 4 item ids): what `fish` offers. */
+    val RODS = setOf(445, 446, 447)
+
+    /** The party as choices: "mon:… = CYNDAQUIL Lv5". */
+    fun monChoices(state: GameState): List<Choice> = state.party.map { Choice(it.id.toString(), "${it.displayName} Lv${it.level}") }
+
+    /** Stored Pokémon as choices: "mon:… = HO-OH Lv45 (BOX 1)". */
+    fun storedChoices(storage: PcStorage): List<Choice> = storage.boxes.flatMap { box ->
+        box.mons.map { Choice(it.id.toString(), "${it.displayName}${it.level?.let { l -> " Lv$l" } ?: ""} (${box.name})") }
+    }
+
+    /** The people, items and signs of this map as `go_to` / `interact` targets. */
+    fun targetChoices(state: GameState): List<Choice> = state.field?.objects.orEmpty()
+        .filter { it.kind != FieldObjectKind.FOLLOWER }
+        .map { Choice(MovePlans.objectTargetId(it), "${it.label} at ${it.x},${it.y}") }
+
+    /** Items worth offering to `use_item` (medicine, berries, battle items; key items have their own action) and the targets. */
+    fun itemChoices(state: GameState, inBattle: Boolean): Map<String, List<Choice>> {
+        val pockets = if (inBattle) setOf("medicine", "berries", "battle_items") else setOf("medicine", "berries", "items", "battle_items")
+        val items = state.bag.orEmpty().filter { it.name in pockets }.flatMap { it.items }.filter { it.quantity > 0 }
+            .map { Choice("item:${it.item.id.value}", "${it.item.name} x${it.quantity}") }
+        return mapOf("item" to items, "target" to monChoices(state))
+    }
+
+    /** Walking around but the start menu has no [feature] yet: say so instead of failing on the menu. */
+    fun locked(state: GameState, feature: StartMenuFeature): Availability.Unavailable? {
+        val walking = FieldControl.inControl(state)
+        if (!walking || state.startMenu?.contains(feature) != false) return null
+        val detail = if (StartMenuFeature.BAG !in state.startMenu) "The start menu doesn't open yet" else "The start menu has no ${feature.name.lowercase()} yet"
+        return Availability.Unavailable(UnavailableReason.NOT_UNLOCKED_YET, detail, "the story unlocks it (Mom gives it at the start)")
     }
 
     // endregion

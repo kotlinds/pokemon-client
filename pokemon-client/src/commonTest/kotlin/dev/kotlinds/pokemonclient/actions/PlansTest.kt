@@ -77,7 +77,7 @@ class PlansTest {
                 else -> screen
             }
         }
-        val outcome = Recipes.COMMON.reorderParty(GameAction.ReorderParty(MonId(3, 1), 1), ui.game.context())
+        val outcome = RecipeBase.perform(GameAction.ReorderParty(MonId(3, 1), 1), ui.game.context())
         assertIs<ActionOutcome.Done>(outcome)
         assertEquals(listOf(3L, 2L, 1L), ui.party.map { it.id.personality })
         assertIs<Screen.Overworld>(ui.game.screen)
@@ -103,7 +103,7 @@ class PlansTest {
             }
         }
         val action = GameAction.ReorderParty(MonId(3, 1), 1, order = listOf(MonId(3, 1), MonId(1, 1), MonId(2, 1)))
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.reorderParty(action, ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(action, ui.game.context()))
         assertEquals(listOf(3L, 1L, 2L, 4L), ui.party.map { it.id.personality })
         assertEquals(1, ui.game.presses.count { it == Button.X }, "one party session")
         assertIs<Screen.Overworld>(ui.game.screen)
@@ -126,7 +126,7 @@ class PlansTest {
     fun ssReorderPartyRefusesAnOrderWithAPokemonNotInTheParty() {
         val ui = Ui(listOf(mon(1), mon(2)))
         val action = GameAction.ReorderParty(MonId(2, 1), 1, order = listOf(MonId(2, 1), MonId(9, 1)))
-        val outcome = assertIs<ActionOutcome.Failed>(Recipes.COMMON.reorderParty(action, ui.game.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(RecipeBase.perform(action, ui.game.context()))
         assertIs<ActionError.InvalidParameter>(outcome.error)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -134,7 +134,7 @@ class PlansTest {
     @Test
     fun reorderPartyRefusesAPositionOutsideTheParty() {
         val ui = Ui(listOf(mon(1), mon(2)))
-        val outcome = assertIs<ActionOutcome.Failed>(Recipes.COMMON.reorderParty(GameAction.ReorderParty(MonId(2, 1), 5), ui.game.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.ReorderParty(MonId(2, 1), 5), ui.game.context()))
         assertIs<ActionError.InvalidParameter>(outcome.error)
         assertTrue(ui.game.presses.isEmpty(), "nothing pressed for an invalid request")
     }
@@ -152,7 +152,7 @@ class PlansTest {
                 else -> screen
             }
         }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.takeItem(GameAction.TakeItem(MonId(1, 1)), ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.TakeItem(MonId(1, 1)), ui.game.context()))
         assertEquals(null, ui.party.single().heldItem)
     }
 
@@ -171,7 +171,7 @@ class PlansTest {
                 else -> screen
             }
         }
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useItem(GameAction.UseItem(ItemRef("Potion"), MonId(1, 1)), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.UseItem(ItemRef("Potion"), MonId(1, 1)), ui.game.context()))
         assertEquals(UnavailableReason.NO_EFFECT, assertIs<ActionError.Unavailable>(failed.error).reason)
     }
 
@@ -189,7 +189,7 @@ class PlansTest {
             }
         }
         ui.onB = { Screen.Overworld(null, Awaiting.INPUT) }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.saveGame(GameAction.SaveGame, ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.SaveGame, ui.game.context()))
         assertEquals(2, asked)
         assertIs<Screen.Overworld>(ui.game.screen)
     }

@@ -84,7 +84,7 @@ class HgssIntroScreensTest {
     fun continueGameIsOfferedOnEveryScreenBeforeTheGame() {
         val registry = ActionRegistry.of()
         listOf("hg_intro_movie_unskippable", "hg_intro_movie_input", "hg_title_not_ready", "hg_title_ready", "hg_main_menu_touch", "msg_main_menu").forEach { name ->
-            assertTrue(registry.available(state(name), ActionMode.ASSISTED).any { it.name == "continue_game" }, name)
+            assertTrue(registry.available(state(name), ActionMode.ASSISTED, game).any { it.name == "continue_game" }, name)
         }
     }
 }

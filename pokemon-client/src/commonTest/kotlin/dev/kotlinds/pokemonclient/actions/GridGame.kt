@@ -32,8 +32,11 @@ internal abstract class GridGame(var x: Int, var y: Int) : PokemonGame {
 
     override val inputProbe = InputProbe { held }
 
-    /** How the game carries out the actions ([PokemonGame.recipes]): the common recipes by default. */
-    override var recipes: Recipes = Recipes.COMMON
+    /**
+     * How the game carries out the actions ([PokemonGame.recipes]): this game's own instance of the common recipes by
+     * default (never one shared with another game); a test replaces it with a subclass overriding what it checks.
+     */
+    override var recipes: Recipes = Recipes()
 
     /** The buttons held on the current frame (what [busy] sees: A closing a message box...). */
     protected val buttons: Set<Button> get() = held

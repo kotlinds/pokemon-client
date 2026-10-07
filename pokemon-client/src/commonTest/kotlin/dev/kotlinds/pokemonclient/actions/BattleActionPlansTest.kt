@@ -128,7 +128,7 @@ class BattleActionPlansTest {
                 else -> screen
             }
         }
-        val outcome = Recipes.COMMON.useItem(GameAction.UseItem(ItemRef("Ether"), MonId(2, 1), MoveRef("Icy Wind")), ui.game.context())
+        val outcome = RecipeBase.perform(GameAction.UseItem(ItemRef("Ether"), MonId(2, 1), MoveRef("Icy Wind")), ui.game.context())
         assertIs<ActionOutcome.Done>(outcome)
         assertEquals(listOf("option:bag", "pocket:hp_pp_restore", "item:38", "option:use", "mon:00000002.00000001", "move:196"), chosen)
     }
@@ -148,7 +148,7 @@ class BattleActionPlansTest {
             }
         }
         val action = GameAction.UseItem(ItemRef("Ether"), MonId(1, 1), MoveRef("Icy Wind"))
-        val done = assertIs<ActionOutcome.Done>(ui.game.recipes.useItem(action, ui.game.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(action, ui.game.context()))
         assertEquals("the game's own battle bag", done.detail)
         assertEquals(listOf(action), played)
         assertTrue(ui.game.presses.isEmpty())
@@ -172,7 +172,7 @@ class BattleActionPlansTest {
             }
         }
         ui.onB = { command }
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useItem(GameAction.UseItem(ItemRef("item:38"), MonId(1, 1), MoveRef("move:85")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.UseItem(ItemRef("item:38"), MonId(1, 1), MoveRef("move:85")), ui.game.context()))
         assertEquals(UnavailableReason.NO_EFFECT, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertIs<Screen.BattleCommand>(ui.game.screen)
     }
@@ -192,7 +192,7 @@ class BattleActionPlansTest {
             }
         }
         ui.onB = { command }
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useItem(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), ui.game.context()))
         val error = assertIs<ActionError.InvalidParameter>(failed.error)
         assertEquals("move", error.parameter)
         assertTrue(error.allowed.any { "move:85" in it })
@@ -213,7 +213,7 @@ class BattleActionPlansTest {
     @Test
     fun attackWithAMoveTheMonDoesntKnowFailsBeforeAnyPress() {
         val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), command)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Ice Shard")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Attack(MoveRef("Ice Shard")), ui.game.context()))
         assertIs<ActionError.InvalidParameter>(failed.error)
         assertTrue(ui.game.presses.isEmpty(), "the move screen wasn't opened")
     }
@@ -234,7 +234,7 @@ class BattleActionPlansTest {
                 else -> screen
             }
         }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
         assertEquals("target:all", confirmed)
     }
 
@@ -255,7 +255,7 @@ class BattleActionPlansTest {
                 else -> screen
             }
         }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.choose(GameAction.Choose(party[1].id.toString()), ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Choose(party[1].id.toString()), ui.game.context()))
         assertTrue(shifted)
     }
 
@@ -270,7 +270,7 @@ class BattleActionPlansTest {
             Cursor.At(1), Topology.vertical(4), CancelBehavior.CLOSES,
         )
         val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), list)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.learnMove(GameAction.LearnMove(MoveRef("Cut")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.LearnMove(MoveRef("Cut")), ui.game.context()))
         val error = assertIs<ActionError.HmCannotForget>(failed.error)
         assertEquals("HM_CANNOT_FORGET", error.code)
         assertEquals("Cut", error.move)
@@ -281,10 +281,10 @@ class BattleActionPlansTest {
     fun switchIsUnavailableWhileTrapped() {
         val party = listOf(mon(1), mon(2))
         val trapped = GameState(0, command, null, party, emptyList(), battle(setOf(VolatileStatus.Trapped)), null)
-        val availability = CommonActions.switch.spec.availability(trapped)
+        val availability = CommonActions.switch.availability(Recipes(), trapped)
         assertEquals(UnavailableReason.TRAPPED, assertIs<Availability.Unavailable>(availability).reason)
         val free = GameState(0, command, null, party, emptyList(), battle(), null)
-        assertIs<Availability.Available>(CommonActions.switch.spec.availability(free))
+        assertIs<Availability.Available>(CommonActions.switch.availability(Recipes(), free))
     }
 
     // region Encore, Disable, Struggle
@@ -309,7 +309,7 @@ class BattleActionPlansTest {
         val ui = Ui({ battleWith(encored) }, listOf(mon(1)), emptyList(), command)
         // The game skips the move list: FIGHT starts the turn.
         ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") Screen.Battle(Awaiting.ANIMATION) else screen }
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
         assertTrue(done.detail.orEmpty().contains("Encore"), done.detail)
         assertEquals(listOf(Button.A), ui.game.presses)
     }
@@ -319,17 +319,17 @@ class BattleActionPlansTest {
         val encored = VolatileStatus.Encored(Named(MoveId(55), "Water Gun"), 2)
         val ui = Ui({ battleWith(encored, moves = listOf(waterGun, icyWind), double = true) }, listOf(mon(1)), emptyList(), command)
         ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") command.copy(actor = BattlerRef.PLAYER_RIGHT) else screen }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("move:55"), BattlerRef.FOE_RIGHT), ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("move:55"), BattlerRef.FOE_RIGHT), ui.game.context()))
     }
 
     @Test
     fun underEncoreAnotherMoveIsRefusedBeforeAnyPress() {
         val encored = VolatileStatus.Encored(Named(MoveId(85), "Thunderbolt"), 3)
         val ui = Ui({ battleWith(encored) }, listOf(mon(1)), emptyList(), command)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
         assertEquals(UnavailableReason.ENCORED, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(ui.game.presses.isEmpty())
-        val choices = assertIs<Availability.Available>(CommonActions.attack.spec.availability(GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(encored), null)))
+        val choices = assertIs<Availability.Available>(CommonActions.attack.availability(ui.game.recipes, GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(encored), null)))
         assertEquals(listOf("move:85"), choices.choices["move"]!!.map { it.value })
     }
 
@@ -338,7 +338,7 @@ class BattleActionPlansTest {
         // FIGHT leading anywhere else than the move list (not under Encore) is an error naming the screen's kind.
         val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), command)
         ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") command.copy(actor = BattlerRef.PLAYER_RIGHT) else screen }
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
         val error = assertIs<ActionError.UnexpectedScreen>(failed.error)
         assertEquals("Expected the move list, but the screen is battle_command", error.message)
     }
@@ -349,13 +349,13 @@ class BattleActionPlansTest {
         // skips the move list (battle_controller_player.c:377) and the turn is played; not an UNEXPECTED_SCREEN.
         val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), command)
         ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") Screen.Battle(Awaiting.ANIMATION) else screen }
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
         assertEquals(BattleMoveChoice.STRUGGLED_UNSEEN, done.detail)
         assertEquals(listOf(Button.A), ui.game.presses)
         // In a double battle, the other Pokémon's command menu right after FIGHT is the turn going on too.
         val double = Ui({ battle(double = true) }, listOf(mon(1)), emptyList(), command)
         double.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") command.copy(actor = BattlerRef.PLAYER_RIGHT) else screen }
-        assertEquals(BattleMoveChoice.STRUGGLED_UNSEEN, assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Thunderbolt")), double.game.context())).detail)
+        assertEquals(BattleMoveChoice.STRUGGLED_UNSEEN, assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("Thunderbolt")), double.game.context())).detail)
     }
 
     @Test
@@ -379,7 +379,7 @@ class BattleActionPlansTest {
     fun aDisabledMoveIsRefusedBeforeAnyPressAndAnotherOneIsUsed() {
         val disabled = VolatileStatus.Disabled(Named(MoveId(85), "Thunderbolt"), 3)
         val ui = Ui({ battleWith(disabled) }, listOf(mon(1)), emptyList(), command)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.DISABLED, error.reason)
         assertEquals("Thunderbolt is disabled (3 more turns). use another move", error.message)
@@ -392,9 +392,9 @@ class BattleActionPlansTest {
                 else -> screen
             }
         }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
         assertEquals("move:196", used)
-        val choices = assertIs<Availability.Available>(CommonActions.attack.spec.availability(GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(disabled), null)))
+        val choices = assertIs<Availability.Available>(CommonActions.attack.availability(ui.game.recipes, GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(disabled), null)))
         assertEquals(listOf("move:196"), choices.choices["move"]!!.map { it.value })
     }
 
@@ -406,7 +406,7 @@ class BattleActionPlansTest {
             if (screen is Screen.BattleCommand) moveList(Entry("move:85", "Thunderbolt (Electric, 15/15 PP)", selectable = false), Entry("move:196", "Icy Wind (Ice, 15/15 PP)")) else screen
         }
         ui.onB = { command }
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.MOVE_REFUSED, error.reason)
         assertTrue(error.hint.orEmpty().contains("move:196"), error.hint)
@@ -419,8 +419,8 @@ class BattleActionPlansTest {
         val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), list)
         var used: String? = null
         ui.onA = { screen, id -> if (screen is Screen.MoveSelect) { used = id; Screen.Battle(Awaiting.ANIMATION) } else screen }
-        assertIs<Availability.Available>(CommonActions.attack.spec.availability(GameState(0, list, null, listOf(mon(1)), emptyList(), battle(), null)))
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
+        assertIs<Availability.Available>(CommonActions.attack.availability(ui.game.recipes, GameState(0, list, null, listOf(mon(1)), emptyList(), battle(), null)))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
         assertEquals("move:196", used)
     }
 
@@ -429,13 +429,13 @@ class BattleActionPlansTest {
         val empty = listOf(thunderbolt.copy(pp = 0), icyWind.copy(pp = 0))
         val ui = Ui({ battleWith(moves = empty) }, listOf(mon(1)), emptyList(), command)
         val state = GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(moves = empty), null)
-        val choices = assertIs<Availability.Available>(CommonActions.attack.spec.availability(state))
+        val choices = assertIs<Availability.Available>(CommonActions.attack.availability(ui.game.recipes, state))
         assertEquals(listOf("move:165"), choices.choices["move"]!!.map { it.value })
-        val refused = assertIs<ActionOutcome.Failed>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val refused = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
         assertEquals(UnavailableReason.NO_PP, assertIs<ActionError.Unavailable>(refused.error).reason)
         assertTrue(ui.game.presses.isEmpty())
         ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") Screen.Battle(Awaiting.ANIMATION) else screen }
-        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.attack(GameAction.Attack(MoveRef("move:165")), ui.game.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Attack(MoveRef("move:165")), ui.game.context()))
         assertTrue(done.detail.orEmpty().contains("Struggle"), done.detail)
     }
 
@@ -495,13 +495,13 @@ class BattleActionPlansTest {
         for (asked in listOf("item:3", "super ball")) {
             thrown = null
             val ui = throwUi(1, null, command, battleAfter = true, balls = balls, pocket = pocket)
-            val done = Recipes.COMMON.throwBall(GameAction.ThrowBall(ItemRef(asked)), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+            val done = RecipeBase.perform(GameAction.ThrowBall(ItemRef(asked)), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
             assertEquals("item:3: broke free after 1 shake", done.detail, asked)
             assertEquals("item:3", thrown, asked)
         }
         // The English name isn't this game's: refused at once, listing the bag's balls from the data.
         val ui = throwUi(1, null, command, battleAfter = true, balls = balls, pocket = pocket)
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.throwBall(GameAction.ThrowBall(ItemRef("Great Ball")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.ThrowBall(ItemRef("Great Ball")), ui.game.context()))
         assertEquals(listOf("item:4 (POKé BALL x5)", "item:3 (SUPER BALL x3)"), assertIs<ActionError.InvalidParameter>(failed.error).allowed)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -510,14 +510,14 @@ class BattleActionPlansTest {
     fun aNormalCaptureIsACapture() {
         val nickname = Screen.YesNo("Give a nickname?", listOf(Entry("option:yes", "YES"), Entry("option:no", "NO")), Cursor.At(0), Topology.vertical(2))
         val ui = throwUi(BattleState.CAUGHT_SHAKES, BattleOutcome.CAUGHT, nickname, battleAfter = true)
-        val done = Recipes.COMMON.throwBall(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        val done = RecipeBase.perform(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
         assertTrue(done.detail.orEmpty().startsWith("item:4: caught MON"), done.detail)
     }
 
     @Test
     fun aCaptureThatEndsTheBattleIsACaptureEvenWithoutTheShakes() {
         val ui = throwUi(null, BattleOutcome.CAUGHT, Screen.Overworld(null, Awaiting.INPUT), battleAfter = false)
-        val done = Recipes.COMMON.throwBall(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        val done = RecipeBase.perform(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
         assertTrue(done.detail.orEmpty().startsWith("item:4: caught MON"), done.detail)
     }
 
@@ -525,7 +525,7 @@ class BattleActionPlansTest {
     fun aRoamerFleeingAfterBreakingFreeIsNotACapture() {
         // Race (Codex, Raikou): "caught RAIKOU Lv40" with "Aargh! Almost had it!" / "The wild RAIKOU fled!".
         val ui = throwUi(2, BattleOutcome.FOE_FLED, Screen.Overworld(null, Awaiting.INPUT), battleAfter = false)
-        val done = Recipes.COMMON.throwBall(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        val done = RecipeBase.perform(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
         assertEquals("item:4: broke free after 2 shakes, then the wild MON fled: the battle is over, nothing caught", done.detail)
     }
 
@@ -547,7 +547,7 @@ class BattleActionPlansTest {
                 return ActionOutcome.Done()
             }
         }
-        val done = ui.game.recipes.throwBall(GameAction.ThrowBall(ItemRef("item:4"), "SPIKE"), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        val done = RecipeBase.perform(GameAction.ThrowBall(ItemRef("item:4"), "SPIKE"), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
         assertEquals(listOf("SPIKE"), typed)
         assertTrue(done.detail.orEmpty().contains("as SPIKE"), done.detail)
     }
@@ -555,7 +555,7 @@ class BattleActionPlansTest {
     @Test
     fun aBallBrokenFreeLeavesTheBattleGoingOn() {
         val ui = throwUi(1, null, command, battleAfter = true)
-        val done = Recipes.COMMON.throwBall(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        val done = RecipeBase.perform(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
         assertEquals("item:4: broke free after 1 shake", done.detail)
     }
 
@@ -577,7 +577,7 @@ class BattleActionPlansTest {
         // Race (Codex): learn_move with an HM left the list of moves to forget open.
         val ui = Ui({ battle() }, listOf(learner()), emptyList(), forgetPrompt)
         ui.game.data = hmData
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.learnMove(GameAction.LearnMove(MoveRef("Cut")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.LearnMove(MoveRef("Cut")), ui.game.context()))
         assertEquals(ActionError.HmCannotForget("Cut"), failed.error)
         assertTrue(ui.game.presses.isEmpty())
         assertEquals(forgetPrompt, ui.game.screen, "the question stays for the next call")
@@ -604,7 +604,7 @@ class BattleActionPlansTest {
                 else -> screen
             }
         }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.learnMove(GameAction.LearnMove(MoveRef("Tackle")), ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.LearnMove(MoveRef("Tackle")), ui.game.context()))
         assertEquals("move:33", forgot)
     }
 
@@ -625,7 +625,7 @@ class BattleActionPlansTest {
                 else -> screen
             }
         }
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.learnMove(GameAction.LearnMove(null), ui.game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.LearnMove(null), ui.game.context()))
         assertTrue(gaveUp)
     }
 

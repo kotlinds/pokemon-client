@@ -92,7 +92,7 @@ class StrengthWayProofTest {
     }
 
     private fun goTo(game: RomStanding, target: String, settings: ActionSettings = ActionSettings()): ActionError.Unavailable {
-        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, target), game.context(settings)))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(null, null, target), game.context(settings)))
         return assertIs<ActionError.Unavailable>(failed.error)
     }
 

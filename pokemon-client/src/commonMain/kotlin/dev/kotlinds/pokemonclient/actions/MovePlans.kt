@@ -51,7 +51,7 @@ import dev.kotlinds.pokemonclient.world.WorldSource
  * The walking engine of the movement recipes ([MoveRecipes]: `go_to`, `interact`, `step`, `find_encounter`, `push`):
  * routes computed on the ROM's maps ([dev.kotlinds.pokemonclient.world]) with the live people on top, then walked one
  * tile at a time, checking the position after each step. Stateless and beside the chain of recipes: an action it
- * needs on the way (a Repel used again) is played with the game's own recipes ([PlanContext.recipes]).
+ * needs on the way (a Repel used again) is played with the game's own recipes ([RecipeBase.perform]).
  *
  * Walking never trusts the map blindly: a step the game refuses (an invisible wall, a person who moved in the way)
  * is remembered and the route is computed again; anything that takes the screen away from the overworld (a battle,
@@ -530,7 +530,7 @@ internal object MovePlans {
      */
     private fun reapplyRepel(context: PlanContext, at: String): AfterNotice {
         val repel = repelInBag(context) ?: return AfterNotice.Stop("$at; no Repel left in the bag$REPEL_STOP_TAIL", InterruptionCause.REPEL_ENDED)
-        val used = context.recipes.useItem(GameAction.UseItem(ItemRef("item:${repel.item.id.value}")), context)
+        val used = RecipeBase.perform(GameAction.UseItem(ItemRef("item:${repel.item.id.value}")), context)
         if (used is ActionOutcome.Failed) return AfterNotice.Failed(used.error)
         if (context.navigator.settle().field?.repelSteps == 0) {
             return AfterNotice.Failed(ActionError.Timeout("used ${repel.item.name}, but no Repel is at work: call get_state"))

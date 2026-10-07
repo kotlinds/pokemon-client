@@ -41,7 +41,7 @@ class PcMailTest {
     fun depositOfAPokemonHoldingMailIsRefusedWithATypedError() {
         val holder = mon(1, grassMail)
         val game = game(listOf(holder, mon(2, potion)))
-        val outcome = Recipes.COMMON.deposit(GameAction.Deposit(holder.id), game.context())
+        val outcome = RecipeBase.perform(GameAction.Deposit(holder.id), game.context())
         val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(outcome).error)
         assertEquals(UnavailableReason.MAIL_BLOCKS_DEPOSIT, error.reason)
         assertTrue(game.presses.isEmpty() && game.touches.isEmpty(), "refused before touching the PC")
@@ -51,7 +51,7 @@ class PcMailTest {
     fun aSwapStoringAPokemonHoldingMailIsRefusedToo() {
         val holder = mon(1, grassMail)
         val game = game(listOf(holder, mon(2, null)))
-        val outcome = Recipes.COMMON.pc(GameAction.Pc(listOf(PcOperation.Swap(holder.id, MonId(9, 9)))), game.context())
+        val outcome = RecipeBase.perform(GameAction.Pc(listOf(PcOperation.Swap(holder.id, MonId(9, 9)))), game.context())
         val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(outcome).error)
         assertEquals(UnavailableReason.MAIL_BLOCKS_DEPOSIT, error.reason)
     }

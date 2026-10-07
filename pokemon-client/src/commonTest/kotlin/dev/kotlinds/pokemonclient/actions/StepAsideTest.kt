@@ -69,7 +69,7 @@ class StepAsideTest {
     private fun away(beaten: Boolean = false) = PuzzleStepAside("person:1", beaten, Direction.entries.map { StepAsideMove(it, if (it == Direction.NORTH) Direction.NORTH else Direction.SOUTH) })
 
     private fun goTo(game: Room): Pair<Int, Int> {
-        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "person:1"), game.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(null, null, "person:1"), game.context()))
         return game.x to game.y
     }
 

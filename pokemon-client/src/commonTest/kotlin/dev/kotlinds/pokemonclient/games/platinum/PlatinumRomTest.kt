@@ -180,7 +180,7 @@ class PlatinumRomTest {
         val access = assertNotNull(state.fieldMoves)
         assertEquals(dev.kotlinds.pokemonclient.world.FieldMoveAccess.NotSupported, access[FieldMoveKind.FLY])
         assertEquals(dev.kotlinds.pokemonclient.world.FieldMoveAccess.Unknown, access[FieldMoveKind.WHIRLPOOL])
-        val fly = dev.kotlinds.pokemonclient.actions.ActionRegistry.of().unavailable(state, dev.kotlinds.pokemonclient.actions.ActionMode.ASSISTED)
+        val fly = dev.kotlinds.pokemonclient.actions.ActionRegistry.of().unavailable(state, dev.kotlinds.pokemonclient.actions.ActionMode.ASSISTED, game)
             .singleOrNull { it.name == "fly" }
         if (state.screen is Screen.Overworld) {
             assertEquals(dev.kotlinds.pokemonclient.actions.UnavailableReason.NOT_SUPPORTED_BY_GAME, assertNotNull(fly).reason)

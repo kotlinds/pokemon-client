@@ -19,11 +19,22 @@ import kotlinx.serialization.json.putJsonObject
 import kotlin.reflect.KClass
 
 /**
- * An action type and its spec (what agents see: name, parameters, availability, description), the same for every
- * game. How it is done is not here: it is the game's recipe ([dev.kotlinds.pokemonclient.PokemonGame.recipes]).
+ * An action type, its spec (what agents see: name, parameters, description, the same for every game) and its
+ * [availability]. How it is done is not here: it is the game's recipe ([dev.kotlinds.pokemonclient.PokemonGame.recipes]).
+ *
+ * Built only in this module (the common actions, [CommonActions.definitions]); the constructor requires the
+ * availability, so no action can exist without one.
  */
-class ActionDefinition<A : GameAction>(
+class ActionDefinition<A : GameAction> internal constructor(
     val type: KClass<A>,
+    /**
+     * When the action can run, and with which parameter values: the one method of the game's recipes for this action
+     * (`Recipes::<action>Availability`, the common rule unless the game overrides it). The single entry point: the
+     * listing ([ActionRegistry.available], [ActionRegistry.unavailable], [ActionRegistry.enumerate]) and the execution
+     * ([ActionRegistry.execute]) both read it, on the same game's recipes, so an action is never listed but refused, or
+     * accepted but not listed (other than an explicit [Availability.Available.listed] = false).
+     */
+    internal val availability: (Recipes, GameState) -> Availability,
     val spec: ActionSpec<A>,
 )
 
@@ -36,8 +47,9 @@ data class UnavailableAction(val name: String, val reason: UnavailableReason, va
 /**
  * The single source of truth of the actions: every consumer (the MCP server, our LLM loop, Jev, the pure-buttons
  * mode) gets its JSON schema, the list of what is possible now, and executes through here. Execution always
- * checks availability first, then runs the game's recipe ([dev.kotlinds.pokemonclient.PokemonGame.recipes]), and
- * turns interruptions into typed errors.
+ * checks availability first (the same method of the game's recipes the listing reads, [ActionDefinition.availability]),
+ * then runs the game's recipe ([dev.kotlinds.pokemonclient.PokemonGame.recipes]), and turns interruptions into typed
+ * errors.
  *
  * It holds the contract only (the specs), the same for every game; built only by [ActionRegistry.of] (the
  * constructor is private), never from a hand-made list.
@@ -48,23 +60,26 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
 
     private val byName = definitions.associateBy { it.spec.name }
 
-    /** Actions of [mode], usable now, with their valid parameter values. */
-    fun available(state: GameState, mode: ActionMode): List<AvailableAction> = definitions
+    /**
+     * Actions of [mode], usable now in [game] (its recipes' availability, the same [execute] checks), with their valid
+     * parameter values.
+     */
+    fun available(state: GameState, mode: ActionMode, game: PokemonGame): List<AvailableAction> = definitions
         .filter { mode in it.spec.modes }
         .mapNotNull { def ->
-            (listedAvailability(def.spec, state) as? Availability.Available)?.takeIf { it.listed }?.let { AvailableAction(def.spec.name, def.spec.description, it.choices) }
+            (listedAvailability(def, state, game.recipes) as? Availability.Available)?.takeIf { it.listed }?.let { AvailableAction(def.spec.name, def.spec.description, it.choices) }
         }
 
-    /** Actions of [mode] shown but not usable now, with the reason (e.g. "nobody knows Fly"). */
-    fun unavailable(state: GameState, mode: ActionMode): List<UnavailableAction> = definitions
+    /** Actions of [mode] shown but not usable now in [game], with the reason (e.g. "nobody knows Fly"). */
+    fun unavailable(state: GameState, mode: ActionMode, game: PokemonGame): List<UnavailableAction> = definitions
         .filter { mode in it.spec.modes }
         .mapNotNull { def ->
-            (listedAvailability(def.spec, state) as? Availability.Unavailable)?.let { UnavailableAction(def.spec.name, it.reason, it.detail, it.hint) }
+            (listedAvailability(def, state, game.recipes) as? Availability.Unavailable)?.let { UnavailableAction(def.spec.name, it.reason, it.detail, it.hint) }
         }
 
-    /** Every concrete action worth offering now, by canonical key (for models that pick from a list). */
-    fun enumerate(state: GameState, mode: ActionMode): Map<String, GameAction> = definitions
-        .filter { mode in it.spec.modes && (listedAvailability(it.spec, state) as? Availability.Available)?.listed == true }
+    /** Every concrete action worth offering now in [game], by canonical key (for models that pick from a list). */
+    fun enumerate(state: GameState, mode: ActionMode, game: PokemonGame): Map<String, GameAction> = definitions
+        .filter { mode in it.spec.modes && (listedAvailability(it, state, game.recipes) as? Availability.Available)?.listed == true }
         .flatMap { def -> def.spec.enumerate(state).ifEmpty { fieldReady(state)?.let { def.spec.enumerate(it) }.orEmpty() } }
         .associateBy { it.key }
 
@@ -115,7 +130,7 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
         val def = definitions.firstOrNull { it.type.isInstance(action) }
             ?: return ActionOutcome.Failed(ActionError.Unsupported(action.key))
         val context = PlanContext(scope, game, settings = settings)
-        when (val availability = availabilityOnceSettled(def.spec, context)) {
+        when (val availability = availabilityToRun(def, context)) {
             is Availability.Unavailable -> {
                 // Fly refused here: name the nearest place where it works (computed only when asked, it routes).
                 val hint = if (availability.reason == UnavailableReason.NOT_FLYABLE_HERE) FlyHints.nearestFlyable(context) ?: availability.hint else availability.hint
@@ -125,7 +140,7 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
             is Availability.Available -> Unit
         }
         return try {
-            context.recipes.perform(action, context)
+            RecipeBase.perform(action, context)
         } catch (interrupted: ActionInterruptedException) {
             val cause = if (interrupted.reason == Interruption.HUMAN) InterruptionCause.HUMAN else InterruptionCause.SCRIPT
             ActionOutcome.Failed(ActionError.Interrupted(cause, action.key))
@@ -150,16 +165,17 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
     }
 
     /**
-     * Whether [spec] is listed as usable in [state]: usable now, or usable once the field is ready ([fieldReady]).
-     * The listing matches what [execute] accepts, since [execute] waits for the game to settle before refusing
-     * ([availabilityOnceSettled]): right after a battle the field actions are listed during the fade back already
-     * (NOTES: `reorder_party` missing from the actions, then accepted a second later).
+     * Whether [def] is listed as usable in [state] by [recipes] (its [ActionDefinition.availability]): usable now, or
+     * usable once the field is ready ([fieldReady]). The listing matches what [execute] accepts, since [execute] reads
+     * the same method and waits for the game to settle before refusing ([availabilityToRun]): right after a battle the
+     * field actions are listed during the fade back already (NOTES: `reorder_party` missing from the actions, then
+     * accepted a second later).
      */
-    private fun listedAvailability(spec: ActionSpec<*>, state: GameState): Availability {
-        val now = spec.availability(state)
+    private fun listedAvailability(def: ActionDefinition<*>, state: GameState, recipes: Recipes): Availability {
+        val now = def.availability(recipes, state)
         if (now is Availability.Available) return now
         val ready = fieldReady(state) ?: return now
-        return spec.availability(ready).takeIf { it is Availability.Available } ?: now
+        return def.availability(recipes, ready).takeIf { it is Availability.Available } ?: now
     }
 
     /**
@@ -175,18 +191,20 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
     }
 
     /**
-     * Whether [spec] can run now. Refused on a screen where the game is still busy by itself ([Awaiting] other than
-     * INPUT: the fade back to the field after a battle, a script finishing, text printing), it is checked again once
-     * the game waits for input ([Navigator.settle], which only lets frames run and never presses a button): the
-     * screen the action needs is often only a few frames away (NOTES: `reorder_party` refused on "overworld,
-     * awaiting animation" right after BATTLE_WON, accepted when retried a second later). An action available at once
-     * runs at once (advance_dialogue while text prints...); one still refused after settling is refused for real.
+     * Whether [def] can run now in [context]'s game (its recipes' [ActionDefinition.availability], the method the
+     * listing reads): what [execute] checks before running the recipe. Refused on a screen where the game is still
+     * busy by itself ([Awaiting] other than INPUT: the fade back to the field after a battle, a script finishing, text
+     * printing), it is checked again once the game waits for input ([Navigator.settle], which only lets frames run and
+     * never presses a button): the screen the action needs is often only a few frames away (NOTES: `reorder_party`
+     * refused on "overworld, awaiting animation" right after BATTLE_WON, accepted when retried a second later). An
+     * action available at once runs at once (advance_dialogue while text prints...); one still refused after settling
+     * is refused for real.
      */
-    private fun <A : GameAction> availabilityOnceSettled(spec: ActionSpec<A>, context: PlanContext): Availability {
+    internal fun availabilityToRun(def: ActionDefinition<*>, context: PlanContext): Availability {
         val now = context.state()
-        val availability = spec.availability(now)
+        val availability = def.availability(context.recipes, now)
         if (availability is Availability.Available || now.screen.awaiting == Awaiting.INPUT) return availability
-        return spec.availability(context.navigator.settle())
+        return def.availability(context.recipes, context.navigator.settle())
     }
 
     /** JSON Schema of the wire actions of [mode] (one object per type, discriminated by `type`). */
@@ -236,7 +254,8 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
         /**
          * The registry: the common actions ([CommonActions.definitions]), the same for every game. The one factory of
          * every host (the app's sessions and MCP server, the bench, [dev.kotlinds.pokemonclient.view.AgentView]);
-         * which game's recipes run is the game given to [execute].
+         * which game's recipes decide availability and run is the game given to [available], [unavailable],
+         * [enumerate] and [execute].
          */
         fun of(): ActionRegistry = ActionRegistry(CommonActions.definitions)
     }

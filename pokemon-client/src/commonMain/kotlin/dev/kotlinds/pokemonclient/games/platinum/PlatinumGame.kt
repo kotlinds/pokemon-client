@@ -83,6 +83,8 @@ class PlatinumGame(private val version: PlatinumVersion, rom: NdsRom? = null) : 
             ),
             pokedex = save?.pokedex(),
             eventFlags = save?.eventFlags(),
+            // Platinum has the Pokétch, no Pokégear: `tune_radio` is refused, typed (never tried on a start menu without it).
+            pokegear = false,
         ))
     }
 

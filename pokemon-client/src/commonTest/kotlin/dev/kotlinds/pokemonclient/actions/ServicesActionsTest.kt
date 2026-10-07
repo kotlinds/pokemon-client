@@ -38,6 +38,9 @@ class ServicesActionsTest {
 
     private val registry = ActionRegistry.of()
 
+    /** The game whose recipes the listing reads (the common ones: [FakeGame.recipes]). */
+    private val listingGame = FakeGame(Screen.Overworld(null, Awaiting.INPUT))
+
     private val fly = KnownMove(Named(MoveId(19), "Fly"), 15, 15, "Flying")
     private val tackle = KnownMove(Named(MoveId(33), "Tackle"), 35, 35, "Normal")
 
@@ -61,8 +64,8 @@ class ServicesActionsTest {
         badgeIds: Set<Int> = if ("Storm" in badges) setOf(STORM) else emptySet(),
     ) = withFieldMoves(GameState(0, screen, PlayerInfo("ACE", 5000, badges, 1, badgeIds = badgeIds), party, emptyList(), null, field, storage = storage))
 
-    private fun available(state: GameState) = registry.available(state, ActionMode.ASSISTED).associateBy { it.name }
-    private fun unavailable(state: GameState) = registry.unavailable(state, ActionMode.ASSISTED).associateBy { it.name }
+    private fun available(state: GameState) = registry.available(state, ActionMode.ASSISTED, listingGame).associateBy { it.name }
+    private fun unavailable(state: GameState) = registry.unavailable(state, ActionMode.ASSISTED, listingGame).associateBy { it.name }
 
     @Test
     fun flyIsRefusedIndoorsWithoutBadgeOrWithoutAFlyer() {

@@ -42,6 +42,9 @@ class ActionRegistryTest {
 
     private val registry = ActionRegistry.of()
 
+    /** The game whose recipes the listing reads (the common ones: [FakeGame.recipes]). */
+    private val listingGame = FakeGame(Screen.Overworld(null, Awaiting.INPUT))
+
     private val tackle = KnownMove(Named(MoveId(33), "Tackle"), 35, 35, "Normal")
     private val ember = KnownMove(Named(MoveId(52), "Ember"), 0, 25, "Fire")
 
@@ -70,11 +73,11 @@ class ActionRegistryTest {
 
     @Test
     fun battleActionsAreListedOnlyInBattleWithUsableMoves() {
-        val available = registry.available(battleState(command), ActionMode.ASSISTED).associateBy { it.name }
+        val available = registry.available(battleState(command), ActionMode.ASSISTED, listingGame).associateBy { it.name }
         assertEquals(listOf("move:33"), available.getValue("attack").choices.getValue("move").map { it.value })
         assertTrue("run" in available)
         val field = GameState(0, Screen.Overworld(awaiting = Awaiting.INPUT), null, emptyList(), null, null, null)
-        assertTrue(registry.available(field, ActionMode.ASSISTED).none { it.name == "attack" || it.name == "run" })
+        assertTrue(registry.available(field, ActionMode.ASSISTED, listingGame).none { it.name == "attack" || it.name == "run" })
     }
 
     @Test
@@ -82,12 +85,12 @@ class ActionRegistryTest {
         // Right after a battle the overworld is back but still animating: what `act` accepts (it waits for the game)
         // is listed already (NOTES: `reorder_party` missing, then accepted a second later).
         fun field(awaiting: Awaiting) = GameState(0, Screen.Overworld(awaiting = awaiting), null, emptyList(), null, null, null)
-        val ready = registry.available(field(Awaiting.INPUT), ActionMode.ASSISTED).map { it.name }.toSet()
-        val fading = registry.available(field(Awaiting.ANIMATION), ActionMode.ASSISTED).map { it.name }.toSet()
+        val ready = registry.available(field(Awaiting.INPUT), ActionMode.ASSISTED, listingGame).map { it.name }.toSet()
+        val fading = registry.available(field(Awaiting.ANIMATION), ActionMode.ASSISTED, listingGame).map { it.name }.toSet()
         assertTrue(ready.isNotEmpty() && fading.containsAll(ready), "missing while fading: ${ready - fading}")
-        assertTrue(registry.unavailable(field(Awaiting.ANIMATION), ActionMode.ASSISTED).none { it.name in ready })
+        assertTrue(registry.unavailable(field(Awaiting.ANIMATION), ActionMode.ASSISTED, listingGame).none { it.name in ready })
         // A battle still animating isn't projected: what comes next there isn't known.
-        assertTrue(registry.available(battleState(Screen.Battle(Awaiting.ANIMATION)), ActionMode.ASSISTED).none { it.name == "attack" })
+        assertTrue(registry.available(battleState(Screen.Battle(Awaiting.ANIMATION)), ActionMode.ASSISTED, listingGame).none { it.name == "attack" })
     }
 
     // region Per-game recipes
@@ -100,7 +103,7 @@ class ActionRegistryTest {
     /**
      * A game's own recipe ([dev.kotlinds.pokemonclient.PokemonGame.recipes], a subclass overriding one method) is
      * played for that game only: through the registry like every host, and when the walking engine carries the
-     * action out as one of its steps (on [PlanContext.recipes]); a game without it plays the common one.
+     * action out as one of its steps ([RecipeBase.perform], on the context's game); a game without it plays the common one.
      */
     @Test
     fun aGamesOwnRecipeReplacesTheCommonOneForThatGameOnly() {
@@ -110,7 +113,7 @@ class ActionRegistryTest {
         assertEquals(0L, overriding.console.frame, "the common recipe would have waited 10 frames")
         // As a step carried out by the engine (on the context's recipes): the game's own one too.
         val step = overriding.context()
-        assertEquals("the game's own wait", assertIs<ActionOutcome.Done>(step.recipes.perform(GameAction.Wait(frames = 10), step)).detail)
+        assertEquals("the game's own wait", assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Wait(frames = 10), step)).detail)
         assertEquals(0L, overriding.console.frame)
         // The same action in a game without its own recipe: the common one, never the other game's.
         val plain = FakeGame(Screen.Overworld(null, Awaiting.INPUT))
@@ -118,13 +121,15 @@ class ActionRegistryTest {
         assertTrue(common.detail != "the game's own wait")
         assertTrue(plain.console.frame >= 10L, "frame ${plain.console.frame}")
         val plainStep = plain.context()
-        assertTrue(assertIs<ActionOutcome.Done>(plainStep.recipes.perform(GameAction.Wait(frames = 10), plainStep)).detail != "the game's own wait")
+        assertTrue(assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.Wait(frames = 10), plainStep)).detail != "the game's own wait")
         assertTrue(plain.console.frame >= 20L, "frame ${plain.console.frame}")
     }
 
     /**
      * Each Gen 4 game plays its own recipes, built on the Gen 4 ones ([Gen4Recipes]), one instance shared by every
-     * game object (recipes are stateless); a game that gives none plays the common ones.
+     * game object of that game (recipes are stateless). There is no shared common instance: a game must give its
+     * recipes ([dev.kotlinds.pokemonclient.PokemonGame.recipes] has no default, checked by the compiler), and two games
+     * built on the common recipes each have their own.
      */
     @Test
     fun eachGen4GamePlaysItsOwnRecipesOnTheGen4Ones() {
@@ -134,12 +139,7 @@ class ActionRegistryTest {
         assertIs<PlatinumRecipes>(platinum)
         assertSame(hgss, HgssGame(HgssVersion.HEARTGOLD_US).recipes)
         assertTrue(hgss !== platinum)
-        val withoutOwnRecipes = object : dev.kotlinds.pokemonclient.PokemonGame {
-            override val name = "none"
-            override fun state(memory: dev.kotlinds.pokemonclient.Memory): GameState = error("not read")
-            override val inputProbe = dev.kotlinds.pokemonclient.runtime.InputProbe { emptySet() }
-        }
-        assertSame(Recipes.COMMON, withoutOwnRecipes.recipes)
+        assertTrue(FakeGame(Screen.Overworld(null, Awaiting.INPUT)).recipes !== FakeGame(Screen.Overworld(null, Awaiting.INPUT)).recipes)
     }
 
     /**
@@ -215,13 +215,13 @@ class ActionRegistryTest {
 
     @Test
     fun runIsUnavailableInTrainerBattlesWithATypedReason() {
-        val unavailable = registry.unavailable(battleState(command, BattleKind.TRAINER), ActionMode.ASSISTED).single { it.name == "run" }
+        val unavailable = registry.unavailable(battleState(command, BattleKind.TRAINER), ActionMode.ASSISTED, listingGame).single { it.name == "run" }
         assertEquals(UnavailableReason.TRAINER_BATTLE, unavailable.reason)
     }
 
     @Test
     fun pureModeOnlyOffersRawControls() {
-        val names = registry.available(battleState(command), ActionMode.PURE).map { it.name }.toSet()
+        val names = registry.available(battleState(command), ActionMode.PURE, listingGame).map { it.name }.toSet()
         assertEquals(setOf("press", "touch", "wait", "drag"), names)
     }
 
@@ -346,7 +346,7 @@ class ActionRegistryTest {
 
     @Test
     fun enumerationGivesCanonicalKeysForPickFromAListModels() {
-        val keys = registry.enumerate(battleState(command), ActionMode.ASSISTED).keys
+        val keys = registry.enumerate(battleState(command), ActionMode.ASSISTED, listingGame).keys
         assertTrue("attack(move:33)" in keys)
         assertTrue("run" in keys)
         assertTrue("press(a)" in keys)
