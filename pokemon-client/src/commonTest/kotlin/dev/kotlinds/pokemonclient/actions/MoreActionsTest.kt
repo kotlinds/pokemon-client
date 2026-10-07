@@ -54,7 +54,7 @@ class MoreActionsTest {
     @Test
     fun aDragHoldsTheStylusAllTheWayToTheEnd() {
         val game = FakeGame(Screen.Unknown("alph_puzzle", Awaiting.INPUT))
-        val outcome = MoreActions.drag.plan.run(GameAction.Drag(TouchPoint(48, 112), TouchPoint(104, 88), 10), game.context())
+        val outcome = Recipes.COMMON.drag(GameAction.Drag(TouchPoint(48, 112), TouchPoint(104, 88), 10), game.context())
         assertIs<ActionOutcome.Done>(outcome)
         assertEquals(1, game.touches.size, "one continuous touch, never lifted on the way")
         assertEquals(TouchPoint(48, 112), game.touchFrames.first())

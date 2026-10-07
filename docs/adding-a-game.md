@@ -32,7 +32,7 @@ contract, and don't put generic things in `games/gen4/`.
 | `data` | `GameData` from the ROM: species, moves, items, type chart, machines, text | for `lookup` and effectiveness |
 | `scriptVariable(memory, id)`, `scriptFlag(memory, id)` | read a script variable / an event flag (active triggers, puzzles, quiet triggers). Gen 4: the save's `VarsFlags` (`Gen4SaveData` with the game's `Gen4SaveLayout`) | for triggers |
 | `mapName(id)` | the one `MapName` of a map (the place shown in game + the map's own name; `map:<id>` when unknown), shown by the state and the map view, matched by `go_to` and `fly` | for movement actions |
-| `actionOverrides` | the game's own recipes (`RecipeOverride.of<GameAction.X> { action, context -> ... }`), each replacing the common recipe of one action type for this game only; the action's spec (name, parameters, availability, description) stays the common one, so agents see the same contract. Empty by default. Every host builds its registry with `ActionRegistry.of(game)` (the app's sessions and MCP server, the bench, `AgentView`), so an override is always played, also when another recipe carries out that action as one of its steps (`context.run(action)`: `heal` and `buy` talk through `interact`); two recipes for one type, or a type that isn't a common action, are refused when the registry is built | only when the game's screens make a common recipe impossible |
+| `recipes` | how the game carries out the actions: a subclass of `Recipes` (a chain of classes: the common `Recipes`, then the generation's, `Gen4Recipes`, then the game's own, `HgssRecipes`, `PlatinumRecipes`), overriding only the methods of what it does differently (`override fun interact(action, context)`). One method per action, dispatched by `RecipeBase.perform`, an exhaustive `when` over the sealed `GameAction`: a new action doesn't compile without a recipe. The action's spec (name, parameters, availability, description) stays the common one, so agents see the same contract. Every action is played through the game's recipes: by `ActionRegistry.execute` (every host), and when a recipe carries out another action as one of its steps (`context.run(action)`: `heal`, `buy` and the PC talk through `interact`, a walk reapplies a Repel with `use_item`), so an override is always played. Methods are `internal`: games live in this module. A Gen 4 game must give its own `Gen4Recipes` subclass (`Gen4Game.recipes` is abstract), even empty | yes for a Gen 4 game (an empty subclass at first); else the common recipes |
 | `fieldMoveRule(kind)` | the move and badge of each field move, Fly included (Gen 4: give `fieldMoveBadges`, a map from each move the game has to the badge it needs, `null` for none: Teleport, Dig...; a move missing from the map is one the game doesn't have). A game whose party and party menu aren't decoded yet says so (`Gen4Game.partyRead = false`): every move is `FieldMoveAccess.NotSupported`, `fly` and `use_field_move` are listed unavailable (`NOT_SUPPORTED_BY_GAME`), routes don't use Surf, Cut... | for field moves and `fly` |
 
 `GameState` fields a game fills when it can read them (null / empty means unknown, never "none"):
@@ -136,8 +136,10 @@ Never compare values that depend on the time of day (the RTC follows the host cl
    optional field at the end of a type when the model really lacks something.
 7. **Story table** (optional, walkthrough knowledge): ordered steps with typed conditions on flags / vars / badges.
 8. **Verify the shared recipes** on the new game with the bench (`act:{...}`): heal, buy, PC, battle actions, fly,
-   fish, teach, go_to... A recipe only needs a per-game override (`actionOverrides`) when the game's screens really
-   differ; prefer making the common recipe read what differs from the state (a typed field of the screen) first.
+   fish, teach, go_to... What differs is handled by its kind: a **datum** that differs (an item id, the side a PC is
+   used from, a touch point) goes through a `PokemonGame` member or the typed state, read by the common recipe; a
+   **procedure** that differs (another order of screens, a list menu instead of the touch screen) is an override in
+   the game's recipes (`<Game>Recipes`), only of what differs.
 
 ## What Platinum doesn't read yet
 

@@ -32,6 +32,9 @@ internal abstract class GridGame(var x: Int, var y: Int) : PokemonGame {
 
     override val inputProbe = InputProbe { held }
 
+    /** How the game carries out the actions ([PokemonGame.recipes]): the common recipes by default. */
+    override var recipes: Recipes = Recipes.COMMON
+
     /** The buttons held on the current frame (what [busy] sees: A closing a message box...). */
     protected val buttons: Set<Button> get() = held
 

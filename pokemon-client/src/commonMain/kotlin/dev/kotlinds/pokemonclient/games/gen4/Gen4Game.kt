@@ -35,6 +35,9 @@ abstract class Gen4Game(gSystem: Long) : PokemonGame {
     /** [state] with its [GameState.fieldMoves] (the access to this game's field moves), the last step of [state]. */
     protected fun withFieldMoves(state: GameState): GameState = state.copy(fieldMoves = FieldMoves.access(state, partyRead, ::fieldMoveRule))
 
+    /** Every Gen 4 game gives its own recipes, built on the Gen 4 ones ([Gen4Recipes]). */
+    abstract override val recipes: Gen4Recipes
+
     /** ITEM_BICYCLE: the same item id (450) in every Gen 4 game. */
     override val bicycleItem: Int? get() = ITEM_BICYCLE
 

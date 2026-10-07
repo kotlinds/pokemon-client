@@ -57,7 +57,7 @@ object PuzzleActions {
             val direction = raw?.let { Direction.parse(it) ?: throw ActionException(ActionError.InvalidParameter("direction", it, Direction.entries.map { d -> d.name.lowercase() })) }
             return GameAction.Push(boulder, direction)
         }
-    }, ActionPlan { action, context -> PushPlans.push(action, context) })
+    })
 
     val definitions: List<ActionDefinition<*>> get() = listOf(push)
 }

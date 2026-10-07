@@ -80,7 +80,7 @@ class PushActionTest {
     @Test
     fun aBoulderIsPushedOneTileFromItsOtherSide() {
         val game = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)))
-        val done = assertIs<ActionOutcome.Done>(PuzzleActions.push.plan.run(GameAction.Push("person:1", Direction.NORTH), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.push(GameAction.Push("person:1", Direction.NORTH), game.context()))
         assertEquals(3 to 1, game.boulders["person:1"], done.detail)
         // Pushed from below it (3,3); the player stays there.
         assertEquals(3 to 3, game.x to game.y)
@@ -90,7 +90,7 @@ class PushActionTest {
     @Test
     fun aPushAgainstAWallMovesNothingAndSaysWhy() {
         val game = BoulderRoom(room, 1, 2, mutableMapOf("person:1" to (3 to 1)))
-        val failed = assertIs<ActionOutcome.Failed>(PuzzleActions.push.plan.run(GameAction.Push("person:1", Direction.NORTH), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.push(GameAction.Push("person:1", Direction.NORTH), game.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertTrue("can't push person:1 (at 3,1) north" in error.detail && "3,0 can't take it" in error.message, error.message)
         assertEquals(3 to 1, game.boulders["person:1"])
@@ -100,7 +100,7 @@ class PushActionTest {
     @Test
     fun withoutStrengthNothingMoves() {
         val game = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)), strength = false)
-        val failed = assertIs<ActionOutcome.Failed>(PuzzleActions.push.plan.run(GameAction.Push("person:1", Direction.NORTH), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.push(GameAction.Push("person:1", Direction.NORTH), game.context()))
         assertEquals(UnavailableReason.NO_POKEMON_KNOWS_MOVE, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertEquals(1 to 1, game.x to game.y)
     }
@@ -108,7 +108,7 @@ class PushActionTest {
     @Test
     fun withoutAHoleTheDirectionIsAsked() {
         val game = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)))
-        val failed = assertIs<ActionOutcome.Failed>(PuzzleActions.push.plan.run(GameAction.Push("person:1"), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.push(GameAction.Push("person:1"), game.context()))
         assertEquals("direction", assertIs<ActionError.InvalidParameter>(failed.error).parameter)
     }
 

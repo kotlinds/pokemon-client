@@ -51,7 +51,7 @@ object PokegearActions {
             return TuneRadio(station, json["close"]?.jsonPrimitive?.booleanOrNull ?: false)
         }
         override fun enumerate(state: GameState) = emptyList<TuneRadio>()
-    }, tunePlan())
+    })
 
     /** The definitions, in the order they are listed to agents. */
     val definitions: List<ActionDefinition<*>> get() = listOf(tuneRadio)
@@ -76,7 +76,8 @@ object PokegearActions {
 
     // region Plan
 
-    private fun tunePlan() = ActionPlan<TuneRadio> { action, context ->
+    /** The recipe of `tune_radio` (played by [Recipes.tuneRadio]): opens the radio, tunes it, checks the station. */
+    internal val tunePlan = ActionPlan<TuneRadio> { action, context ->
         val opened = openRadio(context)
         if (opened is Step.Failed) return@ActionPlan ActionOutcome.Failed(opened.error)
         var radio = (opened as Step.Done).value

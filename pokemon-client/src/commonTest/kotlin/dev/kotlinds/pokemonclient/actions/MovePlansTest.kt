@@ -606,6 +606,26 @@ class MovePlansTest {
         assertTrue("used a Super Repel and walked on" in done.detail.orEmpty(), done.detail)
     }
 
+    /**
+     * The Repel is used again with the game's own `use_item` ([dev.kotlinds.pokemonclient.PokemonGame.recipes]): the
+     * walk carries it out as one of its steps ([PlanContext.run]), never the common recipe behind the game's back.
+     */
+    @Test
+    fun onRepelEndReapplyPlaysTheGamesOwnUseItem() {
+        val used = mutableListOf<String>()
+        val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 2)
+        game.recipes = object : Recipes() {
+            override fun useItem(action: GameAction.UseItem, context: PlanContext): ActionOutcome {
+                used += action.item.raw
+                return super.useItem(action, context)
+            }
+        }
+        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(goTo(4, RepelEnd.REAPPLY), game.context()))
+        assertEquals(listOf("item:76"), used)
+        assertEquals(4 to 0, game.x to game.y)
+        assertEquals(1, game.superRepels)
+    }
+
     @Test
     fun onRepelEndReapplyWithNoRepelLeftStopsThere() {
         val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4)

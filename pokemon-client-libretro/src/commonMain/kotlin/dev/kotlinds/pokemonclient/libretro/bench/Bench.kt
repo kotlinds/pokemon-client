@@ -194,7 +194,7 @@ private class Bench(
 
     /** Frame of the last progress printed (see the scope's `onProgress`). */
     private var lastProgressPrint = Long.MIN_VALUE / 2
-    private val registry = ActionRegistry.of(game)
+    private val registry = ActionRegistry.of()
 
     /**
      * What the agent may know and do (`solve:on|off`, `reveal:on|off`, `hide:on|off`), like the app's settings: the

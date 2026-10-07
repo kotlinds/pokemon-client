@@ -26,6 +26,8 @@ class PlatinumGame(private val version: PlatinumVersion, rom: NdsRom? = null) : 
 
     override val fieldMoveBadges = PlatinumFieldMoves.BADGES
 
+    override val recipes: dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes get() = PlatinumRecipes
+
     /** The party and its menu aren't decoded yet: field moves (Fly, Surf...) are said unsupported, never tried. */
     override val partyRead: Boolean = false
 

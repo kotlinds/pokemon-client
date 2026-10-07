@@ -73,7 +73,7 @@ class TuneRadioTest {
     @Test
     fun aPresetTunesChannelsZeroToThree() {
         val game = scriptedRadio(TouchPoint(129, 49))
-        val outcome = assertIs<ActionOutcome.Done>(PokegearActions.tuneRadio.plan.run(TuneRadio(RadioStation.POKEMON_TALK), game.context()))
+        val outcome = assertIs<ActionOutcome.Done>(Recipes.COMMON.tuneRadio(TuneRadio(RadioStation.POKEMON_TALK), game.context()))
         assertEquals(listOf(TouchPoint(224, 62)), game.touches)
         assertTrue("channel 1" in outcome.detail!!)
         assertEquals(1, (game.screen as Screen.Viewer).radio!!.tuned)
@@ -82,7 +82,7 @@ class TuneRadioTest {
     @Test
     fun thePokeFluteIsReachedByDraggingTheCursorFromWhereItIs() {
         val game = scriptedRadio(TouchPoint(112, 76))
-        assertIs<ActionOutcome.Done>(PokegearActions.tuneRadio.plan.run(TuneRadio(RadioStation.POKE_FLUTE), game.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.tuneRadio(TuneRadio(RadioStation.POKE_FLUTE), game.context()))
         assertEquals(TouchPoint(112, 76), game.touchFrames.first(), "the stylus goes down on the cursor")
         assertEquals(TouchPoint(128, 48), game.touchFrames.last())
         val radio = (game.screen as Screen.Viewer).radio!!
@@ -92,7 +92,7 @@ class TuneRadioTest {
     @Test
     fun aPresetThatDidNotTakeIsFollowedByADrag() {
         val game = scriptedRadio(TouchPoint(128, 48), presetsWork = false)
-        assertIs<ActionOutcome.Done>(PokegearActions.tuneRadio.plan.run(TuneRadio(RadioStation.POKEMON_MUSIC), game.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.tuneRadio(TuneRadio(RadioStation.POKEMON_MUSIC), game.context()))
         assertEquals(TouchPoint(32, 62), game.touches.first())
         assertEquals(0, (game.screen as Screen.Viewer).radio!!.tuned)
     }
@@ -100,7 +100,7 @@ class TuneRadioTest {
     @Test
     fun aDialThatNeverMovesEndsInAVerificationError() {
         val game = FakeGame(viewer(radio(TouchPoint(112, 76))))
-        val outcome = assertIs<ActionOutcome.Failed>(PokegearActions.tuneRadio.plan.run(TuneRadio(RadioStation.POKE_FLUTE), game.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(Recipes.COMMON.tuneRadio(TuneRadio(RadioStation.POKE_FLUTE), game.context()))
         assertIs<ActionError.VerificationFailed>(outcome.error)
     }
 
@@ -108,7 +108,7 @@ class TuneRadioTest {
     fun aStationNotOnThisDialIsRefusedWithWhereToHearIt() {
         val johto = channels.take(2)
         val game = FakeGame(viewer(radio(TouchPoint(112, 76), RadioBand.JOHTO, johto)))
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(PokegearActions.tuneRadio.plan.run(TuneRadio(RadioStation.POKE_FLUTE), game.context())).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.tuneRadio(TuneRadio(RadioStation.POKE_FLUTE), game.context())).error)
         assertTrue("Expansion Card" in error.hint!!)
         assertTrue(game.touches.isEmpty())
     }

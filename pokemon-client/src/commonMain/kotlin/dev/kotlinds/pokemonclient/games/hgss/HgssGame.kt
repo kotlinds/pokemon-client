@@ -40,6 +40,8 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
 
     override val fieldMoveBadges = HgssFieldMoves.BADGES
 
+    override val recipes: dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes get() = HgssRecipes
+
     /**
      * The registered item buttons of the field's bottom-screen menu (overlay 27, hitbox table `ov27_0225CF68`, entries
      * 8 and 9: x 203-255, y 8-39 and 46-77), which set `FieldSystem.lastTouchMenuInput` to 9 / 10: the first / second

@@ -53,8 +53,8 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
     /** The bicycle's item id (none by default). */
     override var bicycleItem: Int? = null
 
-    /** The game's own recipes ([PokemonGame.actionOverrides]): none by default. */
-    override var actionOverrides: List<RecipeOverride<*>> = emptyList()
+    /** How the game carries out the actions ([PokemonGame.recipes]): the common recipes by default. */
+    override var recipes: Recipes = Recipes.COMMON
 
     /** The game's data, when a test needs some (see [StubGameData]). */
     override var data: GameData? = null

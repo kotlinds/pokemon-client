@@ -45,7 +45,7 @@ object MoreActions {
                 .map { Choice("item:${it.item.id.value}", "${it.item.name} x${it.quantity}") }))
         },
         parse = { json -> GameAction.Sell(ItemRef(string(json, "item")), json["quantity"]?.jsonPrimitive?.intOrNull?.also { check(it, "quantity", 1..999) } ?: 1) },
-    ), ShopPlans.sell)
+    ))
 
     val release = ActionDefinition(GameAction.Release::class, spec(
         name = "release",
@@ -65,7 +65,7 @@ object MoreActions {
             val raw = string(json, "pokemon")
             GameAction.Release(MonId.parse(raw) ?: throw ActionException(ActionError.InvalidParameter("pokemon", raw)), json["confirm"]?.jsonPrimitive?.booleanOrNull ?: false)
         },
-    ), PcPlans.release)
+    ))
 
     val drag = ActionDefinition(GameAction.Drag::class, spec(
         name = "drag",
@@ -87,7 +87,7 @@ object MoreActions {
                 json["frames"]?.jsonPrimitive?.intOrNull?.also { check(it, "frames", 2..240) } ?: DEFAULT_DRAG_FRAMES,
             )
         },
-    ), dragPlan)
+    ))
 
     val openMenu = ActionDefinition(GameAction.OpenMenu::class, spec(
         name = "open_menu",
@@ -109,7 +109,7 @@ object MoreActions {
             val raw = string(json, "entry").lowercase()
             GameAction.OpenMenu(if (raw.startsWith("option:")) raw else "option:$raw")
         },
-    ), openMenuPlan)
+    ))
 
     /** The definitions, in the order they are listed to agents. */
     val definitions: List<ActionDefinition<*>> get() = listOf(sell, release, openMenu, drag)
@@ -117,7 +117,7 @@ object MoreActions {
     // region Plans
 
     /** Holds the stylus from [GameAction.Drag.from] to [GameAction.Drag.to], one small move per frame, then lifts it. */
-    private val dragPlan: ActionPlan<GameAction.Drag> get() = ActionPlan { action, context ->
+    internal val dragPlan: ActionPlan<GameAction.Drag> = ActionPlan { action, context ->
         val before = context.state().screen
         val (from, to, frames) = action
         for (i in 0..frames) {
@@ -138,7 +138,7 @@ object MoreActions {
     }
 
     /** Opens the start menu (X) and picks the entry; checks something else is on screen after. */
-    private val openMenuPlan: ActionPlan<GameAction.OpenMenu> get() = ActionPlan { action, context ->
+    internal val openMenuPlan: ActionPlan<GameAction.OpenMenu> = ActionPlan { action, context ->
         PartyBagPlans.openStartMenuEntry(context, action.entry).then { state ->
             val screen = state.screen
             if ((screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU) {

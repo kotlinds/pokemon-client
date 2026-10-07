@@ -71,7 +71,7 @@ data class AgentOptions(
  * opponents this battle ([BattleKnowledge]), the fly suggestions (each costs a search of the world) and what a compact
  * answer already sent (the team, the position).
  */
-class AgentView(private val game: PokemonGame, private val registry: ActionRegistry = ActionRegistry.of(game)) {
+class AgentView(private val game: PokemonGame, private val registry: ActionRegistry = ActionRegistry.of()) {
 
     /** How much a description says. */
     enum class Detail {

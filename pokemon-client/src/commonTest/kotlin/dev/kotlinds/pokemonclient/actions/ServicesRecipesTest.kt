@@ -65,21 +65,27 @@ class ServicesRecipesTest {
         assertTrue(ui.party.all { it.hp == it.maxHp })
     }
 
-    /**
-     * A game's own `interact` ([PokemonGame.actionOverrides]) is played by the recipes that talk to someone as one of
-     * their steps (`heal` to the nurse, `buy` to the clerk: [PlanContext.run]), not only when the agent calls
-     * `interact` itself; without an override, the common one (the other heal and buy tests).
-     */
-    @Test
-    fun aGamesOwnInteractIsPlayedByHealAndBuy() {
-        val talked = mutableListOf<String>()
-        val ownInteract = RecipeOverride.of<GameAction.Interact> { action, context ->
+    /** A game's recipes whose own `interact` records who it talked to, then presses A where the player stands. */
+    private fun ownInteract(talked: MutableList<String>) = object : Recipes() {
+        override fun interact(action: GameAction.Interact, context: PlanContext): ActionOutcome {
             talked += action.target
             val before = context.state().screen
             context.scope.tap(Button.A)
             context.navigator.awaitChange(before)
-            ActionOutcome.Done("the game's own interact")
+            return ActionOutcome.Done("the game's own interact")
         }
+    }
+
+    /**
+     * A game's own `interact` ([dev.kotlinds.pokemonclient.PokemonGame.recipes], a subclass overriding it) is played
+     * by the recipes that talk to someone as one of their steps (`heal` to the nurse, `buy` to the clerk:
+     * [PlanContext.run]), not only when the agent calls `interact` itself; without it, the common one (the other heal
+     * and buy tests). The guard against delegating recipes (`by`), whose nested calls would skip the override.
+     */
+    @Test
+    fun aGamesOwnInteractIsPlayedByHealAndBuy() {
+        val talked = mutableListOf<String>()
+        val ownInteract = ownInteract(talked)
         // heal: the nurse (the same scripted counter as above).
         val nurse = FieldObject("person:0", "nurse", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.NURSE)
         val center = ScriptedUi(OVERWORLD, party = listOf(mon(1, hp = 5)), world = world(3, 3))
@@ -96,7 +102,7 @@ class ServicesRecipesTest {
                 else -> screen
             }
         }
-        center.game.actionOverrides = listOf(ownInteract)
+        center.game.recipes = ownInteract
         assertEquals("party healed", assertIs<ActionOutcome.Done>(FieldPlans.heal.run(GameAction.Heal, center.context())).detail)
         assertEquals(listOf("person:0"), talked)
         // buy: a clerk whose catalog isn't known (talked to, the list read on screen).
@@ -111,14 +117,14 @@ class ServicesRecipesTest {
                 else -> screen
             }
         }
-        mart.game.actionOverrides = listOf(ownInteract)
-        // Through the registry of the game, like every host.
-        val registry = ActionRegistry.of(mart.game)
+        mart.game.recipes = ownInteract
+        // Through the registry, like every host.
+        val registry = ActionRegistry.of()
         assertIs<ActionOutcome.Done>(registry.execute(GameAction.Buy(emptyList()), mart.game.scope(), mart.game))
         assertEquals(listOf("person:0", "person:4"), talked)
         // The same counter in a game without override: the common interact, never the other game's.
         center.party = listOf(mon(1, hp = 5))
-        center.game.actionOverrides = emptyList()
+        center.game.recipes = Recipes.COMMON
         assertEquals("party healed", assertIs<ActionOutcome.Done>(FieldPlans.heal.run(GameAction.Heal, center.context())).detail)
         assertEquals(listOf("person:0", "person:4"), talked)
     }
@@ -491,6 +497,18 @@ class ServicesRecipesTest {
         assertIs<Screen.Overworld>(ui.game.screen)
         // Two modes: the box screen is left once for the storage menu, the PC stays on.
         assertEquals(listOf(PcMode.DEPOSIT, PcMode.WITHDRAW), opened)
+    }
+
+    /** The same for the PC: a game's own `interact` boots it ([PcPlans] talks to it as a step of the session). */
+    @Test
+    fun aGamesOwnInteractIsPlayedByThePc() {
+        val talked = mutableListOf<String>()
+        val ui = pcUi(listOf(mon(1), mon(2)), emptyList())
+        ui.game.recipes = ownInteract(talked)
+        val done = assertIs<ActionOutcome.Done>(ActionRegistry.of().execute(GameAction.Deposit(MonId(2, 1)), ui.game.scope(), ui.game))
+        assertEquals(listOf(MovePlans.PC), talked)
+        assertTrue("deposited MON2" in done.detail.orEmpty(), done.detail)
+        assertEquals(listOf(MonId(1, 1)), ui.party.map { it.id })
     }
 
     @Test

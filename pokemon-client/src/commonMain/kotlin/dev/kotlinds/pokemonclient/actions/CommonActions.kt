@@ -23,7 +23,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
-/** The actions shared by every game: their specs and common recipes. */
+/** The actions shared by every game: their specs (the contract; how each is carried out is the game's [Recipes]). */
 object CommonActions {
 
     private val both = setOf(ActionMode.PURE, ActionMode.ASSISTED)
@@ -38,7 +38,7 @@ object CommonActions {
         availability = { Availability.Available() },
         parse = { GameAction.Press(button(it)) },
         enumerate = { Button.entries.map(GameAction::Press) },
-    ), BasicPlans.press)
+    ))
 
     val touch = ActionDefinition(GameAction.Touch::class, spec(
         name = "touch",
@@ -51,7 +51,7 @@ object CommonActions {
         modes = both,
         availability = { Availability.Available() },
         parse = { GameAction.Touch(TouchPoint(int(it, "x", 0..255), int(it, "y", 0..191))) },
-    ), BasicPlans.touch)
+    ))
 
     val wait = ActionDefinition(GameAction.Wait::class, spec(
         name = "wait",
@@ -69,7 +69,7 @@ object CommonActions {
             GameAction.Wait(json["frames"]?.jsonPrimitive?.intOrNull?.also { check(it, "frames", 1..1800) }, untilChange = until == "change")
         },
         enumerate = { listOf(GameAction.Wait()) },
-    ), BasicPlans.wait)
+    ))
 
     val advanceDialogue = ActionDefinition(GameAction.AdvanceDialogue::class, spec(
         name = "advance_dialogue",
@@ -87,7 +87,7 @@ object CommonActions {
         },
         parse = { GameAction.AdvanceDialogue },
         enumerate = { listOf(GameAction.AdvanceDialogue) },
-    ), BasicPlans.advanceDialogue)
+    ))
 
     val choose = ActionDefinition(GameAction.Choose::class, spec(
         name = "choose",
@@ -100,7 +100,7 @@ object CommonActions {
         },
         parse = { GameAction.Choose(string(it, "entry")) },
         enumerate = { state -> (state.screen as? Screen.Selectable)?.entries?.filter { it.selectable }?.map { GameAction.Choose(it.id) }.orEmpty() },
-    ), BasicPlans.choose)
+    ))
 
     val attack = ActionDefinition(GameAction.Attack::class, spec(
         name = "attack",
@@ -124,7 +124,7 @@ object CommonActions {
             val foes = if (battle.isDouble) battle.battlers.filter { !it.ref.isPlayerSide && it.hp > 0 }.map { it.ref } else listOf(null)
             BattleMoveChoice.choices(actor).flatMap { (id, _) -> foes.map { GameAction.Attack(MoveRef(id), it) } }
         },
-    ), BasicPlans.attack)
+    ))
 
     val run = ActionDefinition(GameAction.Run::class, spec(
         name = "run",
@@ -141,7 +141,7 @@ object CommonActions {
         },
         parse = { GameAction.Run },
         enumerate = { listOf(GameAction.Run) },
-    ), BasicPlans.run)
+    ))
 
     val keepBattling = ActionDefinition(GameAction.KeepBattling::class, spec(
         name = "keep_battling",
@@ -160,7 +160,7 @@ object CommonActions {
         },
         parse = { GameAction.KeepBattling },
         enumerate = { listOf(GameAction.KeepBattling) },
-    ), BasicPlans.keepBattling)
+    ))
 
     val reorderParty = ActionDefinition(GameAction.ReorderParty::class, spec(
         name = "reorder_party",
@@ -178,7 +178,7 @@ object CommonActions {
         modes = assisted,
         availability = { state -> if (PartyBagPlans.inField(state) && state.party.size > 1) Availability.Available(mapOf("pokemon" to monChoices(state))) else Availability.Hidden },
         parse = { json -> parseReorderParty(json) },
-    ), PartyBagPlans.reorderParty)
+    ))
 
     val takeItem = ActionDefinition(GameAction.TakeItem::class, spec(
         name = "take_item",
@@ -194,7 +194,7 @@ object CommonActions {
             }
         },
         parse = { json -> GameAction.TakeItem(mon(json, "pokemon")) },
-    ), PartyBagPlans.takeItem)
+    ))
 
     val giveItem = ActionDefinition(GameAction.GiveItem::class, spec(
         name = "give_item",
@@ -206,7 +206,7 @@ object CommonActions {
         modes = assisted,
         availability = { state -> if (PartyBagPlans.inField(state)) Availability.Available(mapOf("pokemon" to monChoices(state))) else Availability.Hidden },
         parse = { json -> GameAction.GiveItem(mon(json, "pokemon"), ItemRef(string(json, "item"))) },
-    ), PartyBagPlans.giveItem)
+    ))
 
     val useItem = ActionDefinition(GameAction.UseItem::class, spec(
         name = "use_item",
@@ -236,7 +236,7 @@ object CommonActions {
             }
         },
         parse = { json -> parseUseItem(json) },
-    ), PartyBagPlans.useItem)
+    ))
 
     /** Items worth offering to `use_item` (medicine, berries, battle items; key items have their own action) and the targets. */
     private fun itemChoices(state: GameState, inBattle: Boolean): Map<String, List<Choice>> {
@@ -279,7 +279,7 @@ object CommonActions {
             locked(state, StartMenuFeature.SAVE) ?: if (PartyBagPlans.inField(state)) Availability.Available() else Availability.Hidden
         },
         parse = { GameAction.SaveGame },
-    ), FieldPlans.saveGame)
+    ))
 
     val chooseStarter = ActionDefinition(GameAction.ChooseStarter::class, spec(
         name = "choose_starter",
@@ -293,7 +293,7 @@ object CommonActions {
             else Availability.Available(mapOf("starter" to screen.starters.map { Choice("species:${it.id.value}", it.name) }))
         },
         parse = { json -> GameAction.ChooseStarter(string(json, "starter")) },
-    ), StarterPlans.chooseStarter)
+    ))
 
     val softReset = ActionDefinition(GameAction.SoftReset::class, spec(
         name = "soft_reset",
@@ -310,7 +310,7 @@ object CommonActions {
             }
         },
         parse = { GameAction.SoftReset },
-    ), SystemPlans.softReset)
+    ))
 
     val continueGame = ActionDefinition(GameAction.ContinueGame::class, spec(
         name = "continue_game",
@@ -321,7 +321,7 @@ object CommonActions {
         modes = assisted,
         availability = { state -> if (SystemPlans.beforeTheGame(state)) Availability.Available() else Availability.Hidden },
         parse = { GameAction.ContinueGame },
-    ), SystemPlans.continueGame)
+    ))
 
     val watchHallOfFame = ActionDefinition(GameAction.WatchHallOfFame::class, spec(
         name = "watch_hall_of_fame",
@@ -333,7 +333,7 @@ object CommonActions {
         modes = assisted,
         availability = { state -> if (HallOfFamePlans.offered(state)) Availability.Available() else Availability.Hidden },
         parse = { GameAction.WatchHallOfFame },
-    ), HallOfFamePlans.watchHallOfFame)
+    ))
 
     private val moveParameters = listOf(
         Parameter("avoid_tall_grass", ParameterType.BOOLEAN, "Avoid tall grass when another way exists (fewer wild battles).", required = false),
@@ -406,7 +406,7 @@ object CommonActions {
             if (target == null && (x == null || y == null) && map == null) throw ActionException(ActionError.InvalidParameter("target", "missing", listOf("x and y", "target", "map")))
             GameAction.GoTo(x, y, target, moveOptions(json), map)
         },
-    ), MovePlans.goTo)
+    ))
 
     val interact = ActionDefinition(GameAction.Interact::class, spec(
         name = "interact",
@@ -415,7 +415,7 @@ object CommonActions {
         modes = assisted,
         availability = { state -> if (MovePlans.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to targetChoices(state))) else Availability.Hidden },
         parse = { json -> GameAction.Interact(string(json, "target")) },
-    ), MovePlans.interact)
+    ))
 
     val step = ActionDefinition(GameAction.Step::class, spec(
         name = "step",
@@ -436,7 +436,7 @@ object CommonActions {
             if (tiles !in 1..MovePlans.MAX_STEP_TILES) throw ActionException(ActionError.InvalidParameter("tiles", tiles.toString(), listOf("1..${MovePlans.MAX_STEP_TILES}")))
             GameAction.Step(direction, tiles, moveOptions(json))
         },
-    ), MovePlans.step)
+    ))
 
     val findEncounter = ActionDefinition(GameAction.FindEncounter::class, spec(
         name = "find_encounter",
@@ -445,7 +445,7 @@ object CommonActions {
         modes = assisted,
         availability = { state -> if (MovePlans.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden },
         parse = { GameAction.FindEncounter },
-    ), MovePlans.findEncounter)
+    ))
 
     val heal = ActionDefinition(GameAction.Heal::class, spec(
         name = "heal",
@@ -460,7 +460,7 @@ object CommonActions {
             }
         },
         parse = { GameAction.Heal },
-    ), FieldPlans.heal)
+    ))
 
     val deposit = ActionDefinition(GameAction.Deposit::class, spec(
         name = "deposit",
@@ -472,7 +472,7 @@ object CommonActions {
             else Availability.Hidden
         },
         parse = { json -> GameAction.Deposit(mon(json, "pokemon")) },
-    ), PcPlans.deposit)
+    ))
 
     val withdraw = ActionDefinition(GameAction.Withdraw::class, spec(
         name = "withdraw",
@@ -487,7 +487,7 @@ object CommonActions {
             }
         },
         parse = { json -> GameAction.Withdraw(mon(json, "pokemon")) },
-    ), PcPlans.withdraw)
+    ))
 
     val pc = ActionDefinition(GameAction.Pc::class, spec(
         name = "pc",
@@ -510,7 +510,7 @@ object CommonActions {
             })
         },
         parse = { json -> GameAction.Pc(pcOperations(json)) },
-    ), PcPlans.pc)
+    ))
 
     val buy = ActionDefinition(GameAction.Buy::class, spec(
         name = "buy",
@@ -541,7 +541,7 @@ object CommonActions {
             }))
         },
         parse = { json -> GameAction.Buy(purchases(json)) },
-    ), ShopPlans.buy)
+    ))
 
     val setQuantity = ActionDefinition(GameAction.SetQuantity::class, spec(
         name = "set_quantity",
@@ -556,7 +556,7 @@ object CommonActions {
             Availability.Available(mapOf("value" to listOf(Choice("${screen.min}..${screen.max}", "now ${screen.value}"))))
         },
         parse = { json -> GameAction.SetQuantity(int(json, "value", 0..999), bool(json, "confirm")) },
-    ), ShopPlans.setQuantity)
+    ))
 
     val switch = ActionDefinition(GameAction.Switch::class, spec(
         name = "switch",
@@ -578,7 +578,7 @@ object CommonActions {
             if (choices.isEmpty()) Availability.Unavailable(UnavailableReason.NO_STOCK, "No other Pokémon can battle") else Availability.Available(mapOf("pokemon" to choices))
         },
         parse = { json -> GameAction.Switch(mon(json, "pokemon")) },
-    ), BattlePlans.switch)
+    ))
 
     val throwBall = ActionDefinition(GameAction.ThrowBall::class, spec(
         name = "throw_ball",
@@ -598,7 +598,7 @@ object CommonActions {
             else Availability.Available(mapOf("ball" to balls.map { Choice("item:${it.item.id.value}", "${it.item.name} x${it.quantity}") }))
         },
         parse = { json -> GameAction.ThrowBall(ItemRef(string(json, "ball")), json["nickname"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }) },
-    ), BattlePlans.throwBall)
+    ))
 
     val learnMove = ActionDefinition(GameAction.LearnMove::class, spec(
         name = "learn_move",
@@ -614,7 +614,7 @@ object CommonActions {
             Availability.Available(choices?.let { mapOf("forget" to it) } ?: emptyMap())
         },
         parse = { json -> GameAction.LearnMove(json["forget"]?.jsonPrimitive?.contentOrNull?.let(::MoveRef)) },
-    ), BattlePlans.learnMove)
+    ))
 
     val fish = ActionDefinition(GameAction.Fish::class, spec(
         name = "fish",
@@ -627,7 +627,7 @@ object CommonActions {
             if (rods.isEmpty()) Availability.Hidden else Availability.Available(mapOf("rod" to rods.map { Choice("item:${it.item.id.value}", it.item.name) }))
         },
         parse = { json -> GameAction.Fish(ItemRef(string(json, "rod"))) },
-    ), FieldPlans.fish)
+    ))
 
     /** Old Rod, Good Rod, Super Rod (Gen 4 item ids). */
     private val RODS = setOf(445, 446, 447)
@@ -639,7 +639,7 @@ object CommonActions {
         modes = assisted,
         availability = { state -> if (state.screen is Screen.Keyboard) Availability.Available() else Availability.Hidden },
         parse = { json -> GameAction.EnterText(json["text"]?.jsonPrimitive?.contentOrNull ?: throw ActionException(ActionError.InvalidParameter("text", "missing"))) },
-    ), TextPlans.enterText)
+    ))
 
     val teach = ActionDefinition(GameAction.Teach::class, spec(
         name = "teach",
@@ -656,7 +656,7 @@ object CommonActions {
             else Availability.Available(mapOf("item" to machines.map { Choice("item:${it.item.id.value}", it.item.name) }, "pokemon" to monChoices(state)))
         },
         parse = { json -> GameAction.Teach(ItemRef(string(json, "item")), mon(json, "pokemon"), json["forget"]?.jsonPrimitive?.contentOrNull?.let(::MoveRef)) },
-    ), PartyBagPlans.teach)
+    ))
 
     val useKeyItem = ActionDefinition(GameAction.UseKeyItem::class, spec(
         name = "use_key_item",
@@ -670,7 +670,7 @@ object CommonActions {
             else Availability.Available(mapOf("item" to keys.map { Choice("item:${it.item.id.value}", it.item.name) }))
         },
         parse = { json -> GameAction.UseKeyItem(ItemRef(string(json, "item"))) },
-    ), PartyBagPlans.useKeyItem)
+    ))
 
     val registerItem = ActionDefinition(GameAction.RegisterItem::class, spec(
         name = "register_item",
@@ -683,7 +683,7 @@ object CommonActions {
             else Availability.Available(mapOf("item" to keys.map { Choice("item:${it.item.id.value}", it.item.name + if (state.registeredItems.firstOrNull() == it.item.id) " (on Y)" else "") }))
         },
         parse = { json -> GameAction.RegisterItem(ItemRef(string(json, "item"))) },
-    ), PartyBagPlans.registerItem)
+    ))
 
     val fly = ActionDefinition(GameAction.Fly::class, spec(
         name = "fly",
@@ -706,7 +706,7 @@ object CommonActions {
             }
         },
         parse = { json -> GameAction.Fly(string(json, "destination")) },
-    ), FieldPlans.fly)
+    ))
 
     val useFieldMove = ActionDefinition(GameAction.UseFieldMove::class, spec(
         name = "use_field_move",
@@ -750,7 +750,7 @@ object CommonActions {
             state.fieldMoves.orEmpty().filter { (kind, access) -> kind.use == FieldMoveUse.ACTION && !kind.healsAnother && access is FieldMoveAccess.Usable }
                 .keys.map { GameAction.UseFieldMove(it) }
         },
-    ), FieldPlans.useFieldMove)
+    ))
 
     val setOptions = ActionDefinition(GameAction.SetOptions::class, spec(
         name = "set_options",
@@ -790,7 +790,7 @@ object CommonActions {
                 battleStyle = value("battle_style", listOf("shift", "set"))?.let(OptionsPlans::battleStyle),
             )
         },
-    ), OptionsPlans.setOptions)
+    ))
 
     /** Every common action, in the order they are listed to agents. */
     val definitions: List<ActionDefinition<*>> get() =
