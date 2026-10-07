@@ -32,6 +32,9 @@ internal abstract class GridGame(var x: Int, var y: Int) : PokemonGame {
 
     override val inputProbe = InputProbe { held }
 
+    /** The buttons held on the current frame (what [busy] sees: A closing a message box...). */
+    protected val buttons: Set<Button> get() = held
+
     /**
      * Called on every frame before the D-pad is read: true while the game ignores it (the hold starts over). Runs the
      * game's own timers (a fade, a scene, a trainer walking up).

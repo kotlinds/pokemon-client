@@ -37,9 +37,9 @@ class HgssServicesRomTest {
     @Test
     fun routeTrainersComeFromTheCommonTrainerScripts() {
         // obj_R27_mystery_2: std_trainer(TRAINER_PSYCHIC_M_ELI) = 3000 + 412 - 1.
-        assertEquals(412, HgssTrainers.commonScriptTrainer(3411))
-        assertEquals(412, HgssTrainers.commonScriptTrainer(5411))
-        assertNull(HgssTrainers.commonScriptTrainer(7000))
+        assertEquals(412, dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(3411))
+        assertEquals(412, dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(5411))
+        assertNull(dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(7000))
     }
 
     @Test

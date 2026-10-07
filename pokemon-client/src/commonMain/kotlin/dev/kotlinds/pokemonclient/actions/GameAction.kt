@@ -18,6 +18,13 @@ import dev.kotlinds.pokemonclient.state.normalizeName
 sealed interface GameAction {
     val key: String
 
+    /**
+     * The id of the current map this action names (`person:3`, `warp:1`, `exit:north`...), or null: such ids only
+     * mean something on the map they were read on, so a chain refuses the step once the player is on another map
+     * ([ChainStop.TargetOnOtherMap]) rather than walk to whatever has that id there.
+     */
+    val mapLocalTarget: String? get() = null
+
     // region Raw controls (pure mode)
 
     /** Presses one button once (a self-checking tap). */
@@ -275,11 +282,15 @@ sealed interface GameAction {
         val map: String? = null,
     ) : GameAction {
         override val key get() = "go_to(${target ?: "$x,$y"}${map?.let { " on $it" } ?: ""})"
+
+        // With a map named, the target is on that map (its name pins it): only a bare local id is the current map's.
+        override val mapLocalTarget get() = target?.takeIf { map == null && isMapLocalId(it) }
     }
 
     /** Walks next to [target] (a person, sign, object or item) and interacts with it (A). */
     data class Interact(val target: String) : GameAction {
         override val key get() = "interact($target)"
+        override val mapLocalTarget get() = target.takeIf(::isMapLocalId)
     }
 
     /** Walks in nearby known tall grass until the first wild encounter. */
@@ -298,13 +309,25 @@ sealed interface GameAction {
     // endregion
 
     /**
-     * Pushes the Strength boulder [boulder] (`person:N`) into its own hole (Ice Path B1F: it drops to the floor below),
-     * planning the pushes; the agent's explicit act, so done even when movement puzzles are left to the agent.
+     * Pushes the Strength boulder [boulder] (`person:N`): one tile towards [direction], walking to its other side
+     * first; without a direction, into its own hole (Ice Path B1F: it drops to the floor below), planning the pushes.
+     * The agent's explicit act, so done even when movement puzzles are left to the agent.
      */
-    data class Push(val boulder: String) : GameAction {
-        override val key get() = "push($boulder)"
+    data class Push(val boulder: String, val direction: Direction? = null) : GameAction {
+        override val key get() = "push($boulder" + (direction?.let { ",${it.name.lowercase()}" } ?: "") + ")"
+        override val mapLocalTarget get() = boulder.takeIf(::isMapLocalId)
     }
 }
+
+/**
+ * True when [target] is an id of the current map's things (`person:`, `item:`, `warp:`, `hole:`, `sign:`,
+ * `hidden_item:`, `examine:`, `cart:`, `teleport:`, `exit:`): numbered or named per map, it means something else (or
+ * nothing) on another one. Map names, `pc`, `frontier` and coordinates aren't.
+ */
+internal fun isMapLocalId(target: String): Boolean = target.substringBefore(':', "") in MAP_LOCAL_PREFIXES
+
+/** The prefixes of [isMapLocalId] (the kinds [MovePlans.resolve] and the exits of [WorldTravel] resolve on the current map). */
+private val MAP_LOCAL_PREFIXES = setOf("person", "item", "warp", "hole", "sign", "hidden_item", "examine", "cart", "teleport", "exit")
 
 /** One line of a [GameAction.Buy]: an item and how many (1-99). */
 data class Purchase(val item: ItemRef, val quantity: Int)
@@ -353,7 +376,76 @@ data class MoveOptions(
     val runInEncounterAreas: Boolean = false,
     /** Ride the bicycle (got on before walking, again after each warp, where cycling is allowed). */
     val bike: Boolean = false,
+    /** What the walk does when the Repel wears off on the way ([RepelEnd]): stops there by default. */
+    val onRepelEnd: RepelEnd = RepelEnd.STOP,
+    /**
+     * What go_to does when going round what [avoidTrainers] / [avoidTallGrass] avoid makes the way a detour (more
+     * than twice the steps of the shortest way, and at least 30 more: [WorldTravel.isDetour]) while that short way
+     * goes through it ([AvoidDetour]): refuses by default, offering both.
+     */
+    val onAvoidDetour: AvoidDetour = AvoidDetour.REFUSE,
+    /**
+     * What go_to does when a target of the player's own map is reached only by a loop through many other maps
+     * ([LocalDetour]: rocks or walls in between, the way round crosses the region): refuses by default.
+     */
+    val onLocalDetour: LocalDetour = LocalDetour.REFUSE,
 )
+
+/**
+ * What go_to does when avoiding what the agent asked to avoid (trainers' sight, tall grass) makes the way a detour
+ * (more than twice the steps of the shortest way, and at least 30 more), while that short way goes through it. The
+ * agent's decision: refused by default ([REFUSE], the error gives both ways); [SHORT_WAY] is opt-in.
+ */
+enum class AvoidDetour {
+    /** Stop before moving ([dev.kotlinds.pokemonclient.world.RouteFailure.LongDetour] with its short way): the agent decides. */
+    REFUSE,
+
+    /** Take the short way, each walk still avoiding what it can on its map (those in the way may stop the walk). */
+    SHORT_WAY;
+
+    /** The wire value (`refuse`, `short_way`). */
+    val wire: String get() = name.lowercase()
+}
+
+/**
+ * What go_to does when a target of the player's own map (a warp, a person, a tile) is reached only by a loop through
+ * many other maps: it looks next door, but rocks, walls or heights are in between and the only way round crosses the
+ * region (NOTES: `go_to warp:1` on Route 20, a 17-warp loop through Kanto to a beach walled off by rocks, while the
+ * entrance next to the player was the way in the agent wanted). No shorter way exists, so it isn't a detour by length
+ * ([AvoidDetour]); it is the agent's decision: refused by default ([REFUSE]); [GO] is opt-in.
+ */
+enum class LocalDetour {
+    /** Stop before moving ([dev.kotlinds.pokemonclient.world.RouteFailure.LongDetour] without a short way): the agent decides. */
+    REFUSE,
+
+    /** Take the loop, however many maps it crosses. */
+    GO;
+
+    /** The wire value (`refuse`, `go`). */
+    val wire: String get() = name.lowercase()
+}
+
+/**
+ * What a walk does when the Repel's steps run out on the way ("REPEL's effect wore off...", closed in every case). Like
+ * the end of a battle, it is the agent's decision: by default the walk stops there ([STOP]); the other values are
+ * opt-in, for the agent that decided in advance.
+ */
+enum class RepelEnd {
+    /** Stop on the tile where it wore off ([InterruptionCause.REPEL_ENDED]): the agent decides (use another, go on). */
+    STOP,
+
+    /** Walk on without a Repel. */
+    CONTINUE,
+
+    /** Use a Repel from the bag (checked like any bag use), then walk on; none left: stop like [STOP]. */
+    REAPPLY,
+
+    /** [REAPPLY] when the rest of the way still crosses tiles where wild Pokémon appear and a Repel is left, else [CONTINUE]. */
+    AUTO;
+
+    /** The wire value (`stop`, `continue`, `reapply`, `auto`). */
+    val wire: String get() = name.lowercase()
+}
 
 /** One item use of [GameAction.UseItem]: the item, the Pokémon it is used on, the move for a PP restoring item. */
 data class ItemUse(val item: ItemRef, val target: MonId? = null, val move: MoveRef? = null) {

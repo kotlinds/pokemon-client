@@ -5,6 +5,7 @@ import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BagItem
 import dev.kotlinds.pokemonclient.state.BagPocket
 import dev.kotlinds.pokemonclient.state.BattleKind
+import dev.kotlinds.pokemonclient.state.BattleOutcome
 import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.BattlerState
@@ -265,6 +266,295 @@ class BattleActionPlansTest {
         assertIs<Availability.Available>(CommonActions.switch.spec.availability(free))
     }
 
+    // region Encore, Disable, Struggle
+
+    private val waterGun = KnownMove(Named(MoveId(55), "Water Gun"), 20, 25, "Water")
+
+    private fun battleWith(vararg volatile: VolatileStatus, moves: List<KnownMove> = listOf(thunderbolt, icyWind), double: Boolean = false) = BattleState(
+        BattleKind.WILD, double, BattlerRef.PLAYER_LEFT,
+        listOf(battler(BattlerRef.PLAYER_LEFT, moves, volatile.toSet()), battler(BattlerRef.FOE_LEFT)),
+        emptyList(), listOf(MonId(1, 1), MonId(2, 1)), null,
+    )
+
+    private fun moveList(vararg entries: Entry) = Screen.MoveSelect(
+        MoveContext.BATTLE, MonId(1, 1), null, entries.toList() + Entry("option:cancel", "CANCEL"),
+        Cursor.At(0), Topology.vertical(entries.size + 1), CancelBehavior.CLOSES,
+    )
+
+    @Test
+    fun underEncoreFightAlonePlaysTheEncoredMoveAndIsASuccess() {
+        // Race: attack under Encore answered UNEXPECTED_SCREEN with performed:[] while the turn was played (x5).
+        val encored = VolatileStatus.Encored(Named(MoveId(85), "Thunderbolt"), 3)
+        val ui = Ui({ battleWith(encored) }, listOf(mon(1)), emptyList(), command)
+        // The game skips the move list: FIGHT starts the turn.
+        ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") Screen.Battle(Awaiting.ANIMATION) else screen }
+        val done = assertIs<ActionOutcome.Done>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        assertTrue(done.detail.orEmpty().contains("Encore"), done.detail)
+        assertEquals(listOf(Button.A), ui.game.presses)
+    }
+
+    @Test
+    fun underEncoreInADoubleBattleTheNextPokemonsMenuAfterFightIsASuccess() {
+        val encored = VolatileStatus.Encored(Named(MoveId(55), "Water Gun"), 2)
+        val ui = Ui({ battleWith(encored, moves = listOf(waterGun, icyWind), double = true) }, listOf(mon(1)), emptyList(), command)
+        ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") command.copy(actor = BattlerRef.PLAYER_RIGHT) else screen }
+        assertIs<ActionOutcome.Done>(BasicPlans.attack.run(GameAction.Attack(MoveRef("move:55"), BattlerRef.FOE_RIGHT), ui.game.context()))
+    }
+
+    @Test
+    fun underEncoreAnotherMoveIsRefusedBeforeAnyPress() {
+        val encored = VolatileStatus.Encored(Named(MoveId(85), "Thunderbolt"), 3)
+        val ui = Ui({ battleWith(encored) }, listOf(mon(1)), emptyList(), command)
+        val failed = assertIs<ActionOutcome.Failed>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
+        assertEquals(UnavailableReason.ENCORED, assertIs<ActionError.Unavailable>(failed.error).reason)
+        assertTrue(ui.game.presses.isEmpty())
+        val choices = assertIs<Availability.Available>(CommonActions.attack.spec.availability(GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(encored), null)))
+        assertEquals(listOf("move:85"), choices.choices["move"]!!.map { it.value })
+    }
+
+    @Test
+    fun withoutEncoreTheMoveListIsStillRequiredAfterFight() {
+        // FIGHT leading anywhere else than the move list (not under Encore) is an error naming the screen's kind.
+        val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), command)
+        ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") command.copy(actor = BattlerRef.PLAYER_RIGHT) else screen }
+        val failed = assertIs<ActionOutcome.Failed>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val error = assertIs<ActionError.UnexpectedScreen>(failed.error)
+        assertEquals("Expected the move list, but the screen is battle_command", error.message)
+    }
+
+    @Test
+    fun whenWhatTheStateCantTellLeavesNoMoveFightPlaysStruggle() {
+        // Review impl13 M5: Torment, Imprison, Gravity, Heal Block or a Choice item leave no move (StruggleCheck): the game
+        // skips the move list (battle_controller_player.c:377) and the turn is played; not an UNEXPECTED_SCREEN.
+        val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), command)
+        ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") Screen.Battle(Awaiting.ANIMATION) else screen }
+        val done = assertIs<ActionOutcome.Done>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        assertEquals(BattleMoveChoice.STRUGGLED_UNSEEN, done.detail)
+        assertEquals(listOf(Button.A), ui.game.presses)
+        // In a double battle, the other Pokémon's command menu right after FIGHT is the turn going on too.
+        val double = Ui({ battle(double = true) }, listOf(mon(1)), emptyList(), command)
+        double.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") command.copy(actor = BattlerRef.PLAYER_RIGHT) else screen }
+        assertEquals(BattleMoveChoice.STRUGGLED_UNSEEN, assertIs<ActionOutcome.Done>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Thunderbolt")), double.game.context())).detail)
+    }
+
+    @Test
+    fun tauntBlocksTheMovesWithoutBasePowerLikeTheGame() {
+        // Review impl13 B10: StruggleCheck (overlay_12_0224E4FC.c:1983) blocks `moveData.power == 0` under Taunt.
+        val taunted = setOf(VolatileStatus.Taunted)
+        fun refused(move: KnownMove) = BattleMoveChoice.refusal(battler(BattlerRef.PLAYER_LEFT, listOf(move, thunderbolt), taunted), MoveRef("move:${move.move.id.value}"))
+        val noPower = KnownMove(Named(MoveId(1000), "Powerless"), 10, 10, "Normal", power = 0, category = dev.kotlinds.pokemonclient.data.MoveCategory.PHYSICAL)
+        assertEquals(UnavailableReason.TAUNTED, assertIs<ActionError.Unavailable>(refused(noPower)).reason)
+        val withPower = KnownMove(Named(MoveId(1001), "Powered"), 10, 10, "Normal", power = 40, category = dev.kotlinds.pokemonclient.data.MoveCategory.STATUS)
+        assertEquals(null, refused(withPower))
+        // The power unknown: the category tells (a status move refused, a damaging one allowed).
+        val status = KnownMove(Named(MoveId(1002), "Growl"), 10, 10, "Normal", category = dev.kotlinds.pokemonclient.data.MoveCategory.STATUS)
+        assertEquals(UnavailableReason.TAUNTED, assertIs<ActionError.Unavailable>(refused(status)).reason)
+        assertEquals(null, refused(thunderbolt.copy(category = dev.kotlinds.pokemonclient.data.MoveCategory.SPECIAL)))
+        // Not taunted: nothing refused.
+        assertEquals(null, BattleMoveChoice.refusal(battler(BattlerRef.PLAYER_LEFT, listOf(noPower, thunderbolt), emptySet()), MoveRef("move:1000")))
+    }
+
+    @Test
+    fun aDisabledMoveIsRefusedBeforeAnyPressAndAnotherOneIsUsed() {
+        val disabled = VolatileStatus.Disabled(Named(MoveId(85), "Thunderbolt"), 3)
+        val ui = Ui({ battleWith(disabled) }, listOf(mon(1)), emptyList(), command)
+        val failed = assertIs<ActionOutcome.Failed>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val error = assertIs<ActionError.Unavailable>(failed.error)
+        assertEquals(UnavailableReason.DISABLED, error.reason)
+        assertEquals("Thunderbolt is disabled (3 more turns). use another move", error.message)
+        assertTrue(ui.game.presses.isEmpty())
+        var used: String? = null
+        ui.onA = { screen, id ->
+            when {
+                screen is Screen.BattleCommand -> moveList(Entry("move:85", "Thunderbolt (Electric, 15/15 PP)", selectable = false), Entry("move:196", "Icy Wind (Ice, 15/15 PP)"))
+                screen is Screen.MoveSelect -> { used = id; Screen.Battle(Awaiting.ANIMATION) }
+                else -> screen
+            }
+        }
+        assertIs<ActionOutcome.Done>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
+        assertEquals("move:196", used)
+        val choices = assertIs<Availability.Available>(CommonActions.attack.spec.availability(GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(disabled), null)))
+        assertEquals(listOf("move:196"), choices.choices["move"]!!.map { it.value })
+    }
+
+    @Test
+    fun aMoveTheListRefusesBacksOutToTheCommandMenu() {
+        // Codex: the list was left open after "NOT_SELECTABLE: Water Gun can't be chosen for Water Gun".
+        val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), command)
+        ui.onA = { screen, _ ->
+            if (screen is Screen.BattleCommand) moveList(Entry("move:85", "Thunderbolt (Electric, 15/15 PP)", selectable = false), Entry("move:196", "Icy Wind (Ice, 15/15 PP)")) else screen
+        }
+        ui.onB = { command }
+        val failed = assertIs<ActionOutcome.Failed>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        val error = assertIs<ActionError.Unavailable>(failed.error)
+        assertEquals(UnavailableReason.MOVE_REFUSED, error.reason)
+        assertTrue(error.hint.orEmpty().contains("move:196"), error.hint)
+        assertIs<Screen.BattleCommand>(ui.game.screen, "the move list was closed")
+    }
+
+    @Test
+    fun attackGoesOnFromTheMoveListLeftOpen() {
+        val list = moveList(Entry("move:85", "Thunderbolt (Electric, 15/15 PP)"), Entry("move:196", "Icy Wind (Ice, 15/15 PP)"))
+        val ui = Ui({ battle() }, listOf(mon(1)), emptyList(), list)
+        var used: String? = null
+        ui.onA = { screen, id -> if (screen is Screen.MoveSelect) { used = id; Screen.Battle(Awaiting.ANIMATION) } else screen }
+        assertIs<Availability.Available>(CommonActions.attack.spec.availability(GameState(0, list, null, listOf(mon(1)), emptyList(), battle(), null)))
+        assertIs<ActionOutcome.Done>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Icy Wind")), ui.game.context()))
+        assertEquals("move:196", used)
+    }
+
+    @Test
+    fun withNoMoveToChooseStruggleIsPlayedByFightAlone() {
+        val empty = listOf(thunderbolt.copy(pp = 0), icyWind.copy(pp = 0))
+        val ui = Ui({ battleWith(moves = empty) }, listOf(mon(1)), emptyList(), command)
+        val state = GameState(0, command, null, listOf(mon(1)), emptyList(), battleWith(moves = empty), null)
+        val choices = assertIs<Availability.Available>(CommonActions.attack.spec.availability(state))
+        assertEquals(listOf("move:165"), choices.choices["move"]!!.map { it.value })
+        val refused = assertIs<ActionOutcome.Failed>(BasicPlans.attack.run(GameAction.Attack(MoveRef("Thunderbolt")), ui.game.context()))
+        assertEquals(UnavailableReason.NO_PP, assertIs<ActionError.Unavailable>(refused.error).reason)
+        assertTrue(ui.game.presses.isEmpty())
+        ui.onA = { screen, id -> if (screen is Screen.BattleCommand && id == "option:fight") Screen.Battle(Awaiting.ANIMATION) else screen }
+        val done = assertIs<ActionOutcome.Done>(BasicPlans.attack.run(GameAction.Attack(MoveRef("move:165")), ui.game.context()))
+        assertTrue(done.detail.orEmpty().contains("Struggle"), done.detail)
+    }
+
+    // endregion
+
+    // region throw_ball
+
+    /**
+     * A throw: BAG → POKé BALLS → Poké Ball → USE; the ball lands [landing] frames after A: [shakes] (null: not read)
+     * and [outcome] are set, and the battle goes on to [after] (null battle: it ended).
+     */
+    private fun throwUi(shakes: Int?, outcome: BattleOutcome?, after: Screen, battleAfter: Boolean): Ui {
+        var current: BattleState? = battle()
+        val balls = BagPocket("balls", listOf(BagItem(Named(ItemId(4), "Poké Ball"), 5)))
+        val ui = Ui({ current }, listOf(mon(1)), listOf(balls), command)
+        var thrownAt: Long? = null
+        ui.onA = { screen, id ->
+            when {
+                screen is Screen.BattleCommand && id == "option:bag" -> bagMenu
+                screen is Screen.Bag && id == "pocket:poke_balls" -> battleBag("POKé BALLS", listOf("item:4"))
+                screen is Screen.Bag && id == "item:4" -> Screen.ContextMenu(null, listOf(Entry("option:use", "USE"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
+                screen is Screen.ContextMenu && id == "option:use" -> { thrownAt = ui.game.console.frame; Screen.Battle(Awaiting.ANIMATION) }
+                screen is Screen.YesNo -> { current = null; Screen.Overworld(null, Awaiting.INPUT) }
+                else -> screen
+            }
+        }
+        ui.game.onFrame = { frame, screen ->
+            val t = thrownAt
+            when {
+                t == null -> screen
+                frame - t == 100L -> { current = current?.copy(ballShakes = shakes, outcome = outcome); screen }
+                frame - t == 300L -> { if (!battleAfter) current = null; after }
+                else -> screen
+            }
+        }
+        return ui
+    }
+
+    @Test
+    fun aNormalCaptureIsACapture() {
+        val nickname = Screen.YesNo("Give a nickname?", listOf(Entry("option:yes", "YES"), Entry("option:no", "NO")), Cursor.At(0), Topology.vertical(2))
+        val ui = throwUi(BattleState.CAUGHT_SHAKES, BattleOutcome.CAUGHT, nickname, battleAfter = true)
+        val done = BattlePlans.throwBall.run(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        assertTrue(done.detail.orEmpty().startsWith("item:4: caught MON"), done.detail)
+    }
+
+    @Test
+    fun aCaptureThatEndsTheBattleIsACaptureEvenWithoutTheShakes() {
+        val ui = throwUi(null, BattleOutcome.CAUGHT, Screen.Overworld(null, Awaiting.INPUT), battleAfter = false)
+        val done = BattlePlans.throwBall.run(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        assertTrue(done.detail.orEmpty().startsWith("item:4: caught MON"), done.detail)
+    }
+
+    @Test
+    fun aRoamerFleeingAfterBreakingFreeIsNotACapture() {
+        // Race (Codex, Raikou): "caught RAIKOU Lv40" with "Aargh! Almost had it!" / "The wild RAIKOU fled!".
+        val ui = throwUi(2, BattleOutcome.FOE_FLED, Screen.Overworld(null, Awaiting.INPUT), battleAfter = false)
+        val done = BattlePlans.throwBall.run(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        assertEquals("item:4: broke free after 2 shakes, then the wild MON fled: the battle is over, nothing caught", done.detail)
+    }
+
+    @Test
+    fun aBallBrokenFreeLeavesTheBattleGoingOn() {
+        val ui = throwUi(1, null, command, battleAfter = true)
+        val done = BattlePlans.throwBall.run(GameAction.ThrowBall(ItemRef("item:4")), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+        assertEquals("item:4: broke free after 1 shake", done.detail)
+    }
+
+    // endregion
+
+    // region learn_move
+
+    private val cutMove = KnownMove(Named(MoveId(15), "Cut"), 30, 30, "Normal")
+    private val hmData = StubGameData(machines = mapOf(dev.kotlinds.pokemonclient.data.MachineId(93) to MoveId(15)))
+    private fun learner() = mon(1).copy(moves = listOf(cutMove, thunderbolt, icyWind, KnownMove(Named(MoveId(33), "Tackle"), 35, 35, "Normal")))
+
+    private val forgetPrompt = Screen.YesNo(
+        null, listOf(Entry("option:forget", "FORGET A MOVE"), Entry("option:keep", "KEEP OLD MOVES")), Cursor.At(0), Topology.vertical(2),
+        learning = dev.kotlinds.pokemonclient.state.MoveOffer(MonId(1, 1), "MON1", Named(MoveId(53), "Flamethrower")),
+    )
+
+    @Test
+    fun learnMoveRefusesAnHmToForgetOnTheQuestionBeforeAnyPress() {
+        // Race (Codex): learn_move with an HM left the list of moves to forget open.
+        val ui = Ui({ battle() }, listOf(learner()), emptyList(), forgetPrompt)
+        ui.game.data = hmData
+        val failed = assertIs<ActionOutcome.Failed>(BattlePlans.learnMove.run(GameAction.LearnMove(MoveRef("Cut")), ui.game.context()))
+        assertEquals(ActionError.HmCannotForget("Cut"), failed.error)
+        assertTrue(ui.game.presses.isEmpty())
+        assertEquals(forgetPrompt, ui.game.screen, "the question stays for the next call")
+    }
+
+    @Test
+    fun learnMoveForgetsAnotherMoveFromTheSameQuestion() {
+        val ui = Ui({ battle() }, listOf(learner()), emptyList(), forgetPrompt)
+        ui.game.data = hmData
+        val list = Screen.MoveSelect(
+            MoveContext.FORGET_IN_BATTLE, MonId(1, 1), Named(MoveId(53), "Flamethrower"),
+            listOf(
+                Entry("move:15", "Cut (Normal, 30/30 PP)", selectable = false), Entry("move:85", "Thunderbolt (Electric, 15/15 PP)"),
+                Entry("move:196", "Icy Wind (Ice, 15/15 PP)"), Entry("move:33", "Tackle (Normal, 35/35 PP)"),
+                Entry("move:53", "Flamethrower (Fire) (new: don't learn it)"), Entry("option:cancel", "CANCEL"),
+            ),
+            Cursor.At(1), Topology.vertical(6), CancelBehavior.CLOSES,
+        )
+        var forgot: String? = null
+        ui.onA = { screen, id ->
+            when {
+                screen is Screen.YesNo -> list
+                screen is Screen.MoveSelect -> { forgot = id; Screen.Battle(Awaiting.ANIMATION) }
+                else -> screen
+            }
+        }
+        assertIs<ActionOutcome.Done>(BattlePlans.learnMove.run(GameAction.LearnMove(MoveRef("Tackle")), ui.game.context()))
+        assertEquals("move:33", forgot)
+    }
+
+    @Test
+    fun learnMoveWithoutForgetFromTheListLeftOpenGivesUpTheNewMove() {
+        val list = Screen.MoveSelect(
+            MoveContext.FORGET_IN_BATTLE, MonId(1, 1), Named(MoveId(53), "Flamethrower"),
+            listOf(Entry("move:15", "Cut (Normal, 30/30 PP)", selectable = false), Entry("move:85", "Thunderbolt (Electric, 15/15 PP)"), Entry("option:cancel", "CANCEL")),
+            Cursor.At(1), Topology.vertical(3), CancelBehavior.CLOSES,
+        )
+        val giveUp = Screen.YesNo(null, listOf(Entry("option:give_up", "GIVE UP"), Entry("option:keep", "DON'T GIVE UP")), Cursor.At(0), Topology.vertical(2))
+        val ui = Ui({ battle() }, listOf(learner()), emptyList(), list)
+        var gaveUp = false
+        ui.onA = { screen, id ->
+            when {
+                screen is Screen.MoveSelect && id == "option:cancel" -> giveUp
+                screen is Screen.YesNo && id == "option:give_up" -> { gaveUp = true; Screen.Battle(Awaiting.ANIMATION) }
+                else -> screen
+            }
+        }
+        assertIs<ActionOutcome.Done>(BattlePlans.learnMove.run(GameAction.LearnMove(null), ui.game.context()))
+        assertTrue(gaveUp)
+    }
+
+    // endregion
+
     private companion object {
         fun withCursor(screen: Screen.Selectable, index: Int): Screen = when (screen) {
             is Screen.ListMenu -> screen.copy(cursor = Cursor.At(index))
@@ -274,6 +564,7 @@ class BattleActionPlansTest {
             is Screen.BattleCommand -> screen.copy(cursor = Cursor.At(index))
             is Screen.MoveSelect -> screen.copy(cursor = Cursor.At(index))
             is Screen.TargetSelect -> screen.copy(cursor = Cursor.At(index))
+            is Screen.YesNo -> screen.copy(cursor = Cursor.At(index))
             else -> screen
         }
     }

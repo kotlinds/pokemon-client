@@ -2,9 +2,11 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.FieldNotice
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.world.WorldSource
 import kotlin.math.abs
 
@@ -202,6 +204,99 @@ internal object FieldControl {
             taps++
         }
     }
+
+    /**
+     * After the game refused a step: the state where it took the control away within [REFUSAL_GRACE_FRAMES] frames
+     * (a scene starting as the player stopped, its field screen busy or not left at all; a battle's first frames), or
+     * null when the player kept the control all along: the step really was refused (a wall, someone in the way). A
+     * refused step and a scene starting look the same on the frame of the refusal.
+     */
+    fun takenAfterRefusal(context: PlanContext): GameState? {
+        repeat(REFUSAL_GRACE_FRAMES) {
+            context.scope.step(1)
+            val state = context.state()
+            if (state.field == null || !inControl(state)) return state
+        }
+        return null
+    }
+
+    /** Frames [takenAfterRefusal] watches the control after a refused step (half a second). */
+    private const val REFUSAL_GRACE_FRAMES = 32
+
+    /** How [closeNotice] ended. */
+    sealed interface Notice {
+        /** The game shows no [FieldNotice]: what stopped the move is something else (a scene, a battle...), for the caller. */
+        data object None : Notice
+
+        /** [notice] was shown and closed: the player has the control again, standing on [field]. */
+        data class Closed(val notice: FieldNotice, val field: FieldState) : Notice
+
+        /** [notice] was closed, then the game took the control away (a battle, a call...): [state]. */
+        data class Stopped(val notice: FieldNotice, val state: GameState) : Notice
+
+        /** The message stayed on screen after [MAX_NOTICE_PRESSES] checked presses: the typed reason. */
+        data class Failed(val error: ActionError) : Notice
+    }
+
+    /**
+     * When the game stopped a move to show a message of its own that ends nothing ([FieldNotice]: "REPEL's effect
+     * wore off..."), closes it the checked way (the message read from RAM, waiting for A, before each press; at most
+     * [MAX_NOTICE_PRESSES] presses) and waits for the control back: the walk goes on from there. Told by the script
+     * that prints it ([Screen.Dialogue.notice]), never by its text: any other message (a scene, a trainer) is
+     * [Notice.None], left to the caller as the interruption it is. [stopped]: the state that stopped the move; a battle,
+     * a trainer's "!" or another message is told apart at once, without waiting on it.
+     */
+    fun closeNotice(context: PlanContext, stopped: GameState): Notice {
+        if (!mayBeNotice(stopped)) return Notice.None
+        var notice: FieldNotice? = null
+        var presses = 0
+        repeat(MAX_NOTICE_POLLS) {
+            val state = context.navigator.settle()
+            val screen = state.screen
+            if (screen is Screen.Dialogue && screen.notice != null) {
+                notice = screen.notice
+                if (presses == MAX_NOTICE_PRESSES) {
+                    return Notice.Failed(ActionError.VerificationFailed("close the message \"${screen.text.replace('\n', ' ')}\"", "the overworld", screen.kind, presses))
+                }
+                if (screen.awaiting == Awaiting.INPUT) {
+                    presses++
+                    context.navigator.press(dev.kotlinds.pokemonclient.console.Button.A, screen)
+                } else {
+                    context.scope.step(NOTICE_WAIT_FRAMES)
+                }
+                return@repeat
+            }
+            val shown = notice ?: return Notice.None
+            val field = state.field
+            if (field != null && inControl(state)) return Notice.Closed(shown, field)
+            if (takenOver(state, Motion.WALK)) return Notice.Stopped(shown, state)
+            // The box closed, the script ending (the overworld busy for a few frames): wait for the control.
+            context.scope.step(NOTICE_WAIT_FRAMES)
+        }
+        return notice?.let { Notice.Stopped(it, context.state()) } ?: Notice.None
+    }
+
+    /**
+     * Whether [state], the state that stopped a move, may be a [FieldNotice]: one on screen, or the field busy or
+     * unreadable while its box opens. Never a battle, a trainer's "!" or another message.
+     */
+    private fun mayBeNotice(state: GameState): Boolean {
+        if (state.battle != null || state.field?.trainerEncounter == true) return false
+        return when (val screen = state.screen) {
+            is Screen.Dialogue -> screen.notice != null
+            is Screen.Overworld, is Screen.Unknown, is Screen.Animation -> true
+            else -> false
+        }
+    }
+
+    /** Checked presses of A on a [FieldNotice] before giving up (the "3 tries" rule). */
+    private const val MAX_NOTICE_PRESSES = 3
+
+    /** Readings of [closeNotice] (each one settles first): the message, its presses, the control coming back. */
+    private const val MAX_NOTICE_POLLS = 12
+
+    /** Frames between two readings of [closeNotice] while the message prints or the script ends. */
+    private const val NOTICE_WAIT_FRAMES = 8
 
     /** Frames in a row without moving after which a move is over (a bike may start one more tile by itself). */
     const val STILL_FRAMES = 6

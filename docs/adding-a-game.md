@@ -42,6 +42,8 @@ contract, and don't put generic things in `games/gen4/`.
 | `eventFlags` | every event flag of the save (`EventFlags`, one bulk read): which people of other maps are there (an exit whose arrival someone blocks, the reachability survey) | `Gen4SaveData.eventFlags()` |
 | `field.runningShoes`, `field.autoRun` | the running shoes owned (null: taken as owned) / switched on (the game runs whatever is pressed) | HGSS reads both; Platinum not yet (walks run by default) |
 | `player.badgeIds` | the badges by the game's id (rules check ids, never names) | HGSS |
+| `Screen.Dialogue.notice` | a message the game shows by itself on the field, outside any scene (`FieldNotice`: the Repel wearing off), told by the script that prints it (never its text): walks close it, then do what `on_repel_end` says (stop by default; `reapply` uses one of `PokemonGame.repelItems`, Gen 4: 77, 76, 79), any other message stops them | `Gen4Structs.SM_SCRIPT_ID`: HGSS `std_repel_wore_off` (2022), Platinum common script 32 (2032) |
+| `data.item(id).usableFromBag` | whether the bag offers USE (the item's field-use function): `use_key_item` refuses a key used by interacting (Basement Key) before opening the bag | HGSS item data (`fieldUseFunc`); Platinum has no `GameData` yet (unknown: tried) |
 
 Register the ROM's game code in `PokemonGames` (`pokemon-client`, not the app): the app, the MCP server and the
 bench all detect the game from the ROM (`POKEMON_ROM=roms/<game>.nds`).
@@ -148,7 +150,9 @@ The same actions are offered as in HeartGold / SoulSilver; what can't work yet i
   replacements are listed as conditions.
 - **Script bytecode**: Platinum's script commands aren't decoded, so triggers that do nothing, script warps and holes
   (`Gen4WorldSource.trigger` / `scriptWarps` / `triggerWarps`) are left at their defaults: every armed trigger (its
-  save variable at the awaited value, read like HGSS's) counts as a scene.
+  save variable at the awaited value, read like HGSS's) counts as a scene. Nor are the people its scripts move
+  (`movedPeople`, `PersonTemplate.scriptMoved`): the routes of other maps take them where the map places them, and
+  go_to still sets off when only they close the way (planned again on arrival).
 
 ## What the shared code still assumes (to know before a non-Gen 4 game)
 
@@ -157,4 +161,5 @@ The same actions are offered as in HeartGold / SoulSilver; what can't work yet i
   generic, the meaning of the ids is per game).
 - The bench's `raw`, `rawmon`, `box`, `where`, `watch`, `fish`, `world` commands and the music-during-pauses checks
   read HGSS structures: they refuse other games.
-- Rod item ids (`CommonActions.RODS`) and `bicycleItem` are the Gen 4 ids.
+- Rod item ids (`CommonActions.RODS`) and `bicycleItem` are the Gen 4 ids; `pcFacing` (a PC used from the south) is
+  the Gen 4 rule, set in `Gen4Game` (a game that doesn't set it is used from any side).

@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.Button
+import dev.kotlinds.pokemonclient.data.MachineCompatibility
 import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
@@ -126,7 +127,8 @@ internal object ShopPlans {
         val atCounter = stage(start) != Stage.OVERWORLD
         val known = stock(start).filter { it.items.isNotEmpty() }
         val unknown = if (atCounter) emptyList() else clerks(start).filter { it.catalog == null }
-        if (known.isNotEmpty() && unknown.isEmpty()) return ActionOutcome.Done(describeStocks(known))
+        val canLearn = partyCanLearn(context, start)
+        if (known.isNotEmpty() && unknown.isEmpty()) return ActionOutcome.Done(describeStocks(known, canLearn))
         val read = mutableListOf<Stock>()
         for (clerk in if (atCounter) listOf(null) else unknown) {
             val opened = openShop(context, clerk)
@@ -137,15 +139,29 @@ internal object ShopPlans {
         }
         val all = known + read
         return if (all.isEmpty()) ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_STOCK, "The shop list shows nothing to buy"))
-        else ActionOutcome.Done(describeStocks(all))
+        else ActionOutcome.Done(describeStocks(all, canLearn))
+    }
+
+    /**
+     * For a TM / HM on sale, who of the party can learn it ([MachineCompatibility]; "nobody" said too), so a machine
+     * nobody can use isn't bought blind. Pokédex knowledge (a species' TMs): nothing below that level
+     * ([ActionSettings.pokedex]) or without the game's data.
+     */
+    private fun partyCanLearn(context: PlanContext, state: GameState): (dev.kotlinds.pokemonclient.state.ItemId) -> List<String>? {
+        val data = context.game.data?.takeIf { context.settings.pokedex } ?: return { null }
+        return { item -> data.machineOf(item)?.let { MachineCompatibility.partyCanLearn(data, state.party, it).ifEmpty { listOf("nobody") } } }
     }
 
     /**
      * "nothing bought; sold here: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)" for one clerk; with several,
      * each clerk's own list: "nothing bought; person:3 sells: item:17 (Potion, ₽300); person:5 sells: item:4 (...)".
+     * A TM says who of the party can learn it when [canLearn] tells ("item:340 (TM13, ₽3000, party can learn: ...)").
      */
-    internal fun describeStocks(stocks: List<Stock>): String {
-        fun items(sold: List<ShopItem>) = sold.joinToString { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""})" }
+    internal fun describeStocks(stocks: List<Stock>, canLearn: (dev.kotlinds.pokemonclient.state.ItemId) -> List<String>? = { null }): String {
+        fun items(sold: List<ShopItem>) = sold.joinToString {
+            "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""}" +
+                (canLearn(it.item.id)?.let { who -> ", party can learn: ${who.joinToString()}" } ?: "") + ")"
+        }
         val single = stocks.singleOrNull()
         return if (single != null) "nothing bought; sold here: " + items(single.items)
         else "nothing bought; " + stocks.joinToString("; ") { "${it.clerk?.id ?: "this clerk"} sells: " + items(it.items) }
@@ -221,7 +237,7 @@ internal object ShopPlans {
             if (menu is Step.Failed) return menu
             state = (menu as Step.Done).value
         }
-        if (stage(state) != Stage.CLERK_MENU) return Step.Failed(ActionError.UnexpectedScreen("the clerk's menu", state.screen.kind))
+        if (stage(state) != Stage.CLERK_MENU) return Step.Failed(ActionError.UnexpectedScreen("the clerk's menu", state.screen))
         return context.navigator.choose(Screen.ListMenu::class, "SELL") { it.id == "option:$CLERK_SELL" }.andThen {
             context.navigator.advanceUntil(SHOP_WAITS) { it.screen is Screen.Bag }
         }
@@ -266,7 +282,7 @@ internal object ShopPlans {
     /** One line, from the shop list back to the shop list. */
     private fun buyOne(context: PlanContext, purchase: Purchase, onItem: (Int) -> Unit): Step<GameState> {
         val state = context.navigator.settle()
-        val shop = state.screen as? Screen.Shop ?: return Step.Failed(ActionError.UnexpectedScreen("the shop list", state.screen.toString()))
+        val shop = state.screen as? Screen.Shop ?: return Step.Failed(ActionError.UnexpectedScreen("the shop list", state.screen))
         val entry = shop.entries.firstOrNull { it.id.startsWith("item:") && matchesRef(purchase.item.raw, "item", it.id.removePrefix("item:").toInt(), it.label.substringBefore(" ₽")) }
             ?: return Step.Failed(ActionError.InvalidParameter("item", purchase.item.raw, shop.entries.filter { it.id.startsWith("item:") }.map { "${it.id} (${it.label})" }))
         val price = entry.label.substringAfter(" ₽", "").toIntOrNull()
@@ -298,7 +314,7 @@ internal object ShopPlans {
         var tens = true
         repeat(MAX_QUANTITY_PRESSES) {
             val state = context.navigator.settle()
-            val screen = state.screen as? Screen.Quantity ?: return Step.Failed(ActionError.UnexpectedScreen("the quantity", state.screen.toString()))
+            val screen = state.screen as? Screen.Quantity ?: return Step.Failed(ActionError.UnexpectedScreen("the quantity", state.screen))
             if (quantity !in screen.min..screen.max) {
                 return Step.Failed(ActionError.Unavailable(UnavailableReason.NOT_ENOUGH_MONEY, "The quantity can go from ${screen.min} to ${screen.max}, not $quantity"))
             }

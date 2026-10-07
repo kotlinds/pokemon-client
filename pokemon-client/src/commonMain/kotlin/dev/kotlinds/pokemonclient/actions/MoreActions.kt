@@ -142,7 +142,7 @@ object MoreActions {
         PartyBagPlans.openStartMenuEntry(context, action.entry).then { state ->
             val screen = state.screen
             if ((screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU) {
-                ActionOutcome.Failed(ActionError.UnexpectedScreen("${action.entry} opened", "the start menu still"))
+                ActionOutcome.Failed(ActionError.UnexpectedScreen("${action.entry} opened", screen))
             } else ActionOutcome.Done("now: ${screen.kind}")
         }
     }

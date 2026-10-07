@@ -32,6 +32,11 @@ data class BattleState(
      * faints before the end.
      */
     val outcome: BattleOutcome? = null,
+    /**
+     * The weather on the battlefield (rain, sun...) and how many turns it has left, as the game keeps it; null when the
+     * game's reader doesn't read it (the agent then knows nothing of it, which isn't "clear skies").
+     */
+    val weather: BattleWeather? = null,
 ) {
     companion object {
         /** [ballShakes] of a ball that catches the Pokémon. */
@@ -65,6 +70,35 @@ enum class BattleOutcome {
 
     /** The wild Pokémon fled (Roar, Teleport, a roamer). */
     FOE_FLED,
+}
+
+/**
+ * The weather of a battle: [kind], and the turns it has left ([turnsLeft]; null while it lasts the whole battle: set by
+ * an ability (Drought, Drizzle, Sand Stream, Snow Warning) or by the weather of the place the battle started in).
+ * Gen 4: `BattleContext.fieldCondition` (`FIELD_CONDITION_*`, include/constants/battle.h) and
+ * `fieldConditionData.weatherTurns`.
+ */
+data class BattleWeather(val kind: WeatherKind, val turnsLeft: Int?) {
+    /** For agents: "sun (3 turns left)", "rain (until the battle ends)", "clear". */
+    fun describe(): String = when {
+        kind == WeatherKind.CLEAR -> "clear"
+        turnsLeft == null -> "${kind.wire} (until the battle ends)"
+        else -> "${kind.wire} ($turnsLeft turn${if (turnsLeft == 1) "" else "s"} left)"
+    }
+}
+
+/** The weathers of a battle (what moves and abilities depend on: Solar Beam fires at once in [SUN]...). */
+enum class WeatherKind(val wire: String) {
+    CLEAR("clear"),
+    RAIN("rain"),
+    SANDSTORM("sandstorm"),
+
+    /** Strong sunlight: Solar Beam needs no charging turn, Fire moves are stronger, Water moves weaker. */
+    SUN("sun"),
+    HAIL("hail"),
+
+    /** Deep fog (only from the place's weather in Gen 4): every move's accuracy drops. */
+    FOG("fog"),
 }
 
 /** Kinds of battles. */
@@ -162,8 +196,15 @@ sealed interface VolatileStatus {
     /** In the air / underground / underwater for a two-turn move: most moves miss. */
     data object SemiInvulnerable : VolatileStatus
     data object Taunted : VolatileStatus
-    data object Encored : VolatileStatus
-    data object Disabled : VolatileStatus
+
+    /**
+     * Encore: it must use [move] again for [turns] more turns. The game then skips the move list: FIGHT alone plays it
+     * (Gen 4 `battle_controller_player.c`, `unk88.encoredMove`). [move] null when the reader doesn't know which.
+     */
+    data class Encored(val move: Named<MoveId>?, val turns: Int) : VolatileStatus
+
+    /** Disable: [move] can't be chosen for [turns] more turns ([move] null when the reader doesn't know which). */
+    data class Disabled(val move: Named<MoveId>?, val turns: Int) : VolatileStatus
 
     /** Grudge: the move that knocks this Pokémon out loses all its PP. */
     data object Grudge : VolatileStatus

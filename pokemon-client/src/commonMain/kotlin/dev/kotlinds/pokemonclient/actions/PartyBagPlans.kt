@@ -11,6 +11,7 @@ import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.PartyPurpose
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.data.MachineCompatibility
 import dev.kotlinds.pokemonclient.data.MachineId
 
 /**
@@ -214,12 +215,15 @@ internal object PartyBagPlans {
 
     /**
      * Teaches a TM / HM from the bag: bag → the machine → USE → "Teach X?" YES → the Pokémon; when it already knows
-     * four moves, answers "forget a move?" and forgets [GameAction.Teach.forget] (refused when null). The result is
-     * checked on the Pokémon's moves.
+     * four moves, answers "forget a move?" and forgets [GameAction.Teach.forget] (refused when null). A Pokémon that
+     * can't learn it (UNABLE on the game's party screen) or knows it already is refused before the bag opens, naming
+     * who of the party can ([MachineCompatibility]). The result is checked on the Pokémon's moves.
      */
     val teach = ActionPlan<GameAction.Teach> { action, context ->
-        val mon = context.state().party.firstOrNull { it.id == action.mon }
+        val start = context.state()
+        val mon = start.party.firstOrNull { it.id == action.mon }
             ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_POKEMON, "${action.mon} isn't in the party"))
+        machineRefusal(context, start, mon, action.item)?.let { return@ActionPlan ActionOutcome.Failed(it) }
         // Four moves: the move to forget is checked before any menu opens (the game would ask "Should a move be
         // forgotten?" and the walk through the menus can't answer it).
         forgetRefusal(context, mon, action.forget)?.let { return@ActionPlan ActionOutcome.Failed(it) }
@@ -274,6 +278,25 @@ internal object PartyBagPlans {
         val known = mon.moves.firstOrNull { matchesRef(forget.raw, "move", it.move.id.value, it.move.name) }
             ?: return ActionError.InvalidParameter("forget", forget.raw, forgettable.map { "move:${it.move.id.value} ${it.move.name}" })
         return if (known.move.id in hms) ActionError.HmCannotForget(known.move.name) else null
+    }
+
+    /**
+     * Why [mon] can't be taught the machine [item] names (from the bag), before any menu: UNABLE (its species can't
+     * learn it, or an Egg) or LEARNED (it knows the move), as the game's party screen would show it. The error names
+     * who of the party can learn it. Null when it can, or when the game's data or the item isn't known (the screens
+     * decide then).
+     */
+    private fun machineRefusal(context: PlanContext, state: GameState, mon: dev.kotlinds.pokemonclient.state.PartyMon, item: ItemRef): ActionError? {
+        val data = context.game.data ?: return null
+        val itemId = state.bag.orEmpty().flatMap { it.items }.firstOrNull { matchesRef(item.raw, "item", it.item.id.value, it.item.name) }?.item?.id ?: return null
+        val machine = data.machineOf(itemId) ?: return null
+        val move = data.machineMove(machine)?.let { data.move(it)?.name } ?: machine.label
+        val others = MachineCompatibility.partyCanLearn(data, state.party, machine).ifEmpty { listOf("nobody") }
+        return when (MachineCompatibility.of(data, mon, machine)) {
+            MachineCompatibility.Fit.ABLE -> null
+            MachineCompatibility.Fit.LEARNED -> ActionError.Unavailable(UnavailableReason.ALREADY_KNOWN, "${mon.displayName} already knows $move (${machine.label})", "party can learn it: ${others.joinToString()}")
+            MachineCompatibility.Fit.UNABLE -> ActionError.Unavailable(UnavailableReason.CANNOT_LEARN, "${mon.displayName} can't learn $move (${machine.label})", "party can learn it: ${others.joinToString()}")
+        }
     }
 
     /** Moves a Pokémon knows at most. */
@@ -332,12 +355,30 @@ internal object PartyBagPlans {
      * The value says which way it went.
      */
     fun activateKeyItem(context: PlanContext, item: ItemRef): Step<String> {
+        // An item without USE (a key used by interacting) is refused before the bag opens: it would only show its
+        // other entries (NOTES: "No USE on context_menu (entries: , , , MOVE, CANCEL)", the menu left open).
+        noUseFromBag(context, item)?.let { return Step.Failed(it) }
         quickUse(context, item)?.let { return Step.Done(it) }
-        return bagItem(context, item).andThen { entry ->
+        val used = bagItem(context, item).andThen { entry ->
             context.navigator.choose(Screen.Bag::class, entry.label) { it.id == entry.id }
         }.andThen {
             context.navigator.choose(Screen.ContextMenu::class, "USE") { it.id == "option:use" }
         }.andThen { Step.Done("from the bag") }
+        // Whatever was opened on the way (the bag, the item's menu) is closed when the use didn't start.
+        if (used is Step.Failed) closeToOverworld(context)
+        return used
+    }
+
+    /**
+     * The refusal of [item] when the game's item data says the bag offers no USE for it
+     * ([dev.kotlinds.pokemonclient.data.ItemInfo.usableFromBag]), or null (usable, or not known: the game has no data).
+     */
+    private fun noUseFromBag(context: PlanContext, item: ItemRef): ActionError? {
+        val stack = context.state().bag.orEmpty().flatMap { it.items }
+            .firstOrNull { matchesRef(item.raw, "item", it.item.id.value, it.item.name) } ?: return null
+        if (context.game.data?.item(stack.item.id)?.usableFromBag != false) return null
+        return ActionError.Unavailable(UnavailableReason.NOT_USABLE_FROM_BAG, "${stack.item.name} has no USE in the bag",
+            "it works by itself when you interact with what it is for (a locked door, a strange tree): go_to it and interact")
     }
 
     /** Bag → the key item → REGISTER. The first free slot gets it: the first one is Y. */
@@ -395,7 +436,7 @@ internal object PartyBagPlans {
             state = context.navigator.settle()
         }
         if ((state.screen as? Screen.ListMenu)?.kind != MenuKind.START_MENU) {
-            return Step.Failed(ActionError.UnexpectedScreen("the start menu", state.screen.toString()))
+            return Step.Failed(ActionError.UnexpectedScreen("the start menu", state.screen))
         }
         return context.navigator.choose(Screen.ListMenu::class, entryId) { it.id == entryId }
     }
@@ -417,12 +458,12 @@ internal object PartyBagPlans {
         val (pocket, stack) = owned
         val opened = (context.state().screen as? Screen.Bag)?.let { Step.Done(context.state()) } ?: openStartMenuEntry(context, "option:bag")
         if (opened is Step.Failed) return opened
-        var bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen.toString()))
+        var bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen))
         if (bag.pocket != pocket) {
             val tab = "pocket:$pocket"
             when (val switched = context.navigator.choose(Screen.Bag::class, pocket) { it.id == tab }) {
                 is Step.Failed -> return switched
-                is Step.Done -> bag = switched.value.screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", switched.value.screen.toString()))
+                is Step.Done -> bag = switched.value.screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", switched.value.screen))
             }
         }
         val itemId = "item:${stack.item.id.value}"
@@ -433,7 +474,7 @@ internal object PartyBagPlans {
             val before = bag
             context.scope.touch(next)
             context.navigator.awaitChange(before)
-            bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen.toString()))
+            bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen))
         }
         return Step.Failed(ActionError.NotOnScreen(stack.item.name, "the $pocket pocket", bag.entries.map { it.label }))
     }

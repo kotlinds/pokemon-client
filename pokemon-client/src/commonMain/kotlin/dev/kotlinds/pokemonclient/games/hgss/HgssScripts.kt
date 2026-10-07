@@ -94,6 +94,38 @@ internal object HgssScripts {
         return null
     }
 
+    /** A `SetDynamicWarp` command: event script [scriptId] (1-based) sends the lift to warp [warp] of zone [zone]. */
+    data class DynamicWarpCommand(val scriptId: Int, val zone: Int, val warp: Int)
+
+    /**
+     * Every `SetDynamicWarp map, warp, x, z, dir` of [file] (u16 240 then five u16, asm/macros/script.inc): what a
+     * lift's scripts send it to (scr_seq_D27R0108_000, the Olivine Lighthouse's: the light room or 1F;
+     * scr_seq_T25R1007_000, the Goldenrod Dept. Store's: one per floor of the attendant's menu). Found by its exact
+     * shape (a zone below [zoneCount], a warp index, coordinates, a direction 0..3), in the script whose start is the
+     * last one before it.
+     */
+    fun dynamicWarps(file: ByteArray, zoneCount: Int): List<DynamicWarpCommand> {
+        val starts = scriptStarts(file).withIndex().sortedBy { it.value }
+        if (starts.isEmpty()) return emptyList()
+        val found = mutableListOf<DynamicWarpCommand>()
+        for (o in starts.first().value..file.size - DYNAMIC_WARP_SIZE) {
+            if (u16(file, o) != DYNAMIC_WARP_OPCODE) continue
+            val zone = u16(file, o + 2)
+            val warp = u16(file, o + 4)
+            if (zone !in 0 until zoneCount || warp >= MAX_WARPS) continue
+            if (u16(file, o + 6) >= MAX_COORDINATE || u16(file, o + 8) >= MAX_COORDINATE || u16(file, o + 10) > 3) continue
+            val script = starts.last { it.value <= o }.index + 1
+            found += DynamicWarpCommand(script, zone, warp)
+        }
+        return found
+    }
+
+    private const val DYNAMIC_WARP_OPCODE = 240
+    private const val DYNAMIC_WARP_SIZE = 12
+
+    /** More warps than any map has: a lift command's warp index is below this. */
+    private const val MAX_WARPS = 64
+
     /**
      * True when event script [scriptId] (1-based) of [file] does nothing: its first command is `End` (a placeholder
      * scene trigger like Violet City's on the Sprout Tower bridge, scr_seq_T22_002). Stepping on its trigger runs
@@ -208,6 +240,37 @@ internal object HgssScripts {
         }
         return null
     }
+
+    /**
+     * The local ids of the people some script of [file] puts somewhere else than the map places them:
+     * `MovePersonFacing person, x, z, y, facing` (command 339, `MapObject_SetPositionFromXYZAndDirection`) and
+     * `MovePerson person, x, z` (command 338, `Field_SetEventDefaultXYPos`), src/scrcmd_c.c. Mostly the map's entry
+     * scripts: the Cinnabar Gym's (scr_seq_D11R0106_008, run on every entry) moves its three beaten trainers out of
+     * the corridors. Found by their exact shape (a literal local id, plausible coordinates, a direction 0..3 for 339);
+     * a person moved through a variable isn't known.
+     */
+    fun movedPeople(file: ByteArray): Set<Int> {
+        val code = scriptStarts(file).minOrNull() ?: return emptySet()
+        val moved = HashSet<Int>()
+        for (o in code..file.size - MOVE_PERSON_SIZE) {
+            val person = u16(file, o + 2)
+            if (person >= MAX_LOCAL_ID || u16(file, o + 4) >= MAX_COORDINATE || u16(file, o + 6) >= MAX_COORDINATE) continue
+            when (u16(file, o)) {
+                MOVE_PERSON_OPCODE -> moved += person
+                MOVE_PERSON_FACING_OPCODE -> if (o + MOVE_PERSON_FACING_SIZE <= file.size && u16(file, o + 8) < MAX_COORDINATE && u16(file, o + 10) <= 3) moved += person
+            }
+        }
+        return moved
+    }
+
+    /** `MovePerson` (338: person, x, z) and `MovePersonFacing` (339: person, x, z, y, facing), all u16. */
+    private const val MOVE_PERSON_OPCODE = 338
+    private const val MOVE_PERSON_FACING_OPCODE = 339
+    private const val MOVE_PERSON_SIZE = 8
+    private const val MOVE_PERSON_FACING_SIZE = 12
+
+    /** Map objects have small local ids (the player 0xFF and the camera are not people of the map). */
+    private const val MAX_LOCAL_ID = 64
 
     /** `CallStd` (script command 20, asm/macros/script.inc). */
     private const val CALLSTD_OPCODE = 20

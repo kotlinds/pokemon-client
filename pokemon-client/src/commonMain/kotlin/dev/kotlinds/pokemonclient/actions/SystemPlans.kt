@@ -59,7 +59,7 @@ internal object SystemPlans {
     val continueGame = ActionPlan<GameAction.ContinueGame> { _, context ->
         val state = context.state()
         if (!beforeTheGame(state)) {
-            return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the intro movie, the title screen or the main menu", state.screen.kind))
+            return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the intro movie, the title screen or the main menu", state.screen))
         }
         toSavedGame(context, before = null, done = "continued the saved game")
     }
@@ -109,7 +109,7 @@ internal object SystemPlans {
                     screen is Screen.Dialogue && screen.source == TextSource.INTRO) ->
                     return ActionOutcome.Failed(ActionError.NoSavedGame)
                 field == null && (screen is Screen.Selectable || screen is Screen.Dialogue || screen is Screen.PressToContinue) ->
-                    return ActionOutcome.Failed(ActionError.UnexpectedScreen("the title screen, main menu or the saved game", screen.kind))
+                    return ActionOutcome.Failed(ActionError.UnexpectedScreen("the title screen, main menu or the saved game", screen))
                 else -> context.scope.step(WAIT_FRAMES)
             }
         }

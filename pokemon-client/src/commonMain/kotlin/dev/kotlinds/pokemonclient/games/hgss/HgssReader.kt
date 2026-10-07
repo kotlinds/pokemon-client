@@ -1003,6 +1003,8 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             safariBalls = if (type and (1L shl 5) != 0L) mem.s32(bs + A.BS_SAFARI_BALLS) else null,
             outcomeFlag = mem.u8(bs + A.BS_OUTCOME_FLAG),
             sidesOut = sidesOut(ctx, bs, battleCtx, type, battlers),
+            fieldCondition = mem.u32(battleCtx + A.BC_FIELD_CONDITION),
+            weatherTurns = mem.s32(battleCtx + A.BC_WEATHER_TURNS),
         )
     }
 
@@ -1056,6 +1058,8 @@ class HgssReader(private val memory: Memory, private val version: HgssVersion? =
             status2 = mem.u32(m + A.BM_STATUS2),
             moveEffects = mem.u32(m + A.BM_MOVE_EFFECT_FLAGS),
             counters = mem.u32(m + A.BM_SUB),
+            disabledMove = mem.u16(m + A.BM_DISABLED_MOVE),
+            encoredMove = mem.u16(m + A.BM_ENCORED_MOVE),
             side = if (id % 2 == 0) "player" else "opponent",
             partySlot = mem.u8(battleCtx + A.BC_SELECTED_MON_INDEX + id).takeIf { it < 6 },
             species = species,

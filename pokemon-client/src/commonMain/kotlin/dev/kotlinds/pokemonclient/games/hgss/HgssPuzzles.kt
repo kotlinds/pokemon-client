@@ -31,7 +31,7 @@ import dev.kotlinds.pokemonclient.state.TeleportKind
  * - **Warp pads** (any map): coordinate triggers whose script warps within the map ([Area.scriptWarps]), e.g. the
  *   Blackthorn Gym exit pads (`VAR_UNK_4111` == 0, never set) and the Team Rocket HQ B1F trap tile.
  * - **Violet Gym lift**, **Ecruteak Gym** invisible floor and candles, **Cianwood Gym** winch, **Vermilion Gym** trash
- *   cans: see [HgssGymPuzzles].
+ *   cans, **Mahogany Gym** ice blocks: see [HgssGymPuzzles].
  * - Gyms whose mechanism isn't modeled (Blackthorn platforms, Fuchsia invisible walls): [PuzzleState.unmodeled].
  */
 object HgssPuzzles {
@@ -55,9 +55,16 @@ object HgssPuzzles {
 
     /**
      * The puzzle of zone [mapId] right now, or null when the map has none. [area] gives the warp pads (ROM);
-     * [objects] are the map's live objects (local id and position), for puzzles about people (the Farfetch'd).
+     * [objects] are the map's live objects (local id and position), for puzzles about people (the Farfetch'd);
+     * [iceBlocks] its ice block objects (the Mahogany Gym's).
      */
-    fun read(mapId: Int, reads: Reads, area: Area?, objects: List<HgssIlexFarfetchd.ObjectAt> = emptyList()): PuzzleState? {
+    fun read(
+        mapId: Int,
+        reads: Reads,
+        area: Area?,
+        objects: List<HgssIlexFarfetchd.ObjectAt> = emptyList(),
+        iceBlocks: List<HgssIlexFarfetchd.ObjectAt> = emptyList(),
+    ): PuzzleState? {
         val pads = pads(mapId, reads, area)
         val main = when (mapId) {
             GOLDENROD_TUNNEL_B2F -> goldenrodTunnel(reads)
@@ -66,7 +73,7 @@ object HgssPuzzles {
             ICE_PATH_B1F -> icePathBoulders(reads)
             HgssIlexFarfetchd.MAP -> HgssIlexFarfetchd.herds(reads, objects, area).takeIf { it.isNotEmpty() }
                 ?.let { PuzzleState(PuzzleKind.HERDING, HgssIlexFarfetchd.RULE, herds = it, walkthroughRule = HgssIlexFarfetchd.WALKTHROUGH_RULE) }
-            else -> HgssGymPuzzles.read(mapId, reads, area)
+            else -> HgssGymPuzzles.read(mapId, reads, area, iceBlocks)
         }
         val unmodeled = HgssGymPuzzles.unmodeled(reads)
         return when {
@@ -76,6 +83,12 @@ object HgssPuzzles {
             else -> null
         }
     }
+
+    /**
+     * The puzzles of other maps kept in the save's flags ([dev.kotlinds.pokemonclient.PokemonGame.savedPuzzles]):
+     * the Ice Path B1F boulders (which fell through their holes).
+     */
+    fun saved(reads: Reads): Map<Int, PuzzleState> = mapOf(ICE_PATH_B1F to icePathBoulders(reads))
 
     private const val UNMODELED_RULE =
         "This map has a mechanism the route planner doesn't model (see unmodeled): routes may not find the way through it."

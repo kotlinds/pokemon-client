@@ -347,12 +347,22 @@ class PathfinderTest {
     @Test
     fun aBoulderBlocksTheRouteAndTheFailureSaysStrength() {
         val map = area(
+            "#######",
+            ".......",
+            "#######",
+        )
+        val boulder = Overlay(listOf(LiveObject(2, 1, null, clearedBy = FieldMoveKind.STRENGTH)))
+        assertEquals(RouteFailure.NeedsFieldMove(FieldMoveKind.STRENGTH, 2, 1, Node(1, 1), Direction.EAST), Pathfinder(map, boulder).to(4, 1, Node(0, 1)).needs())
+        // A corridor whose end the boulder can only be pushed into: no push frees 4,1, so Strength is no way there
+        // (the dead-end boulder of Victory Road 2F), and the diagnosis says which boulder it left out.
+        val short = area(
             "#####",
             ".....",
             "#####",
         )
-        val boulder = Overlay(listOf(LiveObject(2, 1, null, clearedBy = FieldMoveKind.STRENGTH)))
-        assertEquals(RouteFailure.NeedsFieldMove(FieldMoveKind.STRENGTH, 2, 1, Node(1, 1), Direction.EAST), Pathfinder(map, boulder).to(4, 1, Node(0, 1)).needs())
+        val deadEnd = assertIs<Pathfinder.Result.Failed>(Pathfinder(short, boulder).to(4, 1, Node(0, 1)))
+        assertEquals(RouteFailure.Unreachable, deadEnd.failure)
+        assertEquals(listOf(2 to 1), deadEnd.blockers.stuckBoulders)
         // The fewest field moves: a way around a boulder is taken, and water is preferred to two obstacles.
         val open = area(
             ".....",

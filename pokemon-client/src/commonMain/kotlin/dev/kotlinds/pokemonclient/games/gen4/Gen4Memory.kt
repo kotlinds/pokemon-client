@@ -299,6 +299,7 @@ object Gen4Structs {
     const val SM_MAGIC = 0x00L
     const val SM_MESSAGE_ID = 0x05L        // u8: text printer of the field message
     const val SM_MSG_BOX_OPEN = 0x08L      // u8: 1 while the field message window is open (OpenMsg / CloseMsg)
+    const val SM_SCRIPT_ID = 0x0AL         // u16: the script run (HGSS activeScriptNumber, Platinum scriptID): map-local, std_* or common
     const val SM_ACTIVE_CONTEXTS = 0x09L
     const val SM_CONTEXTS = 0x38L          // ScriptContext *[NUM_SCRIPT_CONTEXTS]
     const val SC_STATE = 0x01L             // 0 stopped, 1 bytecode, 2 paused on a native wait

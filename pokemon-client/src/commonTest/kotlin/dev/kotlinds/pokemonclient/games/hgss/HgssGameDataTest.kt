@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.data.MachineCompatibility
 import dev.kotlinds.pokemonclient.data.BaseStats
 import dev.kotlinds.pokemonclient.data.Effectiveness
 import dev.kotlinds.pokemonclient.data.Evolution
@@ -84,6 +85,17 @@ class HgssGameDataTest {
         assertEquals(ItemPocket.TMS_HMS, data.item(ItemId(328))?.pocket) // TM01
         assertEquals(ItemPocket.KEY_ITEMS, data.item(ItemId(445))?.pocket) // Bicycle
         assertEquals(ItemPocket.BERRIES, data.item(ItemId(149))?.pocket) // Cheri Berry
+    }
+
+    @Test
+    fun `items the bag offers USE for`() {
+        // `fieldUseFunc` of the item data: 0 = no USE in the bag (keys used by interacting).
+        assertEquals(true, data.item(ItemId(450))?.usableFromBag) // Bicycle
+        assertEquals(true, data.item(ItemId(446))?.usableFromBag) // Good Rod
+        assertEquals(true, data.item(ItemId(17))?.usableFromBag) // Potion
+        assertEquals(false, data.item(ItemId(476))?.usableFromBag) // Basement Key
+        assertEquals(false, data.item(ItemId(475))?.usableFromBag) // Card Key
+        assertEquals(false, data.item(ItemId(477))?.usableFromBag) // SquirtBottle
     }
 
     @Test
@@ -176,6 +188,27 @@ class HgssGameDataTest {
     }
 
     @Test
+    fun `the TM screen's decoder and the actions use the same compatibility`() {
+        // The screen is decoded with the bundled tables when no ROM is installed; the actions read the ROM's data:
+        // both go through MachineCompatibility.of, so they agree for every species, machine, egg and known move.
+        HgssData.useGameData(null)
+        for (species in 1..493) {
+            val info = data.species(SpeciesId(species)) ?: continue
+            for (machine in MachineId.all) {
+                val move = assertNotNull(data.machineMove(machine))
+                val item = HgssPostBattleAddresses.ITEM_TM01 + machine.number - 1
+                for ((egg, known) in listOf(false to emptyList(), false to listOf(move), true to emptyList())) {
+                    assertEquals(
+                        MachineCompatibility.of(egg, known, move, machine in info.machines),
+                        HgssMachines.compatibility(species, egg, known.map { it.value }, item),
+                        "species $species, ${machine.label}, egg $egg, known $known",
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun `HgssData delegates to the ROM data when installed`() {
         try {
             HgssData.useGameData(data)
@@ -184,7 +217,7 @@ class HgssGameDataTest {
             assertEquals(95, HgssData.moveData[85]?.power)
             assertEquals(264, HgssMachines.moveOf(328))
             assertTrue(HgssMachines.isHm(57))
-            assertEquals(TmCompatibility.ABLE, HgssMachines.compatibility(181, false, listOf(435), 328))
+            assertEquals(MachineCompatibility.Fit.ABLE, HgssMachines.compatibility(181, false, listOf(435), 328))
             assertEquals(300, HgssItemPrices.price(17))
             assertNull(HgssItemPrices.price(445)) // Bicycle: key item, no price
         } finally {

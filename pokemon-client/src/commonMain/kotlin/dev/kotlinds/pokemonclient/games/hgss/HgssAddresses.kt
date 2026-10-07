@@ -223,7 +223,6 @@ object HgssAddresses {
     // ScriptEnvironment (include/script.h): the fields shared with Platinum's ScriptManager (magic, message box,
     // text printer, contexts) and the TaskManager / ScriptContext layouts are in Gen4Structs (SM_*, FIELD_TASK_*, SC_*).
     // ------------------------------------------------------------------------------------------------
-    const val SE_ACTIVE_SCRIPT = 0x0AL       // u16 activeScriptNumber
     const val SE_LIST_MENU_2D = 0x24L        // yes/no menu while shown
     const val SE_LAST_INTERACTED = 0x2CL
     const val SE_STRING_BUFFER_0 = 0x48L     // String *: fully expanded message currently printed (ovFieldMain_ReadAndExpandMsgDataViaBuffer)
@@ -373,6 +372,12 @@ object HgssAddresses {
     const val BC_SELECTED_MON_INDEX = 0x219CL // u8[4] party slot of each battler
     const val BC_BATTLE_MONS = 0x2D40L
     const val BC_TOTAL_TURNS = 0x150L
+    /**
+     * u32 `fieldCondition` (FIELD_CONDITION_* weather bits), then `fieldConditionData.weatherTurns` (u32): after
+     * totalTurns, totalTimesFainted[4], totalDamage[4], meFirstTotal and two pointers (include/battle/battle.h).
+     */
+    const val BC_FIELD_CONDITION = 0x180L
+    const val BC_WEATHER_TURNS = 0x184L
     const val BC_BATTLERS_ON_FIELD = 0x3150L
     /** u8[4][6]: party order as the battle sees it (unk_312C, include/battle/battle.h:430; partyOrder in Platinum). */
     const val BC_PARTY_ORDER = 0x312CL
@@ -399,6 +404,8 @@ object HgssAddresses {
     const val BM_ITEM = 0x78L
     const val BM_MOVE_EFFECT_FLAGS = 0x80L   // u32 MOVE_EFFECT_FLAG_* (leech seed, perish song, fly/dig/dive, ingrain, yawn...)
     const val BM_SUB = 0x88L                 // UnkBattlemonSub: +0 counters word (disable/encore/taunt/perish...), +4 ids word
+    const val BM_DISABLED_MOVE = BM_SUB + 0x20L  // u16 unk88.disabledMove (after the two bitfield words and six ints)
+    const val BM_ENCORED_MOVE = BM_SUB + 0x24L   // u16 unk88.encoredMove (after disabledMove, bindingMove)
 
     const val BI_FEEDBACK_TASK = 0x0CL       // SysTask * of the button-press animation (NULL when idle)
     const val BI_UNK10_TASK = 0x10L

@@ -60,10 +60,9 @@ class HgssReachabilityFixtureTest {
         assertEquals(ZoneLink(ZoneLink.Kind.WARP, "warp:0", 469, 5, 9, WarpTrigger.Press(Direction.SOUTH), 13, 1306, 185), out)
         val entrance = assertNotNull(world.areaOf(13)).warps.single { it.zone == 13 && it.x == 1306 && it.y == 185 }
         assertEquals(WarpTrigger.Enter, entrance.trigger)
-        val present = { t: dev.kotlinds.pokemonclient.world.PersonTemplate -> t.hiddenByFlag == 0 || flags[t.hiddenByFlag] == false }
-        assertTrue(WorldLinks.noWayBack(world, out, RouteOptions(), present))
-        // Once he is gone, the entrance is stepped off and on again.
-        assertFalse(WorldLinks.noWayBack(world, out, RouteOptions()) { it.hiddenByFlag == 0 })
+        assertTrue(WorldLinks.noWayBack(world, out, RouteOptions(), flags))
+        // Once he is gone (every flag set: whoever hides behind one is gone), the entrance is stepped off and on again.
+        assertFalse(WorldLinks.noWayBack(world, out, RouteOptions(), dev.kotlinds.pokemonclient.state.EventFlags(ByteArray(0x1000) { -1 })))
         // The snapshot is the save's: Elder Li beaten (the Zephyr Badge is owned).
         assertEquals(true, flags[HgssProgress.FLAG_BEAT_SPROUT_ELDER])
     }

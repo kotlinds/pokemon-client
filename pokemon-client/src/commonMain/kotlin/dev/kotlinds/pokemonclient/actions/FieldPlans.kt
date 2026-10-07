@@ -42,7 +42,7 @@ internal object FieldPlans {
                     break
                 }
                 if (overwriteAnswered) {
-                    result = Step.Failed(ActionError.UnexpectedScreen("the end of the save", state.screen.kind))
+                    result = Step.Failed(ActionError.UnexpectedScreen("the end of the save", state.screen))
                     break
                 }
                 overwriteAnswered = true
@@ -90,7 +90,7 @@ internal object FieldPlans {
      */
     val fish = ActionPlan<GameAction.Fish> { action, context ->
         val start = context.state()
-        val field = start.field ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the overworld", start.screen.kind))
+        val field = start.field ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the overworld", start.screen))
         val facing = field.facing
         val ahead = facing?.let { context.game.world?.areaOf(field.mapId)?.tile(field.x + it.dx, field.y + it.dy)?.kind }
         if (ahead != null && !(ahead is TileKind.Water && ahead.fishable)) {
@@ -171,17 +171,32 @@ internal object FieldPlans {
      */
     private fun flyOnce(context: PlanContext, destination: String, startMap: Int?, hubAllowed: Boolean): Step<Pair<GameState, String?>> {
         var hub: String? = null
+        var expected: Entry? = null
         return openFlyMap(context).andThen { state ->
             flyTarget(context, destination, state, startMap, hubAllowed)
         }.andThen { target ->
             hub = target.hub
+            expected = target.entry
             context.scope.touch(target.touch)
             context.navigator.awaitChange(context.state().screen)
             context.navigator.advanceUntil(FLY_WAITS) { it.screen is Screen.YesNo }
         }.andThen {
             context.navigator.choose(Screen.YesNo::class, "YES (fly)") { it.id == "option:yes" }
         }.andThen { awaitLanding(context, startMap) }
+            .andThen { landed -> checkLanding(context, landed, expected) }
             .andThen { landed -> Step.Done(landed to hub) }
+    }
+
+    /**
+     * The landing checked against the fly point chosen ([entry], `fly:<map id>`: the map the game warps to, HGSS
+     * `MapFlypointParam.mapIDforWarp`): a flight that lands elsewhere (a touch the map took for another town, a hub
+     * flight going on to the wrong side) is a [ActionError.VerificationFailed], never told as arrived where asked.
+     */
+    private fun checkLanding(context: PlanContext, landed: GameState, entry: Entry?): Step<GameState> {
+        val map = entry?.id?.removePrefix("fly:")?.toIntOrNull() ?: return Step.Done(landed)
+        val field = landed.field ?: return Step.Done(landed)
+        if (field.mapId == map) return Step.Done(landed)
+        return Step.Failed(ActionError.VerificationFailed("fly", "landing in ${context.game.mapName(map)} (${entry.id})", "landed in ${field.mapName} at ${field.x},${field.y}", 1))
     }
 
     /** Start menu → POKéMON → a Pokémon that knows Fly → FLY ([openFieldMove]), up to the fly map. */
@@ -201,7 +216,7 @@ internal object FieldPlans {
         val label = with(FieldMoveWalk) { move.label() }
         if (users.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows $label"))
         return PartyBagPlans.openParty(context).andThen { state ->
-            if (state.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", state.screen.kind))
+            if (state.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", state.screen))
             for (user in users) {
                 val opened = context.navigator.choose(Screen.PartyGrid::class, user.displayName) { it.id == user.id.toString() }
                 if (opened is Step.Failed) return@andThen opened
@@ -343,7 +358,7 @@ internal object FieldPlans {
             // The map's header allowed it ([FieldState.flyAllowed]): the game said no for another reason (someone
             // travelling with the player, a disguise, the Safari Zone: src/field_move.c FieldMove_CheckFly).
             refused -> Step.Failed(ActionError.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "The game refused Fly here (its message says why)", "try again after leaving this place"))
-            else -> Step.Failed(ActionError.UnexpectedScreen("the fly map", context.state().screen.kind))
+            else -> Step.Failed(ActionError.UnexpectedScreen("the fly map", context.state().screen))
         }
     }
 
@@ -372,8 +387,11 @@ internal object FieldPlans {
         return Step.Failed(ActionError.Timeout("the flight didn't land"))
     }
 
-    /** Where to touch on the fly map, and the hub's name when it is the region hub instead of the town asked. */
-    private data class FlyTarget(val touch: dev.kotlinds.pokemonclient.console.TouchPoint, val hub: String? = null)
+    /**
+     * Where to touch on the fly map, the hub's name when it is the region hub instead of the town asked, and the fly
+     * point touched ([entry], to check the landing).
+     */
+    private data class FlyTarget(val touch: dev.kotlinds.pokemonclient.console.TouchPoint, val hub: String? = null, val entry: Entry? = null)
 
     /**
      * The touch point of [destination] on the fly map (`fly:<map id>` or the town's name), moving the map with the
@@ -387,7 +405,7 @@ internal object FieldPlans {
             return matchesRef(destination, "fly", id, e.label) || MapName.sameMapName(e.label, destination) ||
                 context.game.mapName(id).let { it.isNamed(destination) || it.placeIs(destination) }
         }
-        val map = start.screen as? Screen.FlyMap ?: return Step.Failed(ActionError.UnexpectedScreen("the fly map", start.screen.kind))
+        val map = start.screen as? Screen.FlyMap ?: return Step.Failed(ActionError.UnexpectedScreen("the fly map", start.screen))
         val asked = map.entries.firstOrNull { e -> e.id == destination || (e.id.startsWith("fly:") && names(e)) }
             ?: return Step.Failed(FlyHints.otherRegion(context, destination, startMap) ?: ActionError.InvalidParameter("destination", destination,
                 map.entries.filter { it.selectable && it.id.startsWith("fly:") }.map { "${it.id} (${it.label})" }))
@@ -399,7 +417,7 @@ internal object FieldPlans {
             else -> return Step.Failed(FlyHints.notSelectable(context, asked, map, startMap))
         }
         val viaHub = if (entry === asked) null else entry.label
-        return steerTo(context, entry).andThen { Step.Done(FlyTarget(it, viaHub)) }
+        return steerTo(context, entry).andThen { Step.Done(FlyTarget(it, viaHub, entry)) }
     }
 
     /**
@@ -410,7 +428,7 @@ internal object FieldPlans {
         fun find(state: GameState) = (state.screen as? Screen.FlyMap)?.entries?.firstOrNull { it.id == entry.id }
         entry.touch?.let { return Step.Done(it) }
         repeat(MAP_STEER_PRESSES) {
-            val map = context.navigator.settle().screen as? Screen.FlyMap ?: return Step.Failed(ActionError.UnexpectedScreen("the fly map", context.state().screen.kind))
+            val map = context.navigator.settle().screen as? Screen.FlyMap ?: return Step.Failed(ActionError.UnexpectedScreen("the fly map", context.state().screen))
             find(context.state())?.touch?.let { return Step.Done(it) }
             val from = map.cursorCell
             val to = map.cells[entry.id]

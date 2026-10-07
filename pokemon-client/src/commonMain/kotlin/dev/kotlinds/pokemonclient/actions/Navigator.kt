@@ -80,7 +80,7 @@ class Navigator(
         var lastIndex: Int? = null
         repeat(MAX_TAPS) {
             val screen = settle().screen
-            if (!expect.isInstance(screen)) return Step.Failed(ActionError.UnexpectedScreen(expect.simpleName ?: "?", screen.kind))
+            if (!expect.isInstance(screen)) return Step.Failed(ActionError.UnexpectedScreen(expect.simpleName ?: "?", screen))
             @Suppress("UNCHECKED_CAST")
             screen as S
             val goal = screen.entries.indexOfFirst(target)
@@ -113,7 +113,7 @@ class Navigator(
      */
     fun confirm(description: String, target: (Entry) -> Boolean, button: Button = Button.A): Step<GameState> {
         val screen = settle().screen
-        val selectable = screen as? Screen.Selectable ?: return Step.Failed(ActionError.UnexpectedScreen("a menu", screen.kind))
+        val selectable = screen as? Screen.Selectable ?: return Step.Failed(ActionError.UnexpectedScreen("a menu", screen))
         val cursor = selectable.cursor
         val current = (cursor as? Cursor.At)?.let { selectable.entries.getOrNull(it.index) }
         if (current == null || !target(current)) {
@@ -157,7 +157,7 @@ class Navigator(
     fun <S : Screen.Selectable> touchEntry(expect: KClass<S>, description: String, target: (Entry) -> Boolean, unreachable: ActionError): Step<GameState> {
         repeat(retry.maxCorrections + 1) {
             val screen = settle().screen
-            if (!expect.isInstance(screen)) return Step.Failed(ActionError.UnexpectedScreen(expect.simpleName ?: "?", screen.kind))
+            if (!expect.isInstance(screen)) return Step.Failed(ActionError.UnexpectedScreen(expect.simpleName ?: "?", screen))
             screen as Screen.Selectable
             val entry = screen.entries.firstOrNull(target) ?: return Step.Failed(ActionError.NotOnScreen(description, screen.kind, screen.entries.map { it.label }))
             if (!entry.selectable) return Step.Failed(ActionError.NotSelectable(description, entry.label))
@@ -210,7 +210,7 @@ class Navigator(
                     onMessage(state)
                     press(Button.A, screen)
                 }
-                else -> if (waitOn(screen)) scope.step(WAIT_FRAMES) else return Step.Failed(ActionError.UnexpectedScreen("a message", screen.kind))
+                else -> if (waitOn(screen)) scope.step(WAIT_FRAMES) else return Step.Failed(ActionError.UnexpectedScreen("a message", screen))
             }
         }
         return Step.Failed(ActionError.Timeout("messages didn't end after $maxPresses presses"))

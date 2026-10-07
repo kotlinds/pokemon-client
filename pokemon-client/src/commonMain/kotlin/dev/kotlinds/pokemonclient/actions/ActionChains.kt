@@ -11,22 +11,36 @@ import dev.kotlinds.pokemonclient.state.Screen
 object ActionChains {
 
     /**
-     * Merges consecutive `use_item` steps into one bag session ([GameAction.UseItem.batch]) when out of battle:
-     * the bag stays open between the items instead of being closed and reopened for each one. In battle every item
-     * use takes a turn, so they stay separate.
+     * Merges consecutive steps that work in the same menu into one session when out of battle, instead of closing the
+     * menu and reopening it for each one:
+     * - `use_item` steps into one bag session ([GameAction.UseItem.batch]); in battle every item use takes a turn, so
+     *   they stay separate;
+     * - `deposit`, `withdraw` and `pc` steps into one `pc` session ([GameAction.Pc]): the PC is booted once and its
+     *   box screen kept between operations of the same mode.
      */
     fun coalesce(actions: List<GameAction>, inBattle: Boolean): List<GameAction> {
         if (inBattle) return actions
         val merged = mutableListOf<GameAction>()
         for (action in actions) {
             val previous = merged.lastOrNull()
-            if (action is GameAction.UseItem && previous is GameAction.UseItem) {
-                merged[merged.lastIndex] = previous.copy(batch = previous.batch + action.uses)
-            } else {
-                merged += action
+            val pcBefore = previous?.let(::pcOperations)
+            val pcNow = pcOperations(action)
+            when {
+                action is GameAction.UseItem && previous is GameAction.UseItem ->
+                    merged[merged.lastIndex] = previous.copy(batch = previous.batch + action.uses)
+                pcBefore != null && pcNow != null -> merged[merged.lastIndex] = GameAction.Pc(pcBefore + pcNow)
+                else -> merged += action
             }
         }
         return merged
+    }
+
+    /** The PC operations [action] stands for (a `deposit`, a `withdraw`, a `pc` session), null for any other action. */
+    private fun pcOperations(action: GameAction): List<PcOperation>? = when (action) {
+        is GameAction.Deposit -> listOf(PcOperation.Deposit(action.mon))
+        is GameAction.Withdraw -> listOf(PcOperation.Withdraw(action.mon))
+        is GameAction.Pc -> action.operations
+        else -> null
     }
 
     /**

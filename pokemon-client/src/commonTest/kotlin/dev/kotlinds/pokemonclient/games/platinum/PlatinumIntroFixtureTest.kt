@@ -160,6 +160,8 @@ class PlatinumIntroFixtureTest {
         assertEquals(TextSource.FIELD, dialogue.source)
         assertEquals("That concludes our special program,\n“Let’s Ask Prof. Rowan!”", dialogue.text)
         assertEquals(Awaiting.INPUT, dialogue.awaiting)
+        // A map script's message, not the Repel's common script: no field notice (a walk stops on it).
+        kotlin.test.assertNull(dialogue.notice)
         assertEquals(415, s.field?.mapId)
     }
 

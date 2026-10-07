@@ -53,9 +53,9 @@ internal object OptionsPlans {
         context.navigator.select(Screen.ListMenu::class, row) { it.id.startsWith("setting:$row:") }.andThen {
             repeat(MAX_VALUE_PRESSES) {
                 val state = context.navigator.settle()
-                val menu = state.screen as? Screen.ListMenu ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the options", state.screen.toString()))
+                val menu = state.screen as? Screen.ListMenu ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the options", state.screen))
                 val current = (menu.cursor as? Cursor.At)?.let { menu.entries.getOrNull(it.index) }?.id
-                    ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the cursor on $row", menu.toString()))
+                    ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the cursor on $row", menu))
                 if (!current.startsWith("setting:$row:")) return@andThen Step.Failed(ActionError.VerificationFailed(row, row, current, 0))
                 if (current == "setting:$row:$value") return@andThen Step.Done(state)
                 // On the last row LEFT selects CONFIRM; elsewhere RIGHT cycles through the values.

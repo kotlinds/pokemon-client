@@ -35,7 +35,7 @@ internal object HallOfFamePlans {
     val watchHallOfFame = ActionPlan<GameAction.WatchHallOfFame> { _, context ->
         val first = context.state()
         if (!offered(first)) {
-            return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the Hall of Fame or the save after it", first.screen.kind))
+            return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the Hall of Fame or the save after it", first.screen))
         }
         val team = first.party.filter { !it.isEgg }.map { it.displayName }
         val start = context.scope.framesUsed
@@ -70,7 +70,7 @@ internal object HallOfFamePlans {
                     return@ActionPlan ActionOutcome.Done(registered(team) + " The game restarted at the title screen: continue_game goes on")
                 // Anything else that waits for the player isn't part of the sequence: the agent decides.
                 screen.awaiting == Awaiting.INPUT ->
-                    return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the Hall of Fame, the save or the credits", screen.kind))
+                    return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the Hall of Fame, the save or the credits", screen))
                 else -> context.scope.step(WAIT_FRAMES)
             }
         }

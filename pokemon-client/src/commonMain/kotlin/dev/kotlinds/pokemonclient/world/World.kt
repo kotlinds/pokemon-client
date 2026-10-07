@@ -29,6 +29,9 @@ interface WorldSource {
     /** The region zone [zoneId] belongs to (Fly only reaches the region the player is in), null when unknown. */
     fun regionOf(zoneId: Int): Region? = null
 
+    /** The lift whose room is zone [zoneId] ([Elevator]), null when it isn't one or when the game doesn't tell. */
+    fun elevatorOf(zoneId: Int): Elevator? = null
+
     /**
      * Whether this game's wild encounter tables are decoded ([EncounterTables.DECODED]: [encounterChance] and
      * [wildEncounters] are the game's, 0 and null mean "none") or not yet ([EncounterTables.UNKNOWN]: they say nothing,
@@ -405,7 +408,21 @@ enum class FieldMoveUse {
 }
 
 /** A warp: on (x, y), what its [trigger] asks (stepping on it, or pressing a direction on it) leads to [targetZone]. */
-data class Warp(val zone: Int, val id: Int, val x: Int, val y: Int, val targetZone: Int, val targetWarp: Int, val trigger: WarpTrigger = WarpTrigger.Enter)
+data class Warp(
+    val zone: Int,
+    val id: Int,
+    val x: Int,
+    val y: Int,
+    val targetZone: Int,
+    val targetWarp: Int,
+    val trigger: WarpTrigger = WarpTrigger.Enter,
+    /**
+     * Where the game moves the player once arrived on this warp's tile, when it does: one tile off a ladder (HGSS: up
+     * the ladder onto the floor above, the player stands north of the hole it came out of; down onto a ladder's foot,
+     * south of it, measured on the bench in the Bell Tower). Null when the player stays on the tile (or unknown).
+     */
+    val arrivalStep: Direction? = null,
+)
 
 /**
  * What takes a warp, from the game's rules for the behaviour of its tile. The Gen 4 engine checks warps twice
@@ -468,7 +485,37 @@ data class PersonTemplate(
     val hiddenByFlag: Int,
     /** For an obstacle object (Cut tree, Rock Smash rock, Strength boulder): the field move that clears it. */
     val obstacle: FieldMoveKind? = null,
-)
+    /**
+     * For a trainer of a common trainer script: the event flag the game sets once it is beaten (its trainer flag), so
+     * a trainer of a map the player isn't on is known beaten or not from the save. Null otherwise (not a trainer, or
+     * a scripted battle that records its win its own way).
+     */
+    val trainerFlag: Int? = null,
+    /** True when it walks around on its own (a wander range): where the map places it isn't where it stands. */
+    val wanders: Boolean = false,
+    /**
+     * The directions it turns to on its own besides [facing] (its movement type: a trainer looking around, or left and
+     * right): a trainer may see the player along any of them. Empty when it keeps facing one way.
+     */
+    val looks: Set<Direction> = emptySet(),
+    /**
+     * True when a script of its map moves it elsewhere (the map's entry script putting beaten trainers out of the
+     * way: the Cinnabar Gym's): where the map places it isn't where it stands once the player is there. False when no
+     * script does, or when the game's scripts aren't read.
+     */
+    val scriptMoved: Boolean = false,
+) {
+    /**
+     * True when it is there now by the save's event [flags]: always without a flag, else while its flag is clear.
+     * Unknown flags (a game that doesn't read them) count it as absent: nothing is called blocked or one way on a guess.
+     */
+    fun presentWith(flags: dev.kotlinds.pokemonclient.state.EventFlags?): Boolean =
+        hiddenByFlag == 0 || flags?.get(hiddenByFlag) == false
+
+    /** How far it watches for the player by the save's [flags]: 0 once its [trainerFlag] says it was beaten. */
+    fun sightWith(flags: dev.kotlinds.pokemonclient.state.EventFlags?): Int =
+        if (trainerFlag != null && flags?.get(trainerFlag) == true) 0 else sightRange
+}
 
 /** A coordinate trigger: stepping on it runs [script] while variable [variable] equals [value]. */
 data class Trigger(

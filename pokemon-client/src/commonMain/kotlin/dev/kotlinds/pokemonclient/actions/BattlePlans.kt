@@ -2,6 +2,7 @@ package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.BattleOutcome
 import dev.kotlinds.pokemonclient.state.BattleState
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.TextSource
@@ -26,11 +27,11 @@ internal object BattlePlans {
                 context.navigator.choose(Screen.ListMenu::class, "SWITCH") { it.id == "option:switch" }
             state.screen is Screen.YesNo && (state.screen as Screen.YesNo).entries.any { it.id == "option:next" } ->
                 context.navigator.choose(Screen.YesNo::class, "USE NEXT POKéMON") { it.id == "option:next" }
-            else -> Step.Failed(ActionError.UnexpectedScreen("the battle menu or the party", state.screen.toString()))
+            else -> Step.Failed(ActionError.UnexpectedScreen("the battle menu or the party", state.screen))
         }
         toGrid.andThen {
             context.navigator.settle().let { grid ->
-                if (grid.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", grid.screen.toString()))
+                if (grid.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", grid.screen))
             }
             context.navigator.choose(Screen.PartyGrid::class, "the Pokémon to send in") { it.id == action.mon.toString() }
         }.andThen { after ->
@@ -41,8 +42,10 @@ internal object BattlePlans {
     /**
      * BAG → POKé BALLS → the ball → USE, then follows the throw to its typed [ThrowResult]: caught (then the Pokédex
      * entry, the nickname question answered with [GameAction.ThrowBall.nickname] (none: NO), and the PC transfer when
-     * the party is full, up to the overworld), broke free (after how many shakes), or missed. The result is read from
-     * the game (the shakes it computed when the ball landed), never guessed from the screens that follow.
+     * the party is full, up to the overworld), broke free (after how many shakes; then fled, for a roaming Pokémon
+     * running on its turn), or missed. The result is read from the game (the shakes it computed when the ball landed,
+     * and how it decided the battle ends: [BattleState.outcome]), never guessed from the screens that follow: a battle
+     * that is over isn't a capture (Raikou broke free, then fled).
      */
     val throwBall = ActionPlan<GameAction.ThrowBall> { action, context ->
         var ballId = ""
@@ -50,7 +53,7 @@ internal object BattlePlans {
         val reached = context.navigator.choose(Screen.BattleCommand::class, "BAG") { it.id == "option:bag" }.andThen {
             context.navigator.choose(Screen.Bag::class, "POKé BALLS") { it.id == BALLS_POCKET }
         }.andThen { state ->
-            val bag = state.screen as? Screen.Bag ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the balls pocket", state.screen.toString()))
+            val bag = state.screen as? Screen.Bag ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the balls pocket", state.screen))
             val ball = bag.entries.firstOrNull { e ->
                 val id = e.id.removePrefix("item:").toIntOrNull() ?: return@firstOrNull false
                 e.id.startsWith("item:") && matchesRef(action.ball.raw, "item", id, e.label.substringBeforeLast(" x"))
@@ -69,10 +72,12 @@ internal object BattlePlans {
         val foe = before.battle?.battlers?.firstOrNull { !it.ref.isPlayerSide }
         // The throw, the shakes, then the next turn (it broke free) or the capture's messages and questions.
         var shakes: Int? = null
+        var outcome: BattleOutcome? = null
         var end: GameState? = null
         for (poll in 0 until THROW_FRAMES / 2) {
             val state = context.state()
             state.battle?.ballShakes?.let { shakes = it }
+            state.battle?.outcome?.let { outcome = it }
             val screen = state.screen
             val settled = screen.awaiting == Awaiting.INPUT
             if (settled && (screen is Screen.Selectable || screen is Screen.Overworld || screen is Screen.Keyboard)) {
@@ -86,9 +91,10 @@ internal object BattlePlans {
             } else context.scope.step(2)
         }
         val last = end ?: return@ActionPlan ActionOutcome.Failed(ActionError.Timeout("the throw didn't end"))
-        val caught = shakes == BattleState.CAUGHT_SHAKES || last.battle == null
+        val foeName = foe?.let { it.nickname ?: it.species.name } ?: "the Pokémon"
         val result = when {
-            caught -> ThrowResult.Caught(foe?.species?.name ?: "the Pokémon", foe?.level)
+            shakes == BattleState.CAUGHT_SHAKES || outcome == BattleOutcome.CAUGHT -> ThrowResult.Caught(foe?.species?.name ?: "the Pokémon", foe?.level)
+            shakes != null && outcome == BattleOutcome.FOE_FLED -> ThrowResult.BrokeFreeThenFled(shakes!!, foeName)
             shakes != null -> ThrowResult.BrokeFree(shakes!!)
             else -> ThrowResult.Missed
         }
@@ -130,7 +136,10 @@ internal object BattlePlans {
 
     /**
      * After "X wants to learn Y" (in or after a battle, or when evolving): forgets [GameAction.LearnMove.forget], or
-     * gives up learning the new move when it's null.
+     * gives up learning the new move when it's null. The move to forget is checked before anything is pressed
+     * ([PartyBagPlans.forgetRefusal], like `teach`): an HM move or a move it doesn't know is refused on the question,
+     * which stays on screen for the next call. Started from the list of moves to forget (left open by an earlier
+     * call), it picks there, or cancels it to give up the new move.
      */
     val learnMove = ActionPlan<GameAction.LearnMove> { action, context ->
         val outcome = learnMoveSteps.run(action, context)
@@ -155,12 +164,18 @@ internal object BattlePlans {
         val state = (reached as Step.Done).value
         val forget = action.forget
         val prompt = state.screen as? Screen.YesNo
+        // Who learns: the prompt says (its MoveOffer), or the list is about it.
+        val learner = (prompt?.learning?.mon ?: (state.screen as? Screen.MoveSelect)?.mon)?.let { id -> state.party.firstOrNull { it.id == id } }
+        if (forget != null && learner != null) PartyBagPlans.forgetRefusal(context, learner, forget)?.let { return@ActionPlan ActionOutcome.Failed(it) }
         val toList = when {
+            // Giving up from the list: CANCEL (the cursor checked) leads to "give up on Y?".
+            state.screen is Screen.MoveSelect && forget == null ->
+                context.navigator.choose(Screen.MoveSelect::class, "CANCEL (don't learn it)") { it.id == "option:cancel" }
             state.screen is Screen.MoveSelect -> Step.Done(state)
             prompt != null && forgetAnswer(prompt) != null ->
                 if (forget == null) context.navigator.choose(Screen.YesNo::class, "KEEP OLD MOVES") { it.id == keepAnswer(prompt) }
                 else context.navigator.choose(Screen.YesNo::class, "FORGET A MOVE") { it.id == forgetAnswer(prompt) }
-            else -> Step.Failed(ActionError.UnexpectedScreen("the question about the new move", state.screen.toString()))
+            else -> Step.Failed(ActionError.UnexpectedScreen("the question about the new move", state.screen))
         }
         if (forget == null) {
             // "Give up on learning Y?" → yes.
@@ -253,6 +268,12 @@ sealed interface ThrowResult {
     /** It broke free after [shakes] shakes (0..3). */
     data class BrokeFree(val shakes: Int) : ThrowResult
 
+    /**
+     * It broke free after [shakes] shakes, then [name] fled on its turn (a roaming Pokémon: Raikou, Entei, Latias...):
+     * the battle is over, nothing was caught.
+     */
+    data class BrokeFreeThenFled(val shakes: Int, val name: String) : ThrowResult
+
     /** The ball didn't reach a catch roll (blocked, or the Pokémon can't be caught). */
     data object Missed : ThrowResult
 
@@ -260,6 +281,7 @@ sealed interface ThrowResult {
     fun describe(): String = when (this) {
         is Caught -> "caught $species" + (level?.let { " Lv$it" } ?: "")
         is BrokeFree -> "broke free after $shakes shake" + if (shakes == 1) "" else "s"
+        is BrokeFreeThenFled -> "broke free after $shakes shake" + (if (shakes == 1) "" else "s") + ", then the wild $name fled: the battle is over, nothing caught"
         Missed -> "missed"
     }
 }

@@ -3,7 +3,6 @@ package dev.kotlinds.pokemonclient.actions
 import dev.kotlinds.pokemonclient.state.Entry
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.world.Pathfinder
-import dev.kotlinds.pokemonclient.world.WorldRouter
 
 /**
  * What the agent needs to know when Fly can't take it where it asks: the nearest place where Fly works (from a map
@@ -25,11 +24,11 @@ internal object FlyHints {
         val world = context.game.world ?: return null
         val area = world.areaOf(field.mapId) ?: return null
         if (world.flyAllowed(field.mapId) == null) return null
-        val overlay = MovePlans.overlay(context, field, emptySet())
-        val router = WorldRouter(world) { _, a -> if (a === area) overlay else WorldRouter.staticOverlay(a) }
         val start = Pathfinder(area).nodeOf(field)
-        val route = router.route(field.mapId, start, WorldTravel.worldRouteOptions(context, field, MoveOptions(acceptOneWay = true))) { place ->
-            place.zone?.let { world.flyAllowed(it) } == true
+        val options = WorldTravel.worldRouteOptions(context, field, MoveOptions(acceptOneWay = true))
+        // The same view of the other maps as go_to's routes (WorldTravel.routeAcross).
+        val route = WorldTravel.routeAcross(context, world, field, area) { router ->
+            router.route(field.mapId, start, options) { place -> place.zone?.let { world.flyAllowed(it) } == true }
         } ?: return null
         val zone = route.end.zone ?: return null
         val name = context.game.mapName(zone).toString()

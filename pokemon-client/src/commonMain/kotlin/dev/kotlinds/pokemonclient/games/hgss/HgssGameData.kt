@@ -11,6 +11,7 @@ import dev.kotlinds.pokemonclient.data.EvolutionMethod
 import dev.kotlinds.pokemonclient.data.GameData
 import dev.kotlinds.pokemonclient.data.GrowthRate
 import dev.kotlinds.pokemonclient.data.ItemInfo
+import dev.kotlinds.pokemonclient.games.gen4.Gen4ItemData
 import dev.kotlinds.pokemonclient.data.ItemPocket
 import dev.kotlinds.pokemonclient.data.LevelMove
 import dev.kotlinds.pokemonclient.data.MachineId
@@ -212,6 +213,9 @@ class HgssGameData(private val rom: NdsRom, val version: HgssVersion) : GameData
             name = itemNames.getOrNull(id.value) ?: "",
             pocket = ItemPocket.fromGameIndex((u16(d, 8) shr 7) and 0xF),
             price = u16(d, 0),
+            effect = Gen4ItemData.effect(d),
+            // `ItemData.fieldUseFunc` (include/item.h): 0 has no menu function, the bag shows no USE.
+            usableFromBag = u8(d, ITEM_FIELD_USE_FUNC) != 0,
         )
     }
 
@@ -282,7 +286,10 @@ class HgssGameData(private val rom: NdsRom, val version: HgssVersion) : GameData
         private const val PERSONAL_SIZE = 0x2C
         private const val PERSONAL_TMHM = 0x1C
         private const val MOVE_SIZE = 16
-        private const val ITEM_SIZE = 10
+        private const val ITEM_SIZE = 11
+
+        /** `ItemData.fieldUseFunc` (u8, after price, hold effects, fling, natural gift and the pockets' u16). */
+        private const val ITEM_FIELD_USE_FUNC = 10
         private const val MAX_EVOLUTIONS = 7
         private const val LEARNSET_END = 0xFFFF
         private const val OVERLAY_ENTRY_SIZE = 32

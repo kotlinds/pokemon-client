@@ -136,6 +136,41 @@ class ActionRegistryTest {
     }
 
     @Test
+    fun anUnknownKeyInsideAnArrayParameterNamesTheKeyToUse() {
+        // NOTES (map randomizer run): a `pc` operation without `op` got "Invalid op `missing`", which never said the key.
+        fun pc(operation: String) = registry.parse(kotlinx.serialization.json.Json.parseToJsonElement(
+            "{\"type\":\"pc\",\"operations\":[{\"op\":\"withdraw\",\"pokemon\":\"mon:00000001.00000002\"}, $operation]}").let { it as kotlinx.serialization.json.JsonObject }, ActionMode.ASSISTED)
+        val error = assertIs<ActionError.UnknownParameter>((pc("{\"action\":\"deposit\",\"pokemon\":\"mon:00000001.00000002\"}").exceptionOrNull() as ActionException).error)
+        assertEquals("action", error.name)
+        assertEquals("operations[1]", error.within)
+        assertEquals(listOf("op"), error.suggested.map { it.first })
+        assertTrue(error.message.startsWith("Unknown key `action` in operations[1] of pc: use `op` ("), error.message)
+        // Right keys: parsed as before, every operation.
+        val ok = pc("{\"op\":\"swap\",\"pokemon\":\"mon:00000001.00000002\",\"with\":\"mon:00000003.00000004\"}").getOrThrow()
+        assertEquals(2, assertIs<GameAction.Pc>(ok).operations.size)
+        // The same check for the items of use_item and buy.
+        val use = registry.parse(kotlinx.serialization.json.Json.parseToJsonElement("{\"type\":\"use_item\",\"item\":\"Potion\",\"items\":[{\"item\":\"Potion\",\"pokemon\":\"mon:00000001.00000002\"}]}") as kotlinx.serialization.json.JsonObject, ActionMode.ASSISTED)
+        val useError = assertIs<ActionError.UnknownParameter>((use.exceptionOrNull() as ActionException).error)
+        assertEquals("pokemon", useError.name)
+        assertEquals(listOf("target", "move"), useError.suggested.map { it.first })
+    }
+
+    @Test
+    fun onRepelEndIsTypedAndStopsByDefault() {
+        fun goTo(extra: String) = registry.parse(kotlinx.serialization.json.Json.parseToJsonElement("{\"type\":\"go_to\",\"x\":3,\"y\":4$extra}") as kotlinx.serialization.json.JsonObject, ActionMode.ASSISTED)
+        assertEquals(RepelEnd.STOP, assertIs<GameAction.GoTo>(goTo("").getOrThrow()).options.onRepelEnd)
+        assertEquals(RepelEnd.AUTO, assertIs<GameAction.GoTo>(goTo(",\"on_repel_end\":\"auto\"").getOrThrow()).options.onRepelEnd)
+        val error = assertIs<ActionError.InvalidParameter>((goTo(",\"on_repel_end\":\"again\"").exceptionOrNull() as ActionException).error)
+        assertEquals(listOf("stop", "continue", "reapply", "auto"), error.allowed)
+    }
+
+    @Test
+    fun theSchemaDescribesTheKeysOfArrayParameters() {
+        val schema = registry.jsonSchema(ActionMode.ASSISTED).toString()
+        assertTrue("\"items\":{\"type\":\"object\",\"properties\":{\"op\":" in schema, schema.substringAfter("\"pc\"").take(300))
+    }
+
+    @Test
     fun anUnknownParameterNamesTheParameterToUseWithoutAnAlias() {
         // NOTES (map randomizer run): `option` passed twice to open_menu / choose, which take `entry`.
         val menu = registry.parse(buildJsonObject { put("type", "open_menu"); put("option", "option:pokemon") }, ActionMode.ASSISTED)

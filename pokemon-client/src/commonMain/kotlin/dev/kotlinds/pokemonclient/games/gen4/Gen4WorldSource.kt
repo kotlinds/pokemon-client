@@ -1,10 +1,15 @@
 package dev.kotlinds.pokemonclient.games.gen4
 
+import dev.kotlinds.pokemonclient.Direction
+
 import dev.kotlinds.NarcArchive
 import dev.kotlinds.NdsRom
 import dev.kotlinds.pokemonclient.SnapshotCache
 import dev.kotlinds.pokemonclient.state.MapName
 import dev.kotlinds.pokemonclient.world.Area
+import dev.kotlinds.pokemonclient.world.Elevator
+import dev.kotlinds.pokemonclient.world.ElevatorOperator
+import dev.kotlinds.pokemonclient.world.ElevatorStop
 import dev.kotlinds.pokemonclient.world.AreaKind
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.PersonTemplate
@@ -86,6 +91,9 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
     /** What takes a warp on a tile of behaviour [behavior] ([WarpTrigger]: the codes differ a little between games). */
     protected abstract fun warpTrigger(behavior: Int): WarpTrigger
 
+    /** Where the game moves the player arriving on a warp tile of [behavior] ([Warp.arrivalStep]); null by default. */
+    protected open fun arrivalStep(behavior: Int): Direction? = null
+
     /** The field move that clears an overworld object of sprite [sprite] (small tree, cracked rock, boulder), or null. */
     protected abstract fun obstacle(sprite: Int): FieldMoveKind?
 
@@ -120,6 +128,9 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
     /** Coordinate triggers of [zone] whose script moves the player within [zone] (needs the game's scripts): none by default. */
     protected open fun scriptWarps(zone: Int, events: Gen4ZoneEvents): List<ScriptWarp> = emptyList()
 
+    /** The local ids of the people of [zone] its scripts move elsewhere ([PersonTemplate.scriptMoved]): none by default. */
+    protected open fun movedPeople(zone: Int): Set<Int> = emptySet()
+
     /** Coordinate triggers of [zone] whose script warps the player to another zone (holes): none by default. */
     protected open fun triggerWarps(zone: Int, events: Gen4ZoneEvents): List<TriggerWarp> = emptyList()
 
@@ -153,6 +164,47 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
         matrices.getOrPutNotNull(matrixId) { matrixFiles.getOrNull(matrixId)?.let { Gen4MapMatrix.parse(matrixId, it) } }
 
     fun landData(landId: Int): Gen4LandData? = land(landId)?.data
+
+    /** A command of zone [zoneId]'s scripts sending a lift to warp [warp] of zone [zone], run by event script [scriptId] (1-based). */
+    data class DynamicWarp(val scriptId: Int, val zone: Int, val warp: Int)
+
+    /**
+     * The lift commands of zone [zoneId]'s scripts ([DynamicWarp]); empty by default (a game whose scripts aren't read
+     * here: no lift is known, [elevatorOf] says null).
+     */
+    protected open fun dynamicWarps(zoneId: Int): List<DynamicWarp> = emptyList()
+
+    /** The lift of each zone asked ([elevatorOf]), none as an empty list (a cache of non-null values). */
+    private val elevators = SnapshotCache<Int, List<Elevator>>()
+
+    /**
+     * The lift of zone [zoneId]: a room with warps to the dynamic destination ([DYNAMIC_ZONE]) and scripts sending it
+     * to floors ([dynamicWarps]). Who runs those scripts tells how it is operated: a person ([ElevatorOperator.Attendant]),
+     * a background event ([ElevatorOperator.Panel]), else the map itself on entering ([ElevatorOperator.Shuttle] between
+     * two floors, [ElevatorOperator.EntryMenu] for more).
+     */
+    override fun elevatorOf(zoneId: Int): Elevator? = elevators.getOrPut(zoneId) { listOfNotNull(readElevator(zoneId)) }.firstOrNull()
+
+    private fun readElevator(zoneId: Int): Elevator? {
+        val events = events(zoneId) ?: return null
+        val exits = events.warps.indices.filter { events.warps[it].header == DYNAMIC_ZONE }
+        if (exits.isEmpty()) return null
+        val commands = dynamicWarps(zoneId).filter { c -> c.zone != zoneId && events(c.zone)?.warps?.getOrNull(c.warp) != null }
+        if (commands.isEmpty()) return null
+        val scripts = commands.map { it.scriptId }.toSet()
+        val person = events.objects.firstOrNull { it.script in scripts }
+        val sign = events.bgs.indexOfFirst { it.script in scripts }
+        val stops = commands.map { ElevatorStop(it.zone, it.warp) }.distinct()
+        val operator = when {
+            person != null -> ElevatorOperator.Attendant(person.id)
+            sign >= 0 -> ElevatorOperator.Panel(sign)
+            // Run by the map on entering: to the other floor of two (the Celadon Condominiums' right lift), else the
+            // game asks which floor (its left lift, three floors: scr_seq_T07R0206_000's menu).
+            stops.size == 2 -> ElevatorOperator.Shuttle
+            else -> ElevatorOperator.EntryMenu
+        }
+        return Elevator(zoneId, exits, stops, operator)
+    }
 
     /** The raw events of zone [zoneId] (member `eventsBank` of its header). */
     fun events(zoneId: Int): Gen4ZoneEvents? {
@@ -210,7 +262,16 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
         val triggerWarps = mutableListOf<TriggerWarp>()
         for (zone in zoneIds) {
             val ev = events(zone) ?: continue
-            ev.warps.forEachIndexed { i, w -> warps += Warp(zone, i, w.x, w.z, w.header, w.anchor, behaviorAt(w.x, w.z)?.let(::warpTrigger) ?: WarpTrigger.Enter) }
+            val moved = movedPeople(zone)
+            ev.warps.forEachIndexed { i, w ->
+                // On a tile with several warps the game takes the first one (Field_GetWarpEventAtXYPos, pokeplatinum
+                // map_header_data.c: the first warp event at those coordinates): the others are only arrivals of
+                // scripts (the Ruins of Alph's warp:11..14 on the tiles of warp:8 / warp:9), nothing takes them.
+                val shadowed = ev.warps.take(i).any { it.x == w.x && it.z == w.z }
+                val behavior = behaviorAt(w.x, w.z)
+                val trigger = if (shadowed) WarpTrigger.Never else behavior?.let(::warpTrigger) ?: WarpTrigger.Enter
+                warps += Warp(zone, i, w.x, w.z, w.header, w.anchor, trigger, behavior?.let(::arrivalStep))
+            }
             ev.bgs.forEachIndexed { i, bg -> signs += sign(zone, i, bg) }
             ev.objects.forEach { o ->
                 people += PersonTemplate(
@@ -224,6 +285,12 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
                     script = o.script,
                     hiddenByFlag = o.eventFlag,
                     obstacle = obstacle(o.sprite),
+                    // A trainer on a common trainer script: its flag tells whether it was beaten (Gen4Trainers).
+                    trainerFlag = Gen4Trainers.trainerOfScript(o.script)?.let(Gen4Trainers::flagOf),
+                    // A wander range: the person walks around that far from where the map places it.
+                    wanders = o.xRange > 0 || o.zRange > 0,
+                    looks = Gen4MovementTypes.looks(o.movement),
+                    scriptMoved = o.id in moved,
                 )
             }
             ev.coords.forEachIndexed { i, c -> triggers += trigger(zone, i, c) }
@@ -246,6 +313,9 @@ abstract class Gen4WorldSource<H : Gen4MapHeader>(protected val rom: NdsRom) : W
         } else Sign(zone, index, bg.x, bg.z, bg.script)
 
     companion object {
+        /** The zone of a warp leading to the dynamic destination a script set (a lift's way out): `0xFFF`. */
+        const val DYNAMIC_ZONE = 4095
+
         /** Bit 15 of a terrain attribute: the tile cannot be entered (the same in every Gen 4 game). */
         const val COLLISION_BIT = 0x8000
 

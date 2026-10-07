@@ -42,7 +42,7 @@ internal class HgssSave(private val mem: HgssMemory) {
     fun variable(id: Int): Int? = gen4?.variable(id)
 
     /** Whether trainer [trainerId] was beaten (`TrainerFlagCheck`, src/fieldmap.c: flag `TRAINER_FLAG_BASE + id`). */
-    fun trainerDefeated(trainerId: Int): Boolean? = flag(TRAINER_FLAG_BASE + trainerId)
+    fun trainerDefeated(trainerId: Int): Boolean? = flag(dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.flagOf(trainerId))
 
     /**
      * The start menu entries unlocked so far: `FLAG_GOT_BAG + i` for BAG, TRAINER CARD, SAVE, OPTIONS
@@ -93,9 +93,6 @@ internal class HgssSave(private val mem: HgssMemory) {
     companion object {
         /** `FLAG_GOT_BAG` (include/constants/flags.h); the next three unlock TRAINER CARD, SAVE and OPTIONS. */
         const val FLAG_GOT_BAG = 0x11B
-
-        /** `TRAINER_FLAG_BASE` (include/constants/flags.h). */
-        const val TRAINER_FLAG_BASE = 0x550
 
         /** `SAVE_PCSTORAGE` (include/constants/save_arrays.h). */
         const val SAVE_PCSTORAGE = 41

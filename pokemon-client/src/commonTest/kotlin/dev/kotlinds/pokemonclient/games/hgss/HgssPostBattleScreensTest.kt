@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.data.MachineCompatibility
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.state.CancelBehavior
 import dev.kotlinds.pokemonclient.state.ContinueReason
@@ -86,10 +87,10 @@ class HgssPostBattleScreensTest {
         assertEquals(15, HgssMachines.moveOf(420)) // HM01 Cut
         assertTrue(HgssMachines.isHm(57)) // Surf
         assertFalse(HgssMachines.isHm(264))
-        assertEquals(TmCompatibility.ABLE, HgssMachines.compatibility(181, false, listOf(435), 328))
-        assertEquals(TmCompatibility.UNABLE, HgssMachines.compatibility(22, false, emptyList(), 328))
-        assertEquals(TmCompatibility.LEARNED, HgssMachines.compatibility(181, false, listOf(264), 328))
-        assertEquals(TmCompatibility.UNABLE, HgssMachines.compatibility(181, true, emptyList(), 328))
+        assertEquals(MachineCompatibility.Fit.ABLE, HgssMachines.compatibility(181, false, listOf(435), 328))
+        assertEquals(MachineCompatibility.Fit.UNABLE, HgssMachines.compatibility(22, false, emptyList(), 328))
+        assertEquals(MachineCompatibility.Fit.LEARNED, HgssMachines.compatibility(181, false, listOf(264), 328))
+        assertEquals(MachineCompatibility.Fit.UNABLE, HgssMachines.compatibility(181, true, emptyList(), 328))
         assertNull(HgssMachines.machineOf(17))
     }
 

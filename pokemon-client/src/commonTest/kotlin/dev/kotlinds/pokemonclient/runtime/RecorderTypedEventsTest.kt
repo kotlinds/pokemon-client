@@ -56,7 +56,7 @@ class RecorderTypedEventsTest {
             current = s
             recorder.onFrame(frame.toLong()) { memory }
         }
-        return recorder.log.since(0).filter { it is GameEvent.Caught || it is GameEvent.SentToBox || it is GameEvent.LearnedMove || it is GameEvent.PokemonObtained || it is GameEvent.BattleDecided }
+        return recorder.log.since(0).filter { it is GameEvent.Caught || it is GameEvent.SentToBox || it is GameEvent.LearnedMove || it is GameEvent.PokemonObtained || it is GameEvent.BattleDecided || it is GameEvent.FoeFainted }
     }
 
     @Test
@@ -95,6 +95,17 @@ class RecorderTypedEventsTest {
             state(both.take(1), storage(boxed(hoothoot, "HOOTHOOT"), boxed(spinarak, "SPINARAK"))),
             state(both.take(1) + mon(hoothoot, "HOOTHOOT", slot = 1), storage(boxed(spinarak, "SPINARAK"))),
         )
+        assertEquals(emptyList(), events)
+    }
+
+    @Test
+    fun aSoftResetToAnotherMovesetIsNoLearnedMove() {
+        // NOTES (map randomizer run): after a soft reset, "learned Tackle, forgot Quick Attack": the save loaded has
+        // the moves of before, the recorder still knew the later ones. The title screen primes it again.
+        val later = mon(ampharos, "AMPHAROS", listOf(move(84, "ThunderShock"), move(98, "Quick Attack")))
+        val saved = later.copy(moves = listOf(move(84, "ThunderShock"), move(33, "Tackle")))
+        val title = GameState(0, Screen.Intro(dev.kotlinds.pokemonclient.state.IntroStage.TITLE_SCREEN, Awaiting.INPUT), null, emptyList(), null, null, null)
+        val events = record(state(listOf(later), storage()), title, title, *Array(SEED_POLLS + 2) { state(listOf(saved), storage()) })
         assertEquals(emptyList(), events)
     }
 
@@ -138,5 +149,35 @@ class RecorderTypedEventsTest {
         assertEquals(listOf(GameEvent.BattleDecided::class), events.map { it::class })
         val decided = events.single() as GameEvent.BattleDecided
         assertEquals(dev.kotlinds.pokemonclient.state.BattleOutcome.LOST to BattleKind.TRAINER, decided.outcome to decided.kind)
+    }
+
+    /** A trainer battle with the foe [personality] (party slot [slot]) at [hp]. */
+    private fun foe(personality: Long, slot: Int, hp: Int) = wild.copy(
+        kind = BattleKind.TRAINER,
+        battlers = listOf(
+            dev.kotlinds.pokemonclient.state.BattlerState(
+                dev.kotlinds.pokemonclient.state.BattlerRef.FOE_LEFT, null, Named(SpeciesId(149), "DRAGONITE"), null, 50, hp, 100, null,
+                emptySet(), emptyMap(), emptyList(), emptyList(), personality = personality, partySlot = slot,
+            ),
+        ),
+    )
+
+    @Test
+    fun aFoeKnockedOutIsRecordedNotOneComingIn() {
+        // Review impl13 B8: what tells the trainer's next Pokémon after a knock-out from a switch of its own.
+        val party = listOf(mon(ampharos, "AMPHAROS"))
+        val knockedOut = record(
+            state(party, null, foe(1, 0, 40)),
+            state(party, null, foe(1, 0, 0)),
+            state(party, null, foe(2, 1, 100)),
+        )
+        assertEquals(listOf(dev.kotlinds.pokemonclient.state.BattlerRef.FOE_LEFT), knockedOut.filterIsInstance<GameEvent.FoeFainted>().map { it.position })
+        // A switch: the next one comes in (even read at 0 HP for a frame while its data is copied in): nothing.
+        val switched = record(
+            state(party, null, foe(1, 0, 40)),
+            state(party, null, foe(2, 1, 0)),
+            state(party, null, foe(2, 1, 100)),
+        )
+        assertEquals(emptyList(), switched.filterIsInstance<GameEvent.FoeFainted>())
     }
 }

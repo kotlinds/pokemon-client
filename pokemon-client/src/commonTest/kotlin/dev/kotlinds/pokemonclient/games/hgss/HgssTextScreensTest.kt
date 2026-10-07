@@ -48,6 +48,16 @@ class HgssTextScreensTest {
     }
 
     @Test
+    fun aRepelWearingOffIsTheGamesOwnNoticeAndANursesMessageIsNot() {
+        // Mt. Silver summit (16-badge save), a Super Repel's last step: `std_repel_wore_off`, told by its script.
+        val repel = assertIs<Screen.Dialogue>(screen("field_repel_wore_off"))
+        assertEquals(dev.kotlinds.pokemonclient.state.FieldNotice.REPEL_WORE_OFF, repel.notice)
+        assertEquals(Awaiting.INPUT, repel.awaiting)
+        // Any other message (a person's) is no notice: a walk stops on it.
+        assertNull(assertIs<Screen.Dialogue>(screen("text_nurse_printing")).notice)
+    }
+
+    @Test
     fun anItemBallsMessageHasNoSpeaker() {
         // Route 6 of the map-randomized save, after picking up an item ball: its script hid the ball (the MapObject
         // cleared) before the message, which read as said by a "person" (NOTES: "person: CLAUDE found a PP Up!").

@@ -70,4 +70,51 @@ class AgentViewTest {
         assertTrue(walkthrough.actionSettings.hideDestinations)
         assertFalse(AgentOptions(knowledge = KnowledgeLevel.POKEDEX).actionSettings.revealHidden)
     }
+
+    /** A trainer battle with the foe [personality] on the field ([hp] left), the battle style [style]. */
+    private fun trainerBattle(personality: Long, style: dev.kotlinds.pokemonclient.state.BattleStyle, hp: Int = 100): GameState {
+        val foe = dev.kotlinds.pokemonclient.state.BattlerState(
+            dev.kotlinds.pokemonclient.state.BattlerRef.FOE_LEFT, null, dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.SpeciesId(149), "DRAGONITE"),
+            null, 50, hp, 100, null, emptySet(), emptyMap(), listOf("Dragon"), emptyList(), personality = personality, partySlot = personality.toInt(),
+        )
+        val battle = dev.kotlinds.pokemonclient.state.BattleState(dev.kotlinds.pokemonclient.state.BattleKind.TRAINER, false, null, listOf(foe), listOf("Lance"), emptyList(), null)
+        return GameState(0, Screen.Battle(Awaiting.ANIMATION), null, emptyList(), null, battle, null,
+            options = dev.kotlinds.pokemonclient.state.GameOptions(dev.kotlinds.pokemonclient.state.TextSpeed.FAST, false, style))
+    }
+
+    @Test
+    fun theSetBattleStyleIsRecalledWhenTheFoeSendsItsNextPokemon() {
+        // Race: both agents set SET to skip the switch question and never went back for Lance.
+        val set = dev.kotlinds.pokemonclient.state.BattleStyle.SET
+        val view = AgentView(FakeGame(overworld))
+        assertNull(view.describe(trainerBattle(1, set), emptyList(), AgentOptions(knowledge = KnowledgeLevel.NONE), AgentView.Detail.COMPACT)["battle_style"])
+        // Knocked out between the two views (the recorder saw its HP reach 0), then the next one sent in.
+        val fainted = listOf(dev.kotlinds.pokemonclient.state.GameEvent.FoeFainted(1, 10, dev.kotlinds.pokemonclient.state.BattlerRef.FOE_LEFT))
+        val next = view.describe(trainerBattle(2, set), fainted, AgentOptions(knowledge = KnowledgeLevel.NONE), AgentView.Detail.COMPACT)
+        assertEquals(AgentView.SET_STYLE_HINT, next["battle_style"]!!.jsonPrimitive.content)
+        assertNull(view.describe(trainerBattle(2, set), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)["battle_style"], "once, when it comes in")
+        // Seen fainted by a view, then replaced.
+        view.describe(trainerBattle(2, set, hp = 0), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)
+        assertEquals(AgentView.SET_STYLE_HINT, view.describe(trainerBattle(3, set), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)["battle_style"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun aFoeSwitchingByItselfIsNoReasonForTheSetReminder() {
+        // Review impl13 B8: the trainer's AI switching its Pokémon (no knock-out) asks nothing in either style.
+        val set = dev.kotlinds.pokemonclient.state.BattleStyle.SET
+        val view = AgentView(FakeGame(overworld))
+        view.describe(trainerBattle(1, set), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)
+        assertNull(view.describe(trainerBattle(2, set), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)["battle_style"])
+        // A faint at another position doesn't count for this one.
+        val elsewhere = listOf(dev.kotlinds.pokemonclient.state.GameEvent.FoeFainted(1, 10, dev.kotlinds.pokemonclient.state.BattlerRef.FOE_RIGHT))
+        assertNull(view.describe(trainerBattle(3, set), elsewhere, AgentOptions(), AgentView.Detail.COMPACT)["battle_style"])
+    }
+
+    @Test
+    fun theShiftBattleStyleNeedsNoReminder() {
+        val shift = dev.kotlinds.pokemonclient.state.BattleStyle.SHIFT
+        val view = AgentView(FakeGame(overworld))
+        view.describe(trainerBattle(1, shift, hp = 0), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)
+        assertNull(view.describe(trainerBattle(2, shift), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)["battle_style"])
+    }
 }

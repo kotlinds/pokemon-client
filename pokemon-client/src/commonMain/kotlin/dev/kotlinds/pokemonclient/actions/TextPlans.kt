@@ -14,7 +14,7 @@ internal object TextPlans {
     val enterText = ActionPlan<GameAction.EnterText> { action, context ->
         val start = context.navigator.settle()
         val keyboard = start.screen as? Screen.Keyboard
-            ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the naming keyboard", start.screen.toString()))
+            ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the naming keyboard", start.screen))
         if (action.text.length > keyboard.maxLength) {
             return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("text", action.text, listOf("at most ${keyboard.maxLength} characters")))
         }
@@ -31,7 +31,7 @@ internal object TextPlans {
     private fun erase(context: PlanContext): Step<GameState> {
         repeat(MAX_KEYS) {
             val state = context.navigator.settle()
-            val keyboard = state.screen as? Screen.Keyboard ?: return Step.Failed(ActionError.UnexpectedScreen("the naming keyboard", state.screen.toString()))
+            val keyboard = state.screen as? Screen.Keyboard ?: return Step.Failed(ActionError.UnexpectedScreen("the naming keyboard", state.screen))
             if (keyboard.buffer.isEmpty()) return Step.Done(state)
             context.scope.tap(Button.B)
             context.navigator.awaitChange(keyboard, maxFrames = KEY_FRAMES)
@@ -44,7 +44,7 @@ internal object TextPlans {
         val key = "key:$char"
         repeat(PAGES) {
             val state = context.navigator.settle()
-            val keyboard = state.screen as? Screen.Keyboard ?: return Step.Failed(ActionError.UnexpectedScreen("the naming keyboard", state.screen.toString()))
+            val keyboard = state.screen as? Screen.Keyboard ?: return Step.Failed(ActionError.UnexpectedScreen("the naming keyboard", state.screen))
             if (keyboard.entries.any { it.id == key && it.selectable }) {
                 return context.navigator.choose(Screen.Keyboard::class, "'$char'") { it.id == key }.andThen {
                     val after = context.navigator.settle().screen as? Screen.Keyboard

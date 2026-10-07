@@ -24,7 +24,7 @@ internal object BattleItemPlans {
         }
         val start = context.navigator.settle()
         val command = start.screen as? Screen.BattleCommand
-            ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the battle command menu", start.screen.toString()))
+            ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the battle command menu", start.screen))
         if (command.entries.none { it.id == BAG }) {
             return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "This battle has no bag"))
         }
@@ -32,7 +32,7 @@ internal object BattleItemPlans {
             ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_ITEM, "There's no ${action.item.raw} in the bag"))
         var target = action.target
         val reached = context.navigator.choose(Screen.BattleCommand::class, "BAG") { it.id == BAG }.andThen {
-            context.navigator.settle().screen as? Screen.Bag ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the battle bag", context.state().screen.toString()))
+            context.navigator.settle().screen as? Screen.Bag ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the battle bag", context.state().screen))
             val bag = context.state().screen as Screen.Bag
             val pocket = bag.pocketContents.entries.firstOrNull { (_, items) -> itemId in items }?.key
                 ?: return@andThen Step.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_ITEM, "${action.item.raw} can't be used in battle (it's in no battle pocket)"))

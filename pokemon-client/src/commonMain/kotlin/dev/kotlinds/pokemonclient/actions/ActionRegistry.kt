@@ -71,7 +71,18 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
         // A misspelled parameter would otherwise be ignored silently (e.g. `count` for `tiles`): refuse it, saying
         // which parameter to use (NOTES: `option` given twice to open_menu / choose, which take `entry`).
         json.keys.firstOrNull { it != "type" && def.spec.parameters.none { p -> p.name == it } }?.let { unknown ->
-            return Result.failure(ActionException(unknownParameter(def.spec, unknown, json.keys)))
+            return Result.failure(ActionException(unknownParameter(def.spec.name, def.spec.parameters, unknown, json.keys)))
+        }
+        // The same check inside the objects of an array parameter (`pc` operations, `use_item` / `buy` items): NOTES
+        // "Invalid op `missing`" never said the key is `op`.
+        for (p in def.spec.parameters.filter { it.fields.isNotEmpty() }) {
+            val elements = json[p.name] as? kotlinx.serialization.json.JsonArray ?: continue
+            elements.forEachIndexed { index, element ->
+                val obj = element as? JsonObject ?: return@forEachIndexed
+                obj.keys.firstOrNull { key -> p.fields.none { it.name == key } }?.let { unknown ->
+                    return Result.failure(ActionException(unknownParameter(def.spec.name, p.fields, unknown, obj.keys, within = "${p.name}[$index]")))
+                }
+            }
         }
         return runCatching { def.spec.parse(json) }.recoverCatching { error ->
             throw (error as? ActionException) ?: ActionException(ActionError.InvalidParameter(type, json.toString()))
@@ -82,10 +93,10 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
      * The error for parameter [unknown] of [spec]: the parameters not [given] are suggested, the required ones alone
      * when some are missing (`option` for open_menu → `entry`), else every optional one left.
      */
-    private fun unknownParameter(spec: ActionSpec<*>, unknown: String, given: Set<String>): ActionError.UnknownParameter {
-        val left = spec.parameters.filter { it.name !in given }
+    private fun unknownParameter(action: String, parameters: List<Parameter>, unknown: String, given: Set<String>, within: String? = null): ActionError.UnknownParameter {
+        val left = parameters.filter { it.name !in given }
         val suggested = left.filter { it.required }.ifEmpty { left }
-        return ActionError.UnknownParameter(spec.name, unknown, suggested.map { it.name to it.description }, spec.parameters.map { it.name })
+        return ActionError.UnknownParameter(action, unknown, suggested.map { it.name to it.description }, parameters.map { it.name }, within)
     }
 
     /**
@@ -181,19 +192,26 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
                     put("description", def.spec.description)
                     putJsonObject("properties") {
                         putJsonObject("type") { put("const", def.spec.name) }
-                        def.spec.parameters.forEach { p ->
-                            putJsonObject(p.name) {
-                                put("type", p.type.name.lowercase())
-                                if (p.type == ParameterType.ARRAY) putJsonObject("items") { put("type", "object") }
-                                put("description", p.description)
-                                if (p.values.isNotEmpty()) put("enum", JsonArray(p.values.map(::JsonPrimitive)))
-                            }
-                        }
+                        def.spec.parameters.forEach { p -> putJsonObject(p.name) { parameterSchema(p) } }
                     }
                     put("required", JsonArray((listOf("type") + def.spec.parameters.filter { it.required }.map { it.name }).map(::JsonPrimitive)))
                 })
             }
         }
+    }
+
+    /** The JSON schema of parameter [p]; an array of objects with [Parameter.fields] describes each object's keys. */
+    private fun kotlinx.serialization.json.JsonObjectBuilder.parameterSchema(p: Parameter) {
+        put("type", p.type.name.lowercase())
+        if (p.type == ParameterType.ARRAY) putJsonObject("items") {
+            put("type", "object")
+            if (p.fields.isNotEmpty()) {
+                putJsonObject("properties") { p.fields.forEach { f -> putJsonObject(f.name) { parameterSchema(f) } } }
+                put("required", JsonArray(p.fields.filter { it.required }.map { JsonPrimitive(it.name) }))
+            }
+        }
+        put("description", p.description)
+        if (p.values.isNotEmpty()) put("enum", JsonArray(p.values.map(::JsonPrimitive)))
     }
 
     companion object {

@@ -35,7 +35,7 @@ interface GameData {
     /** Battle data of move [id]: type, category, power, accuracy, PP, priority. */
     fun move(id: MoveId): MoveInfo?
 
-    /** Data of item [id]: name, bag pocket, price. */
+    /** Data of item [id]: name, bag pocket, price, what using it on a Pokémon does. */
     fun item(id: ItemId): ItemInfo?
 
     /** Display name of ability [id], null when the game has none. */
@@ -331,7 +331,70 @@ data class ItemInfo(
     val pocket: ItemPocket?,
     /** Buying price in Poké Dollars, 0 when it can't be bought / sold. */
     val price: Int,
+    /**
+     * What using it on a Pokémon does (HP, statuses, PP, revival, battle stat boosts, vitamins...), as its bag
+     * description tells a player; null when it does nothing of the kind (a ball, a key item, a held item) or when the
+     * game's reader doesn't read it.
+     */
+    val effect: ItemEffect? = null,
+    /**
+     * Whether the bag offers USE for it out of battle: the item has a field-use function (`fieldUseFunc` ≠ 0 in the
+     * item data). A key that works by itself when the player interacts with what it opens (Basement Key, Card Key)
+     * has none: the bag only offers its other entries.
+     */
+    val usableFromBag: Boolean = true,
 )
+
+/**
+ * What using an item on a Pokémon does, from the game's item data (Gen 4 `ItemPartyParam`, include/item.h): only the
+ * effects it has are set.
+ */
+data class ItemEffect(
+    /** HP restored (a revival restores this much too). */
+    val hp: HpRestore? = null,
+    /** Statuses it cures (Full Heal: all of them). */
+    val cures: Set<StatusCure> = emptySet(),
+    /** Revives a fainted Pokémon ([revivesParty]: every fainted Pokémon of the party at once, Sacred Ash). */
+    val revives: Boolean = false,
+    val revivesParty: Boolean = false,
+    /** PP restored. */
+    val pp: PpRestore? = null,
+    /** Raises a move's max PP: by one step (PP Up) or to the top ([PpUp.MAX], PP Max). */
+    val ppUp: PpUp? = null,
+    /** Battle stat stages raised for the battle (X Attack: attack +1...). */
+    val statStages: Map<BattleStatBoost, Int> = emptyMap(),
+    /** Guard Spec.: the party's stats can't be lowered for 5 turns. */
+    val guardSpec: Boolean = false,
+    /** Rare Candy: one level up. */
+    val levelUp: Boolean = false,
+    /** Evolves the Pokémon that can evolve with it (evolution stones). */
+    val evolves: Boolean = false,
+    /** Effort values changed by stat (vitamins: +10; some berries lower one). */
+    val effortValues: Map<EffortStat, Int> = emptyMap(),
+)
+
+/** HP an item restores. */
+sealed interface HpRestore {
+    data class Points(val hp: Int) : HpRestore
+    data object Full : HpRestore
+    data object Half : HpRestore
+    data object Quarter : HpRestore
+}
+
+/** The statuses an item can cure. */
+enum class StatusCure { SLEEP, POISON, BURN, FREEZE, PARALYSIS, CONFUSION, INFATUATION }
+
+/** PP an item restores: [amount] (null: all of them) to one move, or to every move ([allMoves]: Elixir, Max Elixir). */
+data class PpRestore(val amount: Int?, val allMoves: Boolean)
+
+/** How an item raises a move's maximum PP. */
+enum class PpUp { ONE_STEP, MAX }
+
+/** What an X item boosts: the battle stats and the critical hit ratio (Dire Hit). */
+enum class BattleStatBoost { ATTACK, DEFENSE, SP_ATTACK, SP_DEFENSE, SPEED, ACCURACY, CRITICAL_HIT }
+
+/** The stats effort values go to. */
+enum class EffortStat { HP, ATTACK, DEFENSE, SPEED, SP_ATTACK, SP_DEFENSE }
 
 /** The multiplier of one attacking type against one defending type. */
 enum class Effectiveness(val multiplier: Double) {

@@ -42,6 +42,44 @@ class ChainStepsTest {
         assertNull(result.stop)
     }
 
+    private fun onMap(id: Int, name: String) = GameState(0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null,
+        dev.kotlinds.pokemonclient.state.FieldState(id, dev.kotlinds.pokemonclient.state.MapName(id, map = name), 5, 5, 0, null,
+            dev.kotlinds.pokemonclient.state.MovementMode.WALK, moving = false))
+
+    @Test
+    fun aStepNamingAPersonOfTheMapTheChainLeftIsGivenBack() = runTest {
+        // NOTES (Claude, Rocket Hideout): `go_to person:6` after a step that changed floors → "Invalid target person:6"
+        // (or, worse, another person:6 of the new floor).
+        var current = onMap(1, "B2F")
+        val executed = mutableListOf<GameAction>()
+        val result = ChainRunner(
+            observe = { current },
+            execute = { action, _ -> executed += action; current = onMap(2, "B3F"); ActionOutcome.Done() },
+        ).run(listOf(GameAction.GoTo(null, null, "warp:1"), GameAction.GoTo(null, null, "person:6"), GameAction.Interact("person:6")))
+        assertEquals(listOf("go_to(warp:1)"), result.performed)
+        val stop = assertIs<ChainStop.TargetOnOtherMap>(result.stop)
+        assertEquals("TARGET_ON_OTHER_MAP", stop.code)
+        assertEquals("person:6", stop.target)
+        assertEquals(listOf("go_to(person:6)", "interact(person:6)"), result.skipped.map { it.key })
+        assertEquals(1, executed.size)
+    }
+
+    @Test
+    fun aChainStayingOnItsMapOrNamingMapsGoesOn() = runTest {
+        // Same map all along: person ids are still that map's.
+        var current = onMap(1, "B2F")
+        val same = ChainRunner(observe = { current }, execute = { _, _ -> ActionOutcome.Done() })
+            .run(listOf(GameAction.GoTo(3, 4, null), GameAction.Interact("person:6")))
+        assertEquals(listOf("go_to(3,4)", "interact(person:6)"), same.performed)
+        assertNull(same.stop)
+        // Another map, but the steps name maps, coordinates or a map's own target: nothing pinned.
+        val moved = ChainRunner(observe = { current }, execute = { _, _ -> current = onMap(2, "B3F"); ActionOutcome.Done() })
+            .run(listOf(GameAction.GoTo(null, null, "warp:1"), GameAction.GoTo(null, null, "Goldenrod City"), GameAction.GoTo(7, 7, null),
+                GameAction.GoTo(null, null, "person:2", map = "B3F")))
+        assertEquals(4, moved.performed.size)
+        assertNull(moved.stop)
+    }
+
     @Test
     fun aKeyNotOfferedWhereTheChainGotStopsItWithTheStepsLeft() = runTest {
         var current = overworld

@@ -1,6 +1,8 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.state.ContinueReason
+import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.kind
 
 /**
  * Why an action didn't happen or stopped: always explicit, never a silent no-op. Agents get the [code] and the
@@ -31,9 +33,16 @@ sealed interface ActionError {
      * required ones first (one of them is almost always what was meant), each with what it is; [valid]: every
      * parameter of the action. One name per parameter: no alias is accepted, the message says the right one.
      */
-    data class UnknownParameter(val action: String, val name: String, val suggested: List<Pair<String, String>>, val valid: List<String>) : ActionError {
+    data class UnknownParameter(
+        val action: String,
+        val name: String,
+        val suggested: List<Pair<String, String>>,
+        val valid: List<String>,
+        /** Where the key was, when not at the action's top level: an element of an array parameter (`operations[0]`). */
+        val within: String? = null,
+    ) : ActionError {
         override val code = "INVALID_PARAM"
-        override val message get() = "Unknown parameter `$name` for $action: " + when {
+        override val message get() = (if (within == null) "Unknown parameter `$name` for $action: " else "Unknown key `$name` in $within of $action: ") + when {
             suggested.size == 1 -> suggested.single().let { (n, d) -> "use `$n` (${d.trimEnd('.')})" }
             suggested.isNotEmpty() -> "use one of " + suggested.joinToString { (n, d) -> "`$n` (${d.trimEnd('.')})" }
             valid.isEmpty() -> "$action takes no parameter"
@@ -41,10 +50,14 @@ sealed interface ActionError {
         }
     }
 
-    /** The game shows something else than the screen the action works on. */
-    data class UnexpectedScreen(val expected: String, val actual: String) : ActionError {
+    /**
+     * The game shows something else ([actual]) than the screen the action works on ([expected]). The message names the
+     * screen by its [kind] ("battle_command", "move_select:battle"), never by the decoded object (whose text holds
+     * Kotlin internals: lambdas of its topology...).
+     */
+    data class UnexpectedScreen(val expected: String, val actual: Screen) : ActionError {
         override val code = "UNEXPECTED_SCREEN"
-        override val message get() = "Expected $expected, but the screen is $actual"
+        override val message get() = "Expected $expected, but the screen is ${actual.kind}"
     }
 
     /** The entry to choose isn't on the screen. */
@@ -56,7 +69,7 @@ sealed interface ActionError {
     /** The entry is shown but the game refuses it (fainted Pokémon, no PP...). */
     data class NotSelectable(val target: String, val label: String) : ActionError {
         override val code = "NOT_SELECTABLE"
-        override val message get() = "$label can't be chosen for $target"
+        override val message get() = if (target == label) "$label can't be chosen now" else "$label can't be chosen for $target"
     }
 
     /** The move to forget is an HM: the game never lets an HM be forgotten (only a Move Deleter can). */
@@ -174,6 +187,24 @@ enum class UnavailableReason {
     TARGET_IS_EGG,
     ALREADY_ACTIVE,
     NO_PP,
+
+    /** Disable holds this move: it can't be chosen for a few turns. */
+    DISABLED,
+
+    /** Taunt: status moves can't be chosen for a few turns. */
+    TAUNTED,
+
+    /** The Pokémon can't learn this TM / HM (UNABLE on the game's party screen). */
+    CANNOT_LEARN,
+
+    /** The Pokémon already knows the move (LEARNED on the game's party screen). */
+    ALREADY_KNOWN,
+
+    /** Encore: only the encored move can be used for a few turns (FIGHT plays it). */
+    ENCORED,
+
+    /** The battle's move list refuses the move this turn (Torment, Imprison, a Choice item...: not selectable). */
+    MOVE_REFUSED,
     NO_STOCK,
     UNKNOWN_MOVE,
     UNKNOWN_ITEM,
@@ -188,6 +219,12 @@ enum class UnavailableReason {
     OTHER_REGION,
     NOT_FACING_WATER,
     NO_PATH,
+
+    /**
+     * The tile asked for (`go_to` x / y) can't be stood on: a wall, a counter, a ledge, or someone / something stands
+     * there. The error names what is on it or next to it and the target id that walks next to it (`go_to person:0`).
+     */
+    TARGET_IS_OBSTACLE,
     NOT_ENOUGH_MONEY,
 
     /** The game refused it: "It won't have any effect". */
@@ -201,6 +238,12 @@ enum class UnavailableReason {
 
     /** The game refuses to use it where the player stands (the Bicycle indoors or while surfing...). */
     CANNOT_USE_HERE,
+
+    /**
+     * The item has no USE in the bag ([dev.kotlinds.pokemonclient.data.ItemInfo.usableFromBag]): a key that works by
+     * itself when the player interacts with what it opens (the Basement Key's door): interact with it instead.
+     */
+    NOT_USABLE_FROM_BAG,
     /**
      * The way needs a movement-puzzle mechanism operated (a boulder or ice block pushed, a platform or lift ridden)
      * and the application left movement puzzles to the agent ([ActionSettings.solvePuzzles] off): do it yourself.
@@ -222,7 +265,12 @@ enum class UnavailableReason {
 }
 
 /** What interrupted an action. */
-enum class InterruptionCause { WILD_BATTLE, TRAINER_SIGHT, PHONE_CALL, SCRIPT, UNKNOWN_SCREEN, HUMAN }
+enum class InterruptionCause {
+    WILD_BATTLE, TRAINER_SIGHT, PHONE_CALL, SCRIPT, UNKNOWN_SCREEN, HUMAN,
+
+    /** The Repel wore off on the way and the walk stopped there ([RepelEnd.STOP], the default): the agent decides. */
+    REPEL_ENDED,
+}
 
 /**
  * Why a walk can't be planned on [field]'s map: the game gives no map data for it (no ROM loaded, a zone the world

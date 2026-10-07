@@ -8,6 +8,7 @@ import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.FieldNotice
 import dev.kotlinds.pokemonclient.state.FieldObjectKind
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.ObstacleKind
@@ -33,6 +34,7 @@ import dev.kotlinds.pokemonclient.world.Pathfinder
 import dev.kotlinds.pokemonclient.world.MechanismPlanner
 import dev.kotlinds.pokemonclient.world.SwitchEdge
 import dev.kotlinds.pokemonclient.world.RouteFailure
+import dev.kotlinds.pokemonclient.world.choice
 import dev.kotlinds.pokemonclient.world.RouteOptions
 import dev.kotlinds.pokemonclient.world.StepWeights
 import dev.kotlinds.pokemonclient.world.EncounterConditions
@@ -194,19 +196,54 @@ internal object MovePlans {
         // Run, but walk onto the tiles where wild Pokémon appear (like go_to): the pace changes tile by tile, held on.
         val area = context.game.world?.areaOf(start.mapId)
         val runOnto = area?.let { runOnto(it, start, action.options, stepWeights(context, state, action.options)) } ?: RunOnto { _, _ -> action.options.run }
-        val walked = WalkSegments.walk(context, WalkSegments.line(d, tiles, runOnto, taken = 0))
+        var walked = WalkSegments.walk(context, WalkSegments.line(d, tiles, runOnto, taken = 0))
+        // A message the game shows by itself on the way (a Repel wearing off): closed, then what the agent chose
+        // ([MoveOptions.onRepelEnd]: stop there by default, or walk the rest of the line).
+        val notes = mutableListOf<String>()
+        var notices = 0
+        while (notices++ < MAX_NOTICES) {
+            val stopped = walked as? WalkSegments.Result.Stopped ?: break
+            when (val notice = FieldControl.closeNotice(context, stopped.state)) {
+                FieldControl.Notice.None -> break
+                is FieldControl.Notice.Failed -> return@ActionPlan ActionOutcome.Failed(notice.error)
+                is FieldControl.Notice.Stopped -> {
+                    notes += noticeNote(notice.notice, notice.state.field)
+                    walked = WalkSegments.Result.Stopped(notice.state, stopped.walked)
+                }
+                is FieldControl.Notice.Closed -> {
+                    val here = tiles.indexOfFirst { it.x == notice.field.x && it.y == notice.field.y }
+                    val left = tiles.drop(here + 1)
+                    val crosses = { area == null || crossesEncounters(area, stepWeights(context, context.state(), action.options), left) }
+                    when (val next = afterNotice(context, notice, action.options, crosses)) {
+                        is AfterNotice.Failed -> return@ActionPlan ActionOutcome.Failed(next.error)
+                        is AfterNotice.Stop -> return@ActionPlan ActionOutcome.Failed(ActionError.Interrupted(next.cause,
+                            "${here + 1} tile(s)" + (notes + next.note).joinToString("") { "; $it" }))
+                        is AfterNotice.WalkOn -> {
+                            notes += next.note
+                            walked = if (left.isEmpty()) WalkSegments.Result.Reached(notice.field)
+                            else WalkSegments.walk(context, WalkSegments.line(d, left, runOnto, taken = here + 1))
+                        }
+                    }
+                }
+            }
+        }
+        val told = notes.joinToString("") { "; $it" }
         // Into a door, onto stairs or a hole: the walk ends there (the rest of the tiles aren't walked on the new map).
-        FieldControl.awaitOutcome(context, mark)?.takeUnless { PuzzleSolving.isRide(it) }?.let { return@ActionPlan ActionOutcome.Done(through(context, it).describe(it.last.to)) }
-        when (walked) {
-            is WalkSegments.Result.Reached -> ActionOutcome.Done("walked ${action.tiles} tile(s) ${d.name.lowercase()}, now at ${walked.field.x},${walked.field.y}")
+        FieldControl.awaitOutcome(context, mark)?.takeUnless { PuzzleSolving.isRide(it) }?.let { return@ActionPlan ActionOutcome.Done(through(context, it).describe(it.last.to) + told) }
+        when (val walked = walked) {
+            is WalkSegments.Result.Reached -> ActionOutcome.Done("walked ${action.tiles} tile(s) ${d.name.lowercase()}, now at ${walked.field.x},${walked.field.y}$told")
             is WalkSegments.Result.Elsewhere -> ActionOutcome.Done("moved to ${walked.field.x},${walked.field.y} (not a straight walk: slid, pushed, or another map)")
             is WalkSegments.Result.Refused -> {
                 val done = kotlin.math.abs(walked.from.x - start.x) + kotlin.math.abs(walked.from.y - start.y)
                 // Walking into a boulder (Strength used) pushes it while the player stays: that's what the step did.
                 pushedAhead(context, start, walked.from.x + d.dx, walked.from.y + d.dy)?.let { return@ActionPlan ActionOutcome.Done(it) }
-                // A wild battle (or a script) starting as the player stopped looks like a refused step at first.
-                val now = context.navigator.settle()
-                if (now.screen !is Screen.Overworld || now.battle != null) return@ActionPlan ActionOutcome.Failed(ActionError.Interrupted(cause(now), "$done tile(s)"))
+                // A wild battle or a scene starting as the player stopped looks like a refused step at first, and a
+                // scene may take the control without leaving the field screen (Elm's aide walking up to the player in
+                // his lab, NOTES: "blocked after 4 tile(s)" while she talked): blocked only when the player keeps the
+                // control for a moment.
+                FieldControl.takenAfterRefusal(context)?.let { taken ->
+                    return@ActionPlan ActionOutcome.Failed(ActionError.Interrupted(cause(context, taken), "$done tile(s)$told"))
+                }
                 // Standing on a warp taken by entering it (just arrived on it): the press did nothing, say how to take it.
                 val underFeet = area?.warps
                     ?.firstOrNull { it.zone == start.mapId && it.x == walked.from.x && it.y == walked.from.y && it.trigger == WarpTrigger.Enter }
@@ -214,7 +251,7 @@ internal object MovePlans {
                     "blocked after $done tile(s) at ${walked.from.x},${walked.from.y}: can't go ${d.name.lowercase()} from there (${refusalCause(context, walked.from, d)})",
                     underFeet?.let { "you stand on warp:${it.id}, taken by stepping onto it (pressing on it does nothing): go_to warp:${it.id} steps off and back on" }))
             }
-            is WalkSegments.Result.Stopped -> ActionOutcome.Failed(ActionError.Interrupted(cause(context, walked.state), "${walked.walked} tile(s)"))
+            is WalkSegments.Result.Stopped -> ActionOutcome.Failed(ActionError.Interrupted(cause(context, walked.state), "${walked.walked} tile(s)$told"))
         }
     }
 
@@ -385,24 +422,26 @@ internal object MovePlans {
             // A door / stairs / exit tile: going there means going through.
             val warp = area?.warps?.firstOrNull { it.x == x && it.y == y }
             val hole = area?.triggerWarps?.any { it.x == x && it.y == y } == true
-            return Target("$x,$y", x, y, warp = warp != null || hole, trigger = warp?.trigger)
+            return Target("$x,$y", x, y, warp = warp != null || hole, trigger = warp?.trigger, isGoal = warp?.let { area?.let { a -> atWarpLevel(a, x, y) } })
         }
         if (field == null || area == null) return null
         if (target == PC) {
-            // Any PC tile will do: go to the closest reachable one (the nearest may be walled off from here). A PC only
-            // answers when faced from the south (src/field/field_control.c: `IsPC && facingDirection == DIR_NORTH`).
+            // Any PC tile will do: go to the closest reachable one (the nearest may be walled off from here), from the
+            // side the game answers from ([PokemonGame.pcFacing]; any side when the game doesn't say).
             val (px, py) = nearestPc(area, field) ?: return null
-            val goals = pcTiles(area, field).map { (x, y) -> x to y + 1 }.filter { (x, y) -> area.tile(x, y)?.kind != TileKind.Pc }.toSet()
+            val goals = pcTiles(area, field).flatMap { (x, y) -> pcSides(game).map { d -> x + d.dx to y + d.dy } }.filter { (x, y) -> area.tile(x, y)?.kind != TileKind.Pc }.toSet()
             return Target(PC, px, py, adjacent = true, isGoal = { node -> (node.x to node.y) in goals })
         }
         val (kind, id) = target.split(':', limit = 2).takeIf { it.size == 2 } ?: return null
         val number = id.toIntOrNull()
         return when (kind) {
-            "person" -> field.objects.firstOrNull { it.id == target }?.let { Target(target, it.x, it.y, adjacent = true, isGoal = talkFrom(area, it), talkHeight = knownHeight(area, it)) }
+            "person" -> field.objects.firstOrNull { it.id == target }?.let {
+                Target(target, it.x, it.y, adjacent = true, isGoal = clearingSides(game, state, settings, area, it, talkFrom(area, it)), talkHeight = knownHeight(area, it))
+            }
             // Item balls are objects of the map: `item:N` is the object `person:N` lying on the ground.
             "item" -> field.objects.firstOrNull { it.kind == FieldObjectKind.ITEM_BALL && it.id == "person:$id" }
                 ?.let { Target(target, it.x, it.y, adjacent = true, isGoal = talkFrom(area, it), talkHeight = knownHeight(area, it)) }
-            "warp" -> area.warps.firstOrNull { it.zone == field.mapId && it.id == number }?.let { Target(target, it.x, it.y, warp = true, trigger = it.trigger) }
+            "warp" -> area.warps.firstOrNull { it.zone == field.mapId && it.id == number }?.let { Target(target, it.x, it.y, warp = true, trigger = it.trigger, isGoal = atWarpLevel(area, it.x, it.y)) }
             "hole" -> area.triggerWarps.firstOrNull { it.zone == field.mapId && it.trigger == number }?.let { Target(target, it.x, it.y, warp = true) }
             // `sign:N` also reaches a hidden item (older ids); `hidden_item:N` only items not picked up yet. Hidden items
             // are walkthrough knowledge: unknown targets unless the application reveals them ([ActionSettings.revealHidden]).
@@ -423,6 +462,16 @@ internal object MovePlans {
     }
 
     /**
+     * The goal of a walk to the warp on ([x], [y]) when its tile has several surfaces ([WorldLinks.warpLevel]): that
+     * tile at the warp's own level only (not the bridge passing over the door), so go_to and the view's reachability
+     * agree that a door under a bridge isn't reached from the deck. Null (any level) otherwise.
+     */
+    internal fun atWarpLevel(area: Area, x: Int, y: Int): ((Node) -> Boolean)? {
+        val level = WorldLinks.warpLevel(area, x, y) ?: return null
+        return { node -> node.x == x && node.y == y && node.level == level }
+    }
+
+    /**
      * The tiles to talk to map object [o] from (or pick it up): those of [goalTiles] (next to it, or across a counter)
      * at its own height. The game answers A only when the player's height equals the object's (field_control.c
      * `sub_0203DC64` → `sub_0203DBD4` compares both map objects' position Y): surfing next to a fisherman standing on
@@ -437,6 +486,41 @@ internal object MovePlans {
         val height = knownHeight(area, o) ?: return null
         val tiles = goalTiles(area, Target(o.id, o.x, o.y, adjacent = true))
         return { node -> (node.x to node.y) in tiles && atHeight(area, node, height) }
+    }
+
+    /**
+     * [isGoal] (the tiles to talk to [o] from) narrowed, for a trainer who steps aside once beaten
+     * ([dev.kotlinds.pokemonclient.state.PuzzleState.stepAside], the Cinnabar Gym), to the sides the player can walk
+     * to from where they stand and from which that step keeps open every tile they can walk to now (the step itself
+     * aside): talked to from the wrong side, the trainer steps into the only corridor. [isGoal] unchanged when the
+     * trainer doesn't step aside (or did already), or when no side keeps the way open (the step can't be helped then).
+     */
+    private fun clearingSides(
+        game: PokemonGame,
+        state: GameState,
+        settings: ActionSettings,
+        area: Area,
+        o: dev.kotlinds.pokemonclient.state.FieldObject,
+        isGoal: ((Node) -> Boolean)?,
+    ): ((Node) -> Boolean)? {
+        val field = state.field ?: return isGoal
+        val stepper = field.puzzle?.stepAside?.firstOrNull { it.person == o.id && !it.beaten } ?: return isGoal
+        val overlay = overlay(area, field, emptySet(), field.activeTriggers, settings.solvePuzzles, onThisMap = true, state.eventFlags)
+        val options = routeOptions(field, MoveOptions(), FieldMoves.usable(FieldMoves.of(state, game::fieldMoveRule)), StepWeights.NONE)
+        val start = Pathfinder(area, overlay).nodeOf(field)
+        fun reach(o: Overlay) = Pathfinder(area, o).reachable(start, options, maxCost = Int.MAX_VALUE, allowJumps = true).keys.map { it.x to it.y }.toSet() + (start.x to start.y)
+        val now = reach(overlay)
+        val sides = Direction.entries.mapNotNull { facing ->
+            // The player stands on the side opposite [facing] and faces the trainer.
+            val side = o.x - facing.dx to o.y - facing.dy
+            if (side !in now) return@mapNotNull null
+            val step = stepper.stepFor(facing) ?: return@mapNotNull null
+            val to = o.x + step.dx to o.y + step.dy
+            val moved = overlay.copy(objects = overlay.objects.map { if (it.x == o.x && it.y == o.y) it.copy(x = to.first, y = to.second) else it })
+            side.takeIf { reach(moved).containsAll(now - to) }
+        }.toSet()
+        if (sides.isEmpty()) return isGoal
+        return { node -> (node.x to node.y) in sides && (isGoal?.invoke(node) ?: true) }
     }
 
     /**
@@ -470,6 +554,9 @@ internal object MovePlans {
     private fun nearestPc(area: Area, field: FieldState): Pair<Int, Int>? =
         pcTiles(area, field).minByOrNull { (x, y) -> kotlin.math.abs(x - field.x) + kotlin.math.abs(y - field.y) }
 
+    /** The directions from a PC to the tiles it is used from: opposite the way the player faces it ([PokemonGame.pcFacing]), or every side. */
+    private fun pcSides(game: PokemonGame): List<Direction> = game.pcFacing?.let { listOf(it.opposite) } ?: Direction.entries
+
     /** Every PC tile around the player. */
     private fun pcTiles(area: Area, field: FieldState): List<Pair<Int, Int>> =
         (-PC_SEARCH..PC_SEARCH).flatMap { dy -> (-PC_SEARCH..PC_SEARCH).map { dx -> field.x + dx to field.y + dy } }
@@ -494,6 +581,45 @@ internal object MovePlans {
         return ActionOutcome.Failed(ActionError.InvalidParameter("target", target ?: "none", known))
     }
 
+    /**
+     * The refusal of the tile ([x], [y]) of [field]'s map as a destination when nobody can stand on it, before any
+     * step: a wall or a blocked tile (not a door: going there goes through), a counter, a PC, lava, a ledge (jumped
+     * over), or a tile someone or something stands on. It names what is there and what stands next to it, with the
+     * target that walks next to it: an agent aiming at the wall behind a person (5,12 above Lambda's 5,13) read "not
+     * connected" and thought him out of reach for 33 minutes (race notes, Radio Tower 5F). Null for a tile that can be
+     * stood on (whether a way leads there is the walk's business), or when the map isn't known.
+     */
+    internal fun obstacleTarget(game: PokemonGame, field: FieldState, settings: ActionSettings, x: Int, y: Int): ActionError.Unavailable? {
+        val area = game.world?.areaOf(field.mapId) ?: return null
+        val tile = area.tile(x, y) ?: return null
+        // A warp's tile (a door has collision) or a hole: going there takes it.
+        if (area.warps.any { it.x == x && it.y == y } || area.triggerWarps.any { it.x == x && it.y == y }) return null
+        fun objectOn(tx: Int, ty: Int) = field.objects.firstOrNull { it.kind != FieldObjectKind.FOLLOWER && it.x == tx && it.y == ty }
+        fun signOn(tx: Int, ty: Int) = area.signs.firstOrNull { s -> s.zone == field.mapId && s.x == tx && s.y == ty && (s.kind == SignKind.SIGN || settings.revealHidden) }
+        fun examinableOn(tx: Int, ty: Int) = field.examinables.firstOrNull { e -> e.x == tx && e.y == ty && (e.cue || settings.revealHidden) }
+        /** What answers A on (tx, ty), as `id (label) at x,y`, with the id go_to and interact take. */
+        fun thing(tx: Int, ty: Int): Pair<String, String>? {
+            objectOn(tx, ty)?.let { o -> val id = objectTargetId(o); return id to "$id (${o.label}) at $tx,$ty" }
+            signOn(tx, ty)?.let { s -> val id = (if (s.kind == SignKind.SIGN) "sign:" else "hidden_item:") + s.id; return id to "$id at $tx,$ty" }
+            examinableOn(tx, ty)?.let { e -> return e.id to "${e.id} at $tx,$ty" }
+            return null
+        }
+        val on = thing(x, y)
+        val what = when {
+            on != null -> "taken: ${on.second} is there"
+            tile.kind is TileKind.Ledge -> "a ledge (jumped over, never stood on)"
+            tile.kind == TileKind.Counter -> "a counter (talk across it)"
+            tile.kind == TileKind.Pc -> "a PC (" + (game.pcFacing?.let { "use it from the tile ${it.opposite.name.lowercase()} of it: " } ?: "") + "interact pc)"
+            tile.kind == TileKind.Lava -> "lava"
+            tile.blocked || tile.kind == TileKind.Wall -> "a wall or an obstacle"
+            else -> return null
+        }
+        val near = listOfNotNull(on) + Direction.entries.mapNotNull { d -> thing(x + d.dx, y + d.dy) }.filter { it != on }
+        val hint = if (near.isEmpty()) "pick a tile you can stand on (see the map: '.' floor)"
+        else near.distinctBy { it.first }.joinToString("; ") { (id, said) -> "$said: go_to $id walks next to it (interact $id talks to it)" }
+        return ActionError.Unavailable(UnavailableReason.TARGET_IS_OBSTACLE, "$x,$y is $what: nobody can stand there", hint)
+    }
+
     /** The target id of a map object: `item:N` for an item ball, its own id (`person:N`) otherwise. */
     fun objectTargetId(o: dev.kotlinds.pokemonclient.state.FieldObject): String =
         if (o.kind == FieldObjectKind.ITEM_BALL) "item:" + o.id.substringAfter(':') else o.id
@@ -515,7 +641,14 @@ internal object MovePlans {
          * Stopped by the game; [at] is the tile the player was stepping onto, when known. [steps]: tiles really moved
          * before (counted from the positions the walk read, [TileCounter]), filled in by [walkTo] and by the trip.
          */
-        data class Interrupted(val state: GameState, val steps: Int = 0, val at: Pair<Int, Int>? = null, val notes: List<String> = emptyList()) : Walk
+        data class Interrupted(
+            val state: GameState,
+            val steps: Int = 0,
+            val at: Pair<Int, Int>? = null,
+            val notes: List<String> = emptyList(),
+            /** Why, when the walk itself decided to stop ([InterruptionCause.REPEL_ENDED]); null: read from [state]. */
+            val cause: InterruptionCause? = null,
+        ) : Walk
         data class NoRoute(
             val failure: RouteFailure,
             val detail: String,
@@ -544,13 +677,125 @@ internal object MovePlans {
     fun walkTo(context: PlanContext, target: Target, options: MoveOptions): Walk {
         val notes = mutableListOf<String>()
         val counter = TileCounter()
-        val walk = context.navigator.watching(counter::observe) { walkTo(context, target, options, notes) }
+        var walk = context.navigator.watching(counter::observe) { walkTo(context, target, options, notes) }
+        // A message the game shows by itself on the way (a Repel wearing off), never a scene: closed, then what the
+        // agent chose ([MoveOptions.onRepelEnd]: stop there by default, or walk on, with a new Repel or not). NOTES:
+        // "Interrupted by script" ×8 for "REPEL's effect wore off...".
+        var notices = 0
+        while (walk is Walk.Interrupted && walk.cause == null && notices++ < MAX_NOTICES) {
+            when (val notice = FieldControl.closeNotice(context, walk.state)) {
+                FieldControl.Notice.None -> break
+                is FieldControl.Notice.Failed -> walk = Walk.Failed(notice.error)
+                is FieldControl.Notice.Stopped -> {
+                    notes += noticeNote(notice.notice, notice.state.field)
+                    walk = Walk.Interrupted(notice.state)
+                }
+                is FieldControl.Notice.Closed -> when (val next = afterNotice(context, notice, options) { remainingCrossesEncounters(context, target, options) }) {
+                    is AfterNotice.WalkOn -> {
+                        notes += next.note
+                        walk = context.navigator.watching(counter::observe) { walkTo(context, target, options, notes) }
+                    }
+                    is AfterNotice.Stop -> {
+                        notes += next.note
+                        walk = Walk.Interrupted(context.state(), cause = next.cause)
+                    }
+                    is AfterNotice.Failed -> walk = Walk.Failed(next.error)
+                }
+            }
+        }
         return when (walk) {
             is Walk.Arrived -> if (notes.isEmpty()) walk else walk.copy(notes = notes)
             is Walk.Interrupted -> walk.copy(steps = counter.tiles, notes = notes)
             else -> walk
         }
     }
+
+    /** What a walk tells of a [FieldNotice] it closed on the way ([field]: where the player stood then). */
+    internal fun noticeNote(notice: FieldNotice, field: FieldState?): String = when (notice) {
+        FieldNotice.REPEL_WORE_OFF -> "the Repel wore off" + (field?.let { " at ${it.x},${it.y}" } ?: "") + " (message closed)"
+    }
+
+    /** What a walk does once it closed a [FieldNotice] ([afterNotice]). */
+    internal sealed interface AfterNotice {
+        /** Walk on; [note] says what was done (for the answer). */
+        data class WalkOn(val note: String) : AfterNotice
+
+        /** Stop there, interrupted by [cause]; [note] says where and what the agent can do. */
+        data class Stop(val note: String, val cause: InterruptionCause) : AfterNotice
+
+        /** Something done for it failed (the Repel's use): [error]. */
+        data class Failed(val error: ActionError) : AfterNotice
+    }
+
+    /**
+     * After [closed] (the message closed, the player back in control): what the agent chose ([MoveOptions.onRepelEnd]).
+     * [crossesEncounters]: whether the rest of the way still crosses tiles where wild Pokémon appear (only asked by
+     * [RepelEnd.AUTO], it routes).
+     */
+    internal fun afterNotice(context: PlanContext, closed: FieldControl.Notice.Closed, options: MoveOptions, crossesEncounters: () -> Boolean): AfterNotice {
+        val at = noticeNote(closed.notice, closed.field)
+        return when (closed.notice) {
+            FieldNotice.REPEL_WORE_OFF -> when (options.onRepelEnd) {
+                RepelEnd.STOP -> AfterNotice.Stop(at + REPEL_STOP_TAIL, InterruptionCause.REPEL_ENDED)
+                RepelEnd.CONTINUE -> AfterNotice.WalkOn("$at, walked on")
+                RepelEnd.REAPPLY -> reapplyRepel(context, at)
+                RepelEnd.AUTO -> when {
+                    repelInBag(context) == null -> AfterNotice.WalkOn("$at, walked on (on_repel_end auto: no Repel left in the bag)")
+                    !crossesEncounters() -> AfterNotice.WalkOn("$at, walked on (on_repel_end auto: no wild Pokémon on the rest of the way)")
+                    else -> reapplyRepel(context, at)
+                }
+            }
+        }
+    }
+
+    /** How an answer stopped by the end of a Repel goes on: what the agent can do, and the opt-in values. */
+    private const val REPEL_STOP_TAIL = ": stopped there (on_repel_end stop, the default). Use a Repel and do the same action again " +
+        "to go on, or let walks decide by themselves: on_repel_end continue (walk on), reapply (use one from the bag and walk on) or auto"
+
+    /** The first Repel the bag holds, longest-lasting first ([dev.kotlinds.pokemonclient.PokemonGame.repelItems]), or null. */
+    private fun repelInBag(context: PlanContext): dev.kotlinds.pokemonclient.state.BagItem? {
+        val stacks = context.state().bag.orEmpty().flatMap { it.items }.filter { it.quantity > 0 }
+        return context.game.repelItems.firstNotNullOfOrNull { id -> stacks.firstOrNull { it.item.id.value == id } }
+    }
+
+    /**
+     * Uses a Repel from the bag ([repelInBag]) through the bag's own recipe (every press checked), and checks it took
+     * when the game tells the Repel's steps. None left: stop like [RepelEnd.STOP], saying so.
+     */
+    private fun reapplyRepel(context: PlanContext, at: String): AfterNotice {
+        val repel = repelInBag(context) ?: return AfterNotice.Stop("$at; no Repel left in the bag$REPEL_STOP_TAIL", InterruptionCause.REPEL_ENDED)
+        val used = PartyBagPlans.useItem.run(GameAction.UseItem(ItemRef("item:${repel.item.id.value}")), context)
+        if (used is ActionOutcome.Failed) return AfterNotice.Failed(used.error)
+        if (context.navigator.settle().field?.repelSteps == 0) {
+            return AfterNotice.Failed(ActionError.Timeout("used ${repel.item.name}, but no Repel is at work: call get_state"))
+        }
+        return AfterNotice.WalkOn("$at, used a ${repel.item.name} and walked on")
+    }
+
+    /**
+     * Whether the way from here to [target] (on this map) crosses tiles where wild Pokémon appear now (no Repel at
+     * work): [RepelEnd.AUTO]'s question. Unknown (no map, no route found): true, a Repel used for nothing is the lesser harm.
+     */
+    private fun remainingCrossesEncounters(context: PlanContext, target: Target, options: MoveOptions): Boolean {
+        val state = context.navigator.settle()
+        val field = state.field ?: return true
+        val area = context.game.world?.areaOf(field.mapId) ?: return true
+        val weights = stepWeights(context, state, options)
+        val pathfinder = Pathfinder(area, overlay(context, field, emptySet()))
+        val goalTiles = goalTiles(area, target)
+        val isGoal: (Node) -> Boolean = target.isGoal ?: { node -> (node.x to node.y) in goalTiles }
+        val access = FieldMoveWalk.access(context, state)
+        val route = (pathfinder.route(pathfinder.nodeOf(field), routeOptions(field, options, FieldMoves.usable(access), weights),
+            if (target.adjacent) emptySet() else goalTiles, beside(area, target), isGoal) as? Pathfinder.Result.Found)?.route ?: return true
+        return crossesEncounters(area, weights, route.edges.map { it.to })
+    }
+
+    /** Whether one of [tiles] of [area] is a tile where wild Pokémon appear under [weights]. */
+    private fun crossesEncounters(area: Area, weights: StepWeights, tiles: List<Node>): Boolean =
+        tiles.any { node -> area.tile(node.x, node.y)?.let { weights.encounter(it, area.zoneAt(node.x, node.y)) > 0 } == true }
+
+    /** [FieldNotice]s a single walk closes at most before giving up the walk (one per Repel used: never more than a couple). */
+    private const val MAX_NOTICES = 3
 
     private fun walkTo(context: PlanContext, target: Target, options: MoveOptions, notes: MutableList<String>): Walk {
         val refused = mutableSetOf<Pair<Node, Direction>>()
@@ -575,6 +820,7 @@ internal object MovePlans {
         }
         // A warp nothing takes (only the other side's arrival): say so rather than walk there and wait.
         if (target.warp == true && target.trigger == WarpTrigger.Never) return Walk.Failed(neverTaken(target))
+        var offTheBike = false
         repeat(MAX_REPLANS) {
             val state = context.navigator.settle()
             // A warp the last move ended with (every move below waited for it already): stop there.
@@ -615,10 +861,17 @@ internal object MovePlans {
                         return Walk.NoRoute(
                             failure,
                             "no way to ${target.id} from ${field.x},${field.y}" + (if (solve) "" else " by walking only") +
-                                (if (refusals.isEmpty()) "" else " once the game refused ${refusals.size} step(s): " + refusals.joinToString("; ")) + needs,
+                                (if (refusals.isEmpty()) "" else " once the game refused ${refusals.size} step(s): " + refusals.joinToString("; ")) + needs +
+                                boulderNotes(field, result.blockers),
                             access, refusals.toList(),
                         )
                     }
+            }
+            // The bicycle doesn't steer on ice: off it before a way that slides (once), then planned again on foot.
+            if (field.movement == MovementMode.BIKE && !offTheBike && BikeRide.crossesIce(area, route)) {
+                offTheBike = true
+                notes += BikeRide.getOff(context)
+                return@repeat
             }
             avoidanceNotes(route, options).forEach { if (it !in notes) notes += it }
             // The steps the game counts before each move: where a Repel wearing off still covers the walk (runOnto).
@@ -909,35 +1162,47 @@ internal object MovePlans {
      * only walk ([PuzzleSolving.walkOnly]: no lift, no platform trigger, no ice block pushed).
      */
     internal fun overlay(context: PlanContext, field: FieldState, refused: Set<Pair<Node, Direction>>, solve: Boolean = context.settings.solvePuzzles): Overlay =
-        overlay(context.game.world?.areaOf(field.mapId), field, refused, activeTriggers(context, field), solve, onThisMap = context.settings.hideDestinations)
+        overlay(context.game.world?.areaOf(field.mapId), field, refused, activeTriggers(context, field), solve, onThisMap = context.settings.hideDestinations, context.state().eventFlags)
 
     /**
      * The overlay of [field]'s map ([area]) with the live state: people and obstacles, the [refused] steps, the
      * active scene [triggers], closed shutters, teleports and moving floors. [onThisMap]: routes stay on the player's
      * map ([Overlay.zone]): while destinations are hidden (a way across the next map would reveal it), and for the
-     * reachability of the agent's view (it only talks about this map). Unless [solve], routes only walk.
+     * reachability of the agent's view (it only talks about this map). Unless [solve], routes only walk. [flags]: the
+     * save's event flags, for the people of the other zones of the area ([neighbourObjects]).
      */
-    internal fun overlay(area: Area?, field: FieldState, refused: Set<Pair<Node, Direction>>, triggers: Set<Pair<Int, Int>>, solve: Boolean, onThisMap: Boolean): Overlay {
-        val live = liveOverlay(area, field, refused, triggers).let { if (onThisMap) it.copy(zone = field.mapId) else it }
+    internal fun overlay(
+        area: Area?,
+        field: FieldState,
+        refused: Set<Pair<Node, Direction>>,
+        triggers: Set<Pair<Int, Int>>,
+        solve: Boolean,
+        onThisMap: Boolean,
+        flags: dev.kotlinds.pokemonclient.state.EventFlags?,
+    ): Overlay {
+        val live = liveOverlay(area, field, refused, triggers, flags).let { if (onThisMap) it.copy(zone = field.mapId) else it }
         return if (solve) live else PuzzleSolving.walkOnly(live, field)
     }
 
-    private fun liveOverlay(area: Area?, field: FieldState, refused: Set<Pair<Node, Direction>>, triggers: Set<Pair<Int, Int>>): Overlay {
+    private fun liveOverlay(area: Area?, field: FieldState, refused: Set<Pair<Node, Direction>>, triggers: Set<Pair<Int, Int>>, flags: dev.kotlinds.pokemonclient.state.EventFlags?): Overlay {
         val templates = area?.people.orEmpty().filter { it.zone == field.mapId }
         return Overlay(
-            objects = neighbourObstacles(area, field) + field.objects.map { o ->
+            // An open door object has slid aside (into the wall): it stands in nobody's way.
+            objects = neighbourObjects(area, field, flags) + field.objects.filter { it.open != true }.map { o ->
                 LiveObject(
                     o.x, o.y, o.facing,
                     isFollower = o.kind == FieldObjectKind.FOLLOWER,
                     sightRange = sightRange(o, templates),
+                    // A trainer turning on its own watches every way it turns to, not only where it faces now.
+                    looks = templates.firstOrNull { "person:${it.id}" == o.id }?.looks.orEmpty(),
                     clearedBy = when (o.obstacle) {
                         ObstacleKind.CUT_TREE -> FieldMoveKind.CUT
                         ObstacleKind.SMASH_ROCK -> FieldMoveKind.ROCK_SMASH
                         ObstacleKind.BOULDER -> FieldMoveKind.STRENGTH
                         ObstacleKind.ICE_BLOCK, null -> null
                     },
-                    // An ice block facing north has frozen to another one: it no longer moves.
-                    iceBlock = o.obstacle == ObstacleKind.ICE_BLOCK && o.facing == Direction.SOUTH,
+                    // Whether an ice block still moves is the game's to tell (the map's puzzle, PuzzleState.iceBlocks).
+                    iceBlock = o.obstacle == ObstacleKind.ICE_BLOCK && field.puzzle?.iceBlocks?.firstOrNull { it.block == o.id }?.movable == true,
                     fallsInto = field.puzzle?.boulderHoles?.firstOrNull { it.boulder == o.id && !it.fallen }?.let { it.hole.x to it.hole.y },
                 )
             },
@@ -954,20 +1219,26 @@ internal object MovePlans {
     }
 
     /**
-     * The obstacles (Cut trees, Rock Smash rocks, Strength boulders) of the other zones of [field]'s area where the
-     * map's events place them ([dev.kotlinds.pokemonclient.world.WorldRouter.staticOverlay]): the game only loads the objects of the player's zone, so
-     * a tree just past the border (Route 2's, walking down from Pewter City) is unknown live until the player crosses
-     * it. Without them a route planned from the neighbour walks straight into the tree (NOTES: "auto-Cut bug across
-     * maps", Pewter → Viridian). Zones whose objects are still loaded (the one just left: `person:N@zone`) are known
-     * live, so left out, like any tile a live object already stands on.
+     * The objects of the other zones of [field]'s area where the map's events place them: the game only loads the
+     * objects of the player's zone, so what stands just past the border is unknown live until the player crosses it.
+     * - the obstacles (Cut trees, Rock Smash rocks, Strength boulders, [dev.kotlinds.pokemonclient.world.WorldRouter.staticOverlay]):
+     *   without them a route planned from the neighbour walks straight into the tree (NOTES: "auto-Cut bug across
+     *   maps", Pewter → Viridian, Route 2's tree);
+     * - the people there now by the save's event [flags] ([dev.kotlinds.pokemonclient.world.WorldRouter.knownPeople]),
+     *   trainers with their sight: `avoid_trainers` keeps out of the sight of a trainer of the next map too (NOTES
+     *   race: Sailor Harry, seen at once on crossing the border of a route planned to avoid trainers).
+     * Zones whose objects are still loaded (the one just left: `person:N@zone`) are known live, so left out, like any
+     * tile a live object already stands on.
      */
-    internal fun neighbourObstacles(area: Area?, field: FieldState): List<LiveObject> {
+    internal fun neighbourObjects(area: Area?, field: FieldState, flags: dev.kotlinds.pokemonclient.state.EventFlags?): List<LiveObject> {
         if (area == null) return emptyList()
         val loaded = field.objects.mapNotNull { o -> o.id.substringAfter('@', "").toIntOrNull() }.toSet() + field.mapId
         val occupied = field.objects.map { it.x to it.y }.toSet()
-        return area.people
-            .filter { it.obstacle != null && it.zone !in loaded && (it.x to it.y) !in occupied }
+        val obstacles = area.people
+            .filter { it.obstacle != null && it.zone !in loaded }
             .map { LiveObject(it.x, it.y, it.facing, clearedBy = it.obstacle) }
+        val people = dev.kotlinds.pokemonclient.world.WorldRouter.knownPeople(area, flags) { it !in loaded }
+        return (obstacles + people).filter { (it.x to it.y) !in occupied }
     }
 
     /**
@@ -1071,6 +1342,25 @@ internal object MovePlans {
     }
 
     /**
+     * What a diagnosis tells of the Strength boulders a way seemed to cross ([boulderNotes] with their names on
+     * [field]: "person:3 at 9,25").
+     */
+    internal fun boulderNotes(field: FieldState, blockers: dev.kotlinds.pokemonclient.world.Blockers): String {
+        fun names(tiles: List<Pair<Int, Int>>) = tiles.map { (x, y) -> (field.objects.firstOrNull { it.x == x && it.y == y }?.let { "${it.id} " } ?: "") + "at $x,$y" }
+        return boulderNotes(names(blockers.stuckBoulders), names(blockers.unprovenBoulders))
+    }
+
+    /**
+     * The one wording of the Strength boulders of a diagnosis, on one map or across maps ([WorldTravel]): what the agent
+     * should not try, the boulders whose pushes open nothing ([stuck], proven by the [PushPlanner]); and those kept as
+     * the way although the proof gave up before deciding ([unproven]). "" when none.
+     */
+    internal fun boulderNotes(stuck: List<String>, unproven: List<String>): String =
+        (if (stuck.isEmpty()) "" else "; pushing the boulder ${stuck.joinToString(", ")} opens no way there (a wall or a dead end behind it): it is not the way") +
+            (if (unproven.isEmpty()) "" else "; whether pushing the boulder ${unproven.joinToString(", ")} opens the way couldn't be worked out " +
+                "(too many boulder positions to try): it may be the way, not proven")
+
+    /**
      * A route moving objects out of the way ([PushPlanner]: Strength boulders, ice blocks), when the overlay has
      * some the party can move; null otherwise or when the puzzle search finds none within its bound.
      */
@@ -1103,16 +1393,23 @@ internal object MovePlans {
 
     /**
      * What to tell about [at], a tile where the walk stopped: the scene trigger there (`trigger:N`, its zone's
-     * coordinate event) when one covers it, else null.
+     * coordinate event) when one covers it, else null. It points to `blocked_by` only when the state lists that
+     * trigger there ([dev.kotlinds.pokemonclient.state.StoryState.blockers], sent at every knowledge level): never to
+     * a field the answer doesn't carry (a game without story blockers, a trigger they don't list).
      */
     internal fun sceneNote(context: PlanContext, mapId: Int?, at: Pair<Int, Int>?): String? {
         at ?: return null
         val area = mapId?.let { context.game.world?.areaOf(it) } ?: return null
-        val trigger = area.triggers.firstOrNull { t ->
-            t.zone == mapId && !t.inert && t.covers(at.first, at.second)
-        } ?: return null
-        return "stepped on a scene trigger at ${at.first},${at.second} (trigger:${trigger.id}), which started a scene: see blocked_by for what it waits for (it starts again each time you step there while it does)"
+        val trigger = sceneTriggerAt(area, mapId, at.first, at.second) ?: return null
+        val id = "trigger:${trigger.id}"
+        val listed = context.state().let { s -> s.field?.mapId == mapId && s.story?.blockers.orEmpty().any { it.target == id } }
+        return "stepped on a scene trigger at ${at.first},${at.second} ($id), which started a scene" +
+            if (listed) ": see blocked_by ($id) for what it does" else " (it may start again each time you step there until the story moves on)"
     }
+
+    /** The coordinate trigger of zone [mapId] covering ([x], [y]) that runs a script (not a placeholder: [dev.kotlinds.pokemonclient.world.Trigger.inert]), or null. */
+    internal fun sceneTriggerAt(area: Area, mapId: Int, x: Int, y: Int): dev.kotlinds.pokemonclient.world.Trigger? =
+        area.triggers.firstOrNull { t -> t.zone == mapId && !t.inert && t.covers(x, y) }
 
     /** What the agent should know when the options asked to avoid something the only way crosses anyway. */
     private fun avoidanceNotes(route: Route, options: MoveOptions): List<String> = route.warnings.mapNotNull { w ->
@@ -1227,14 +1524,17 @@ internal object MovePlans {
         // A walk ended by a warp on the way (not the destination: those are told by the trip, see WorldTravel).
         is Walk.Arrived -> ActionOutcome.Done(through?.let { stoppedAt(it, field) } ?: done(field))
         is Walk.NoRoute -> ActionOutcome.Failed(ActionError.Unavailable(if (failure is NeedsMechanism) UnavailableReason.PUZZLE_LEFT_TO_AGENT else UnavailableReason.NO_PATH, detail,
-            (failure as? RouteFailure.NeedsFieldMove)?.let { FieldMoveWalk.hint(it, access[it.move]) }
+            (failure as? RouteFailure.NeedsFieldMove)?.let { FieldMoveWalk.hint(it, access[it.move], context.state().field) }
                 ?: (if (context.settings.hideDestinations && failure == RouteFailure.Unreachable) UNREACHABLE_ON_THIS_MAP else null)
                 ?: failure.hint(context.state().field)))
         is Walk.Stuck -> ActionOutcome.Failed(ActionError.Timeout(detail))
         is Walk.Failed -> ActionOutcome.Failed(error)
-        is Walk.Interrupted -> ActionOutcome.Failed(ActionError.Interrupted(cause(context, state), "$steps step(s)" + notes.joinToString("") { "; $it" } +
-            (spotter(context, state)?.let { "; seen by $it" } ?: "") +
-            (sceneNote(context, state.field?.mapId ?: context.state().field?.mapId, at)?.takeIf { cause(context, state) == InterruptionCause.SCRIPT }?.let { "; $it" } ?: "")))
+        is Walk.Interrupted -> {
+            val by = cause ?: cause(context, state)
+            ActionOutcome.Failed(ActionError.Interrupted(by, "$steps step(s)" + notes.joinToString("") { "; $it" } +
+                (spotter(context, state)?.let { "; seen by $it" } ?: "") +
+                (sceneNote(context, state.field?.mapId ?: context.state().field?.mapId, at)?.takeIf { by == InterruptionCause.SCRIPT }?.let { "; $it" } ?: "")))
+        }
     }
 
     /**
@@ -1295,7 +1595,15 @@ internal object MovePlans {
         }
         is RouteFailure.NeedsFieldMove -> FieldMoveWalk.hint(this, null)
         is NeedsMechanism -> PuzzleSolving.hint(this, field)
-        is RouteFailure.LongDetour -> "the way around crosses $links warps and other maps: go_to a map of the way first (by its name), or fly closer to it"
+        is RouteFailure.LongDetour -> shortWay?.let {
+            "you decide: the way around (go_to a map of the way first, by its name, or fly closer), or the short way of ${it.links} warp(s) " +
+                "through what you asked to avoid (go_to again with on_avoid_detour: short_way; each walk still avoids it where it can)"
+        } ?: "the only way crosses $links warps and other maps: go_to a map of the way first (by its name), fly closer to it, or take " +
+            "the whole loop (go_to again with on_local_detour: go)"
+        is RouteFailure.ElevatorFloor -> operator.choice?.let { "$it, then take warp:$exitWarp" }
+        is RouteFailure.Oscillation -> "the way found from here goes back through ${link.id}, already taken on this trip: something on the " +
+            "way that the map data doesn't show closes it (a person, a door, an item ball); look at the map where you are and " +
+            "go_to a place of this map first"
     }
 
     /**
@@ -1321,7 +1629,7 @@ internal object MovePlans {
     }
 
     private fun notInField(context: PlanContext) =
-        ActionOutcome.Failed(ActionError.UnexpectedScreen("the overworld", context.state().screen.kind))
+        ActionOutcome.Failed(ActionError.UnexpectedScreen("the overworld", context.state().screen))
 
     // endregion
 

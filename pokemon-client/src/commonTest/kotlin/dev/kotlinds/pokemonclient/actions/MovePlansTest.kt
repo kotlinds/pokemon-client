@@ -70,8 +70,78 @@ private class WalkingGame(
      * Pokémon of the map (nothing appears while it works). The count as read when the walk plans.
      */
     val repelSteps: Int? = null,
+    /**
+     * Arriving here starts a message: [messageQuiet] frames where the field still reads as free while the game
+     * ignores the D-pad (a scene that hasn't shown anything yet), then [messageBusy] frames of a busy field, then the
+     * box, waiting for A (A closes it). [messageNotice]: which [dev.kotlinds.pokemonclient.state.FieldNotice] it is
+     * (null: a scene's message).
+     */
+    val messageTile: Pair<Int, Int>? = null,
+    val messageNotice: dev.kotlinds.pokemonclient.state.FieldNotice? = null,
+    val messageQuiet: Int = 0,
+    val messageBusy: Int = 0,
+    /**
+     * Super Repels in the bag (item 76): X opens the start menu, BAG the bag, the item its menu, USE uses one (the
+     * Repel's steps set again, a message), B goes back; just enough of the menus for the bag's own recipe.
+     */
+    var superRepels: Int = 0,
 ) : GridGame(x, y) {
+    /** The Repel's steps left now ([FieldState.repelSteps]): [repelSteps], 0 once its notice was closed, 200 after a Super Repel. */
+    var repelNow: Int? = repelSteps
+
+    /** The start menu / bag screen open over the field, or null. */
+    private var menu: Screen? = null
+    private var previousButtons: Set<dev.kotlinds.pokemonclient.console.Button> = emptySet()
+
+    override val repelItems get() = listOf(77, 76, 79)
+
+    private fun superRepelBag() = ScriptedUi.bag("items", if (superRepels > 0) listOf(dev.kotlinds.pokemonclient.state.Entry("item:76", "Super Repel")) else emptyList())
+
+    /** The menus' answer to the buttons pressed this frame; true while a menu is open (the field ignores the D-pad). */
+    private fun menus(): Boolean {
+        val pressed = buttons - previousButtons
+        previousButtons = buttons
+        val open = menu
+        if (open == null) {
+            if (dev.kotlinds.pokemonclient.console.Button.X in pressed && message == null && !inBattle) menu = ScriptedUi.START
+            return menu != null
+        }
+        for (button in pressed) {
+            val current = menu ?: return false
+            val selectable = current as? Screen.Selectable
+            val at = (selectable?.cursor as? dev.kotlinds.pokemonclient.state.Cursor.At)?.index
+            val id = at?.let { selectable.entries[it].id }
+            menu = when (button) {
+                dev.kotlinds.pokemonclient.console.Button.A -> when {
+                    ScriptedUi.isStart(current) && id == "option:bag" -> superRepelBag()
+                    current is Screen.Bag && id == "item:76" -> ScriptedUi.menu("option:use", "option:give", "option:cancel", item = dev.kotlinds.pokemonclient.state.ItemId(76))
+                    current is Screen.ContextMenu && id == "option:use" -> {
+                        superRepels--
+                        repelNow = 200
+                        ScriptedUi.dialogue("ACE used the Super Repel.")
+                    }
+                    current is Screen.Dialogue -> superRepelBag()
+                    else -> current
+                }
+                dev.kotlinds.pokemonclient.console.Button.B -> when (current) {
+                    is Screen.Bag -> ScriptedUi.START
+                    is Screen.ContextMenu, is Screen.Dialogue -> superRepelBag()
+                    else -> null
+                }
+                else -> if (selectable == null || at == null) current
+                    else selectable.topology.next(at, button)?.let { ScriptedUi.withCursor(selectable, it) } ?: current
+            }
+        }
+        return menu != null
+    }
     private var fadeLeft = 0
+
+    /** Where the message of [messageTile] is: not started (null), its quiet and busy frames left, the box (0, 0), closed. */
+    private var message: Pair<Int, Int>? = null
+    private var messageClosed = false
+
+    /** Presses of A that closed the message box. */
+    var messagePresses = 0
     val area: Area = run {
         val width = rows.maxOf { it.length }
         Area(0, "test", 0, 0, width, rows.size, Array(width * rows.size) { i ->
@@ -105,11 +175,17 @@ private class WalkingGame(
     override fun state(memory: Memory): GameState {
         val height = (area.tile(x, y)?.heights?.firstOrNull() ?: 0) / dev.kotlinds.pokemonclient.world.FIELD_HEIGHT_UNITS
         val field = FieldState(1, MapName(1, map = "test"), x, y, height, facing, MovementMode.WALK, moving = false, objects = people, trainerEncounter = spotted,
-            engagedTrainerId = spotterId.takeIf { spotted }, autoRun = autoRun, repelSteps = repelSteps)
+            engagedTrainerId = spotterId.takeIf { spotted }, autoRun = autoRun, repelSteps = repelNow)
         val battle = if (inBattle) BattleState(BattleKind.WILD, false, null, emptyList(), emptyList(), emptyList(), null) else null
-        val party = if (repelSteps == null) emptyList() else listOf(lead)
+        val party = if (repelSteps == null && superRepels == 0) emptyList() else listOf(lead)
+        val bag = listOf(dev.kotlinds.pokemonclient.state.BagPocket("items", if (superRepels > 0) listOf(ScriptedUi.item(76, "Super Repel", superRepels)) else emptyList()))
+        val shown = message
         val screen = when {
             inBattle -> Screen.Battle(Awaiting.ANIMATION)
+            menu != null -> menu!!
+            shown != null && shown.first > 0 -> Screen.Overworld(null, Awaiting.INPUT)
+            shown != null && shown.second > 0 -> Screen.Overworld(null, Awaiting.ANIMATION)
+            shown != null -> Screen.Dialogue(TextSource.FIELD, null, "A message", Awaiting.INPUT, messageNotice)
             // The "!" and the walk up: still the overworld, busy.
             fadeLeft > 0 -> Screen.Animation(AnimationKind.TRANSITION)
             spotted && approachLeft > 0 -> Screen.Overworld(null, Awaiting.ANIMATION)
@@ -117,7 +193,7 @@ private class WalkingGame(
             spotted -> Screen.Dialogue(TextSource.FIELD, "Youngster Joey", "I just lost, so I'm trying to find more Pokémon.", Awaiting.INPUT)
             else -> Screen.Overworld(null, Awaiting.INPUT)
         }
-        return GameState(0, screen, null, party, null, battle, field.takeIf { !inBattle })
+        return GameState(0, screen, null, party, bag, battle, field.takeIf { !inBattle })
     }
 
     /** The party's lead with a Repel at work ([repelSteps]): level 50. */
@@ -128,6 +204,21 @@ private class WalkingGame(
     )
 
     override fun busy(): Boolean {
+        if (menus()) return true
+        message?.let { (quiet, busy) ->
+            when {
+                quiet > 0 -> message = quiet - 1 to busy
+                busy > 0 -> message = 0 to busy - 1
+                dev.kotlinds.pokemonclient.console.Button.A in buttons -> {
+                    messagePresses++
+                    message = null
+                    messageClosed = true
+                    if (messageNotice == dev.kotlinds.pokemonclient.state.FieldNotice.REPEL_WORE_OFF) repelNow = 0
+                    return false
+                }
+            }
+            return true
+        }
         if (fadeLeft > 0) {
             if (--fadeLeft == 0) doorTile?.let { (dx, dy) -> moveTo(dx, dy) }
             return true
@@ -147,6 +238,7 @@ private class WalkingGame(
         val free = area.tile(nx, ny)?.let { !it.blocked && it.kind !is TileKind.Water } == true && (nx to ny) !in invisibleWalls && people.none { it.x == nx && it.y == ny }
         if (!free) return
         moveTo(nx, ny)
+        if ((x to y) == messageTile && !messageClosed) message = messageQuiet to messageBusy
         if ((x to y) == battleTile) inBattle = true
         if ((x to y) == sightTile) spotted = true
     }
@@ -475,6 +567,117 @@ class MovePlansTest {
         val hint = assertIs<ActionError.Unavailable>(failed.error).hint.orEmpty()
         assertTrue("from 1,0 facing east" in hint, hint)
         assertTrue("no Pokémon" in hint, hint)
+    }
+
+    private val repelEnd = dev.kotlinds.pokemonclient.state.FieldNotice.REPEL_WORE_OFF
+
+    private fun goTo(x: Int, onRepelEnd: RepelEnd? = null) =
+        GameAction.GoTo(x, 0, null, if (onRepelEnd == null) MoveOptions() else MoveOptions(onRepelEnd = onRepelEnd))
+
+    @Test
+    fun byDefaultAWalkStopsWhereTheRepelWoreOffAndSaysWhatElseItCanDo() {
+        // Nathan: like the end of a battle, the agent decides (NOTES, Codex ×8: "Interrupted by script" for it).
+        val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(goTo(4), game.context()))
+        val error = assertIs<ActionError.Interrupted>(failed.error)
+        assertEquals(InterruptionCause.REPEL_ENDED, error.by)
+        assertEquals(2 to 0, game.x to game.y)
+        assertEquals(1, game.messagePresses)
+        assertEquals(1, game.superRepels)
+        assertTrue("the Repel wore off at 2,0" in error.performed && "continue" in error.performed && "reapply" in error.performed && "auto" in error.performed, error.performed)
+    }
+
+    @Test
+    fun onRepelEndContinueClosesTheMessageAndWalksOn() {
+        val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1)
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(goTo(4, RepelEnd.CONTINUE), game.context()))
+        assertEquals(4 to 0, game.x to game.y)
+        assertEquals(1, game.superRepels)
+        assertTrue("the Repel wore off at 2,0 (message closed), walked on" in done.detail.orEmpty(), done.detail)
+    }
+
+    @Test
+    fun onRepelEndReapplyUsesARepelFromTheBagThenWalksOn() {
+        val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 2)
+        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(goTo(4, RepelEnd.REAPPLY), game.context()))
+        assertEquals(4 to 0, game.x to game.y)
+        assertEquals(1, game.superRepels)
+        assertEquals(200, game.repelNow)
+        assertTrue("used a Super Repel and walked on" in done.detail.orEmpty(), done.detail)
+    }
+
+    @Test
+    fun onRepelEndReapplyWithNoRepelLeftStopsThere() {
+        val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(goTo(4, RepelEnd.REAPPLY), game.context()))
+        val error = assertIs<ActionError.Interrupted>(failed.error)
+        assertEquals(InterruptionCause.REPEL_ENDED, error.by)
+        assertTrue("no Repel left in the bag" in error.performed, error.performed)
+        assertEquals(2 to 0, game.x to game.y)
+    }
+
+    @Test
+    fun onRepelEndAutoReappliesOnlyWhenWildPokemonLieAhead() {
+        // Grass ahead: a Repel used, the walk goes on.
+        val grass = WalkingGame(listOf("..\"\"\""), x = 0, y = 0, messageTile = 1 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1, landEncounters = 0.1)
+        val used = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(goTo(4, RepelEnd.AUTO), grass.context()))
+        assertEquals(4 to 0, grass.x to grass.y)
+        assertEquals(0, grass.superRepels)
+        assertTrue("used a Super Repel" in used.detail.orEmpty(), used.detail)
+        // Nothing appears on the rest of the way: walked on, the Repel kept.
+        val floor = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 1 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1, landEncounters = 0.1)
+        val kept = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(goTo(4, RepelEnd.AUTO), floor.context()))
+        assertEquals(4 to 0, floor.x to floor.y)
+        assertEquals(1, floor.superRepels)
+        assertTrue("no wild Pokémon on the rest of the way" in kept.detail.orEmpty(), kept.detail)
+    }
+
+    @Test
+    fun aScenesMessageOnTheWayStillInterruptsTheWalkWhateverOnRepelEnd() {
+        // The same message without the Repel's script: a scene, never pressed through, never a Repel used.
+        for (mode in RepelEnd.entries) {
+            val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageBusy = 4, superRepels = 1)
+            val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(goTo(4, mode), game.context()))
+            assertEquals(InterruptionCause.SCRIPT, assertIs<ActionError.Interrupted>(failed.error).by, mode.wire)
+            assertEquals(2 to 0, game.x to game.y)
+            assertEquals(0, game.messagePresses)
+            assertEquals(1, game.superRepels)
+            val stepped = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageBusy = 4, superRepels = 1)
+            val stopped = assertIs<ActionOutcome.Failed>(MovePlans.step.run(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = mode)), stepped.context()))
+            assertEquals(InterruptionCause.SCRIPT, assertIs<ActionError.Interrupted>(stopped.error).by, mode.wire)
+            assertEquals(0, stepped.messagePresses)
+        }
+    }
+
+    @Test
+    fun stepStopsWhereTheRepelWoreOffByDefaultOrWalksTheRestOfItsLine() {
+        val game = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.step.run(GameAction.Step(Direction.EAST, 4), game.context()))
+        assertEquals(InterruptionCause.REPEL_ENDED, assertIs<ActionError.Interrupted>(failed.error).by)
+        assertEquals(2 to 0, game.x to game.y)
+        val walking = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4)
+        val done = assertIs<ActionOutcome.Done>(MovePlans.step.run(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = RepelEnd.CONTINUE)), walking.context()))
+        assertEquals(4 to 0, walking.x to walking.y)
+        assertEquals(1, walking.messagePresses)
+        assertTrue("the Repel wore off at 2,0" in done.detail.orEmpty(), done.detail)
+        val reapplying = WalkingGame(listOf("....."), x = 0, y = 0, messageTile = 2 to 0, messageNotice = repelEnd, messageBusy = 4, superRepels = 1)
+        assertIs<ActionOutcome.Done>(MovePlans.step.run(GameAction.Step(Direction.EAST, 4, MoveOptions(onRepelEnd = RepelEnd.REAPPLY)), reapplying.context()))
+        assertEquals(4 to 0, reapplying.x to reapplying.y)
+        assertEquals(0, reapplying.superRepels)
+    }
+
+    @Test
+    fun aSceneStartingAsTheStepIsRefusedIsAScriptNotABlockedWay() {
+        // NOTES (Codex, Elm's lab): "blocked after 4 tile(s) at 4,11" while the aide talked. The field reads as free
+        // for a while after the player stops (the D-pad ignored), then the scene shows: an interruption.
+        val game = WalkingGame(listOf("......."), x = 0, y = 0, messageTile = 2 to 0, messageQuiet = 30, messageBusy = 20)
+        val failed = assertIs<ActionOutcome.Failed>(MovePlans.step.run(GameAction.Step(Direction.EAST, 4), game.context()))
+        assertEquals(InterruptionCause.SCRIPT, assertIs<ActionError.Interrupted>(failed.error).by)
+        assertEquals(0, game.messagePresses)
+        // A wall stays a wall: blocked, with where.
+        val wall = WalkingGame(listOf("...#..."), x = 0, y = 0)
+        val blocked = assertIs<ActionOutcome.Failed>(MovePlans.step.run(GameAction.Step(Direction.EAST, 4), wall.context()))
+        assertTrue("blocked after 2 tile(s) at 2,0" in assertIs<ActionError.Unavailable>(blocked.error).detail, blocked.error.toString())
     }
 
     @Test

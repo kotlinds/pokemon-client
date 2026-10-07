@@ -112,4 +112,52 @@ class HgssGymPuzzlesTest {
         assertNull(HgssPuzzles.read(HgssGymPuzzles.VIOLET_GYM, FakePuzzleReads(gymmick = gymmick(4)), null)?.unmodeled)
         assertNull(HgssPuzzles.read(1, FakePuzzleReads(gymmick = gymmick(0)), null))
     }
+
+    @Test
+    fun theMahoganyGymRoomsListTheirIceBlocksAndWhichStillMove() {
+        // Room 2: a block as the map places it (facing south) moves; one frozen to another faces north.
+        val blocks = listOf(HgssIlexFarfetchd.ObjectAt(0, 5, 8, Direction.SOUTH), HgssIlexFarfetchd.ObjectAt(1, 8, 8, Direction.NORTH))
+        val puzzle = assertNotNull(HgssPuzzles.read(396, FakePuzzleReads(), null, iceBlocks = blocks))
+        assertEquals(PuzzleKind.ICE_BLOCKS, puzzle.kind)
+        assertEquals(
+            listOf(dev.kotlinds.pokemonclient.state.PuzzleIceBlock("person:0", PuzzleTile(5, 8), true), dev.kotlinds.pokemonclient.state.PuzzleIceBlock("person:1", PuzzleTile(8, 8), false)),
+            puzzle.iceBlocks,
+        )
+        // The rule says go_to pushes them and that leaving the room puts them back.
+        assertTrue("go_to pushes them" in puzzle.rule && "Leaving the room and coming back puts every block back" in puzzle.rule, puzzle.rule)
+        // The view lists them for the agent.
+        val view = StateView.puzzle(puzzle).toString()
+        assertTrue("ice_blocks" in view && "person:1 at 8,8: frozen" in view, view)
+        // The leader's room and room 1 too; without blocks, no puzzle; and no ice puzzle elsewhere.
+        assertNotNull(HgssPuzzles.read(140, FakePuzzleReads(), null, iceBlocks = blocks))
+        assertNotNull(HgssPuzzles.read(397, FakePuzzleReads(), null, iceBlocks = blocks))
+        assertNull(HgssPuzzles.read(396, FakePuzzleReads(), null))
+        assertNull(HgssPuzzles.read(1, FakePuzzleReads(), null, iceBlocks = blocks))
+    }
+
+    @Test
+    fun theCinnabarGymTrainersStepAsideOnceBeatenTheWayTheScriptSays() {
+        // FLAG_UNK_13B: Cary (person:5) beaten.
+        val puzzle = assertNotNull(HgssPuzzles.read(HgssGymPuzzles.CINNABAR_GYM, FakePuzzleReads(flags = setOf(0x13B)), null))
+        assertEquals(PuzzleKind.TRAINERS_STEP_ASIDE, puzzle.kind)
+        assertEquals((2..7).map { "person:$it" }, puzzle.stepAside.map { it.person })
+        assertEquals(listOf("person:5"), puzzle.stepAside.filter { it.beaten }.map { it.person })
+        // Cary always east (_0424); Waldo (person:6) north when the player faces north, south otherwise (_043C / _0430).
+        val cary = puzzle.stepAside.single { it.person == "person:5" }
+        assertTrue(Direction.entries.all { cary.stepFor(it) == Direction.EAST })
+        val waldo = puzzle.stepAside.single { it.person == "person:6" }
+        assertEquals(listOf(Direction.NORTH, Direction.SOUTH, Direction.SOUTH, Direction.SOUTH), listOf(Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST).map { waldo.stepFor(it) })
+        // Linden (person:3) east when faced east, else west; Daniel (person:4) west when faced west, else east.
+        assertEquals(Direction.EAST, puzzle.stepAside.single { it.person == "person:3" }.stepFor(Direction.EAST))
+        assertEquals(Direction.WEST, puzzle.stepAside.single { it.person == "person:3" }.stepFor(Direction.NORTH))
+        assertEquals(Direction.WEST, puzzle.stepAside.single { it.person == "person:4" }.stepFor(Direction.WEST))
+        assertEquals(Direction.EAST, puzzle.stepAside.single { it.person == "person:4" }.stepFor(Direction.SOUTH))
+        val view = StateView.puzzle(puzzle).toString()
+        assertTrue("\"step_aside\"" in view && "person:2: once beaten, steps north" in view && "person:5: beaten" in view, view)
+        assertTrue("steps north when talked to facing north; steps south when talked to facing south/west/east" in view, view)
+        // Without a walkthrough: the rule only (it names no field the agent doesn't get).
+        val plain = StateView.puzzle(puzzle, showHidden = false).toString()
+        assertFalse("\"step_aside\"" in plain, plain)
+        assertTrue("away from you" in plain, plain)
+    }
 }

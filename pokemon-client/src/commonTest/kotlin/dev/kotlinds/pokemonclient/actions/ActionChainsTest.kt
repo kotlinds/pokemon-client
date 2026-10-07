@@ -31,6 +31,15 @@ class ActionChainsTest {
     }
 
     @Test
+    fun consecutivePcStepsShareOnePcSession() {
+        // deposit, withdraw and pc steps in a row: one boot of the PC, not one per step.
+        val other = MonId.parse("mon:00000003.00000004")!!
+        val chain = listOf(GameAction.Deposit(mon), GameAction.Withdraw(other), GameAction.Pc(listOf(PcOperation.Move(other, 2))), GameAction.SaveGame, GameAction.Deposit(other))
+        val merged = ActionChains.coalesce(chain, inBattle = false)
+        assertEquals(listOf(GameAction.Pc(listOf(PcOperation.Deposit(mon), PcOperation.Withdraw(other), PcOperation.Move(other, 2))), GameAction.SaveGame, GameAction.Deposit(other)), merged)
+    }
+
+    @Test
     fun inBattleEveryItemUseStaysItsOwnTurn() {
         val chain = listOf(use("Revive"), use("Full Restore"))
         assertEquals(chain, ActionChains.coalesce(chain, inBattle = true))

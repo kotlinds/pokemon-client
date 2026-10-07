@@ -47,6 +47,12 @@ data class Parameter(
     val required: Boolean = true,
     /** Allowed values when the set is fixed (enums). */
     val values: List<String> = emptyList(),
+    /**
+     * For an [ParameterType.ARRAY] of objects: the keys of each object (`op`, `pokemon`... of a `pc` operation),
+     * checked like the action's own parameters (an unknown key is refused, naming the right one) and described in
+     * the JSON schema. Empty: the elements aren't objects with known keys (a list of ids).
+     */
+    val fields: List<Parameter> = emptyList(),
 )
 
 /** JSON types of parameters. [ARRAY] is a list of objects (e.g. several item uses). */

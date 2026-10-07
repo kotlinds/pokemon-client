@@ -1,6 +1,10 @@
 package dev.kotlinds.pokemonclient.data
 
 import dev.kotlinds.pokemonclient.state.ItemId
+import dev.kotlinds.pokemonclient.state.MonId
+import dev.kotlinds.pokemonclient.state.PartyMon
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObjectBuilder
 import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.state.SpeciesId
 import kotlinx.serialization.json.JsonObject
@@ -35,12 +39,15 @@ enum class KnowledgeLevel(val description: String) {
 
 /** What `lookup` can be asked about. */
 enum class LookupKind(val required: KnowledgeLevel, val description: String) {
-    /** Items: a human reads their description in the bag and their price in shops. */
-    ITEM(KnowledgeLevel.NONE, "an item: pocket, price"),
-    SPECIES(KnowledgeLevel.POKEDEX, "a Pokémon species: types, base stats, abilities, evolutions"),
+    /**
+     * Items: a human reads their description in the bag (what using it does: its [ItemEffect]) and their price in
+     * shops, so the effect is shown at every level.
+     */
+    ITEM(KnowledgeLevel.NONE, "an item: pocket, price, what using it on a Pokémon does (HP, statuses cured, PP, revival, stat boosts...)"),
+    SPECIES(KnowledgeLevel.POKEDEX, "a Pokémon species (or mon:<id> of the party: its species): types, base stats, abilities, evolutions, TMs / HMs"),
     MOVE(KnowledgeLevel.POKEDEX, "a move: type, category, power, accuracy, PP, priority"),
-    LEARNSET(KnowledgeLevel.POKEDEX, "the moves a species learns by level"),
-    MACHINE(KnowledgeLevel.POKEDEX, "a TM / HM: the move it teaches"),
+    LEARNSET(KnowledgeLevel.POKEDEX, "the moves a species (or mon:<id> of the party) learns by level, and its TMs / HMs"),
+    MACHINE(KnowledgeLevel.POKEDEX, "a TM / HM (TM01, HM02 or its item:<id>): the move it teaches and who in the party can learn it"),
     TYPE(KnowledgeLevel.POKEDEX, "an attacking type: what it is super effective / not very effective / useless against"),
 
     /**
@@ -68,7 +75,13 @@ class EncounterContext(
  * `move:85`, `item:17`, `tm01`, `type:fire`); a name is accepted too ("Pikachu", "Thunderbolt", accents and case
  * ignored), as a convenience.
  */
-class Lookup(private val data: GameData, private val level: KnowledgeLevel, private val encounters: EncounterContext? = null) {
+class Lookup(
+    private val data: GameData,
+    private val level: KnowledgeLevel,
+    private val encounters: EncounterContext? = null,
+    /** The party now: `mon:<id>` ids name its Pokémon, and `machine` says who of it can learn the TM. */
+    private val party: List<PartyMon> = emptyList(),
+) {
 
     /** The answer, or a failure whose message says why (unknown id, not allowed at this knowledge level). */
     fun lookup(kind: LookupKind, id: String): Result<JsonObject> = runCatching {
@@ -167,13 +180,7 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel, priv
                 put("exp_to_level_100", ExpCurves.expForLevel(rate, ExpCurves.MAX_LEVEL))
             }
         }
-        // The TMs / HMs it can learn, with their moves.
-        putJsonArray("machines") {
-            info.machines.sortedBy { it.number }.forEach { machine ->
-                val move = data.machineMove(machine)
-                add(kotlinx.serialization.json.JsonPrimitive(machine.label + (move?.let { " " + (data.move(it)?.name ?: "move:${it.value}") } ?: "")))
-            }
-        }
+        machines(info)
         putJsonArray("evolutions") {
             info.evolutions.forEach { evo ->
                 add(buildJsonObject {
@@ -196,6 +203,17 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel, priv
                 })
             }
         })
+        machines(info)
+    }
+
+    /** The TMs / HMs species [info] can learn, with their moves ("TM01 Focus Punch"). */
+    private fun JsonObjectBuilder.machines(info: SpeciesInfo) {
+        putJsonArray("machines") {
+            info.machines.sortedBy { it.number }.forEach { machine ->
+                val move = data.machineMove(machine)
+                add(kotlinx.serialization.json.JsonPrimitive(machine.label + (move?.let { " " + (data.move(it)?.name ?: "move:${it.value}") } ?: "")))
+            }
+        }
     }
 
     private fun move(info: MoveInfo) = buildJsonObject {
@@ -216,16 +234,50 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel, priv
         info.pocket?.let { put("pocket", it.name.lowercase()) }
         put("price", info.price)
         data.machineOf(info.id)?.let { machine -> data.machineMove(machine)?.let { put("teaches", data.move(it)?.name) } }
+        info.effect?.let { put("effect", effect(it)) }
     }
 
+    /** What using the item does, by kind of effect (only the ones it has). */
+    private fun effect(effect: ItemEffect) = buildJsonObject {
+        effect.hp?.let { hp ->
+            put("hp", when (hp) {
+                is HpRestore.Points -> "${hp.hp}"
+                HpRestore.Full -> "full"
+                HpRestore.Half -> "half of max HP"
+                HpRestore.Quarter -> "a quarter of max HP"
+            })
+        }
+        if (effect.cures.isNotEmpty()) put("cures", JsonArray(effect.cures.sorted().map { kotlinx.serialization.json.JsonPrimitive(it.name.lowercase()) }))
+        if (effect.revivesParty) put("revives", "every fainted Pokémon of the party")
+        else if (effect.revives) put("revives", "a fainted Pokémon")
+        effect.pp?.let { pp -> put("pp", (pp.amount?.toString() ?: "all") + if (pp.allMoves) " PP to every move" else " PP to one move") }
+        effect.ppUp?.let { put("pp_up", if (it == PpUp.MAX) "raises a move's max PP to the top" else "raises a move's max PP by one step") }
+        if (effect.statStages.isNotEmpty()) putJsonObject("battle_stages") { effect.statStages.forEach { (stat, n) -> put(stat.name.lowercase(), n) } }
+        if (effect.guardSpec) put("guard_spec", "the party's stats can't be lowered for 5 turns")
+        if (effect.levelUp) put("level_up", 1)
+        if (effect.evolves) put("evolves", "a Pokémon that evolves with it")
+        if (effect.effortValues.isNotEmpty()) putJsonObject("effort_values") { effect.effortValues.forEach { (stat, n) -> put(stat.name.lowercase(), n) } }
+    }
+
+    /**
+     * A TM / HM (`TM01`, `HM02`, or the machine's `item:<id>`): its move, and who in the party can learn it
+     * (`party_can_learn`, from each species' machines; one already knowing the move says so).
+     */
     private fun machine(id: String): JsonObject {
-        val number = Regex("(tm|hm)\\s*0*(\\d+)", RegexOption.IGNORE_CASE).find(id)
-            ?: throw IllegalArgumentException("A machine is TM01..TM92 or HM01..HM08, not `$id`")
-        val machine = MachineId(if (number.groupValues[1].lowercase() == "hm") MachineId.TM_COUNT + number.groupValues[2].toInt() else number.groupValues[2].toInt())
-        val move = data.machineMove(machine)?.let(data::move) ?: throw IllegalArgumentException("No ${machine.label}")
+        val asItem = id.removePrefix("item:").toIntOrNull()?.let { data.machineOf(dev.kotlinds.pokemonclient.state.ItemId(it)) }
+        val machine = asItem ?: Regex("(tm|hm)\\s*0*(\\d+)", RegexOption.IGNORE_CASE).find(id)?.let { number ->
+            MachineId(if (number.groupValues[1].lowercase() == "hm") MachineId.TM_COUNT + number.groupValues[2].toInt() else number.groupValues[2].toInt())
+        } ?: throw IllegalArgumentException("A machine is TM01..TM92 or HM01..HM08 (or its item:<id>), not `$id`")
+        val moveId = data.machineMove(machine)
+        val move = moveId?.let(data::move) ?: throw IllegalArgumentException("No ${machine.label}")
         return buildJsonObject {
             put("machine", machine.label)
             put("move", move(move))
+            if (party.isNotEmpty()) {
+                val able = MachineCompatibility.partyCanLearn(data, party, machine)
+                put("party_can_learn", if (able.isEmpty()) JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("nobody in the party")))
+                else JsonArray(able.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+            }
         }
     }
 
@@ -241,6 +293,12 @@ class Lookup(private val data: GameData, private val level: KnowledgeLevel, priv
     // region Ids and names
 
     private fun findSpecies(raw: String): SpeciesInfo {
+        // A Pokémon of the party by its id: its species.
+        if (raw.startsWith("mon:")) {
+            val mon = MonId.parse(raw)?.let { id -> party.firstOrNull { it.id == id } }
+                ?: throw IllegalArgumentException("No Pokémon `$raw` in the party" + if (party.isEmpty()) "" else " (it has ${party.joinToString { "${it.id} ${it.displayName}" }})")
+            return data.species(mon.species.id) ?: throw IllegalArgumentException("Unknown species of ${mon.displayName}")
+        }
         val name = { id: Int -> data.species(SpeciesId(id))?.name }
         return idOrName(raw, "species", 1..data.speciesCount, name)?.let { data.species(SpeciesId(it)) }
             ?: throw unknown("species", raw, 1..data.speciesCount, name)

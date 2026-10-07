@@ -26,7 +26,7 @@ internal object HgssTrainers {
 
     /** The trainer id of map object [localId] (script [scriptId]) of zone [zoneId], or null when it isn't a trainer. */
     fun trainerOf(zoneId: Int, localId: Int, scriptId: Int): Int? {
-        commonScriptTrainer(scriptId)?.let { return it }
+        dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(scriptId)?.let { return it }
         val scenes = zoneScenes(zoneId) ?: return null
         return scenes.own[scriptId] ?: scenes.moved[localId]
     }
@@ -47,13 +47,6 @@ internal object HgssTrainers {
 
         /** Script variable [variable] is at least [value] (Whitney cries before giving the badge: `VAR_UNK_410A` = 1). */
         data class VarAtLeast(val variable: Int, val value: Int) : WonCondition
-    }
-
-    /** `ScriptNumToTrainerNum` for the common trainer scripts, null for other scripts. */
-    fun commonScriptTrainer(scriptId: Int): Int? = when (scriptId) {
-        in STD_TRAINER until STD_TRAINER_2 -> scriptId - STD_TRAINER + FIRST_TRAINER_INDEX
-        in STD_TRAINER_2 until STD_ITEM_BALL -> scriptId - STD_TRAINER_2 + FIRST_TRAINER_INDEX
-        else -> null
     }
 
     /** "Psychic" / "Eli" for trainer [trainerId], from the ROM (null without a ROM). */
@@ -152,9 +145,6 @@ internal object HgssTrainers {
     private fun isApplyMovement(file: ByteArray, o: Int): Boolean =
         o + 8 <= file.size && u16(file, o) == APPLY_MOVEMENT && u16(file, o + 2) < MAX_LOCAL_ID
 
-    private const val STD_TRAINER = 3000
-    private const val STD_TRAINER_2 = 5000
-    private const val STD_ITEM_BALL = 7000
     private const val FIRST_TRAINER_INDEX = 1
     private const val LAST_TRAINER_INDEX = 740
     private const val TRAINER_BATTLE = 213

@@ -16,7 +16,7 @@ internal object StarterPlans {
      */
     val chooseStarter = ActionPlan<GameAction.ChooseStarter> { action, context ->
         val first = context.navigator.settle().screen as? Screen.StarterChoice
-            ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the starter machine", context.state().screen.kind))
+            ?: return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the starter machine", context.state().screen))
         val target = first.starters.indexOfFirst { matchesRef(action.starter, "species", it.id.value, it.name) }
         if (target < 0) {
             return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("starter", action.starter, first.starters.map { "species:${it.id.value}" }))

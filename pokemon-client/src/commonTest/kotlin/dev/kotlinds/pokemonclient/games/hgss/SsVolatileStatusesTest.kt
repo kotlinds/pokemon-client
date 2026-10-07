@@ -20,4 +20,20 @@ class SsVolatileStatusesTest {
         assertTrue(read.containsAll(listOf(VolatileStatus.Grudge, VolatileStatus.MagnetRise, VolatileStatus.AquaRing, VolatileStatus.Charged)), read.toString())
         assertEquals(4, read.size)
     }
+
+    @Test
+    fun disableAndEncoreNameTheirMoveAndTurns() {
+        // unk88 counters: disabledTurns bits 0-2, encoredTurns bits 3-5; the moves from unk88.disabledMove / encoredMove.
+        val names = mapOf(55 to "Water Gun", 33 to "Tackle")
+        val read = HgssStatuses.volatile(0, 0, 3L or (2L shl 3), disabledMove = 55, encoredMove = 33) { names[it] }
+        assertEquals(
+            setOf<VolatileStatus>(
+                VolatileStatus.Disabled(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.MoveId(55), "Water Gun"), 3),
+                VolatileStatus.Encored(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.MoveId(33), "Tackle"), 2),
+            ),
+            read,
+        )
+        // No counter: no condition, whatever move the struct still holds.
+        assertTrue(HgssStatuses.volatile(0, 0, 0, disabledMove = 55, encoredMove = 33).isEmpty())
+    }
 }

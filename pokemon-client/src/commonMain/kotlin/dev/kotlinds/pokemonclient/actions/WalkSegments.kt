@@ -18,10 +18,10 @@ import dev.kotlinds.pokemonclient.world.Node
  * The position is read on every frame: each new tile must be the next one of the segment (anything else stops the
  * segment at once and the walk re-plans), a screen other than the overworld (a battle, a trainer, a message) stops
  * it, and no progress for a while means the game refused the step. The direction is let go one tile before the end
- * (when the player starts the last tile, or the one before on a bike, whose input the game reads ahead), then the
- * walker waits for the player to stand still and checks the final tile. The game busy while the player doesn't move
- * (a door opening, a warp's fade) lets go at once, and after a warp ([WarpWatch]) the direction is never held again:
- * the segment ends there ([Result.Elsewhere]), see [FieldControl].
+ * (when the player starts the last tile; on a bike, whose input the game reads ahead, where its speed carries it to
+ * the last tile: [bikeLetsGo]), then the walker waits for the player to stand still and checks the final tile. The
+ * game busy while the player doesn't move (a door opening, a warp's fade) lets go at once, and after a warp
+ * ([WarpWatch]) the direction is never held again: the segment ends there ([Result.Elsewhere]), see [FieldControl].
  *
  * The pace changes on the way without stopping: the game decides running or walking at the start of each step (B held
  * then or not), so B is pressed or let go for each tile as the player starts the one before ([Segment.runs]); the
@@ -136,14 +136,17 @@ internal object WalkSegments {
             if (runs.getOrElse(index) { false }) add(Button.B)
         })
         var input = input(0)
-        val releaseAt = if (start.movement == MovementMode.BIKE && tiles.size >= 2) tiles.size - 2 else tiles.size - 1
+        val bike = start.movement == MovementMode.BIKE
         var next = 0
         var lastX = start.x
         var lastY = start.y
         var idle = 0
         var busy = 0
+        // Frames since the player entered the tile they are on: how long a tile takes (a bike's speed, [bikeLetsGo]).
+        var frames = 0
         while (true) {
             context.scope.step(1, input)
+            frames++
             val state = context.state()
             val field = state.field
             // A trainer's "!" keeps the overworld on screen (an animation) and ignores the held direction: without this,
@@ -156,12 +159,14 @@ internal object WalkSegments {
                 lastX = field.x
                 lastY = field.y
                 idle = 0
+                val tileFrames = frames
+                frames = 0
                 val expected = tiles.getOrNull(next)
                 // Anything but the next tile: let go, the caller sees where the player ends.
                 if (expected == null || expected.x != field.x || expected.y != field.y) return Held.Released
                 // A scene trigger: let go, its script runs once this step ends (and may move the player back).
                 if ((field.x to field.y) in scenes) return Held.Stopped(state, next + 1, expected)
-                if (next >= releaseAt) return Held.Released
+                if (if (bike) bikeLetsGo(next, tiles.size, tileFrames) else next >= tiles.size - 1) return Held.Released
                 next++
                 // The step onto the next tile starts when this one ends: its pace from now on.
                 input = input(next)
@@ -179,6 +184,38 @@ internal object WalkSegments {
             }
         }
     }
+
+    /**
+     * True when a bike arriving on tile [index] of a segment of [count] tiles should let go of the direction now. The
+     * game reads the next step ahead, so a bike coasts on once let go, as far as its speed carries it ([coast]): let go
+     * where it stops on the last tile, or else as late as it stops short of it (holding one more tile would carry it
+     * past, a turn and a step back; stopping short only costs a new start for the rest).
+     * Measured on the bench (HeartGold, DeSmuME, New Bark Town, rides of 1 to 11 tiles): let go on the first tile, the
+     * bike stops there; on the second (12 frames for it), one tile on; from the third (8 frames, then 6, then 4), two
+     * tiles on. Letting go one tile before the end, every ride of 4 tiles or more went a tile past the end and came
+     * back ("Vélo" in the todo, also seen on Codex).
+     * [tileFrames]: how long the tile just entered took.
+     */
+    internal fun bikeLetsGo(index: Int, count: Int, tileFrames: Int): Boolean {
+        val left = count - 1 - index
+        val coast = coast(index, tileFrames)
+        // Held one tile more, the bike only rides faster.
+        val coastNext = minOf(coast + 1, FAST_COAST)
+        return coast >= left || coastNext + 1 > left
+    }
+
+    /** The tiles a bike rides on once let go on tile [index] of its ride, the last one having taken [tileFrames]. */
+    private fun coast(index: Int, tileFrames: Int): Int = when {
+        index == 0 -> 0
+        tileFrames >= SLOW_TILE_FRAMES -> 1
+        else -> FAST_COAST
+    }
+
+    /** A bike's tile taking this long or more: it has just started (it coasts one tile, [bikeLetsGo]). */
+    private const val SLOW_TILE_FRAMES = 10
+
+    /** The tiles a bike that picked up speed coasts on ([bikeLetsGo]). */
+    private const val FAST_COAST = 2
 
     /** No new tile for this long while holding (and not moving): the game refuses the step (turning included). */
     private const val REFUSED_FRAMES = 24

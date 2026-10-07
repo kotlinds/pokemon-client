@@ -23,6 +23,7 @@ import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.PersonTemplate
 import dev.kotlinds.pokemonclient.world.TileInfo
 import dev.kotlinds.pokemonclient.world.TileKind
+import dev.kotlinds.pokemonclient.world.Trigger
 import dev.kotlinds.pokemonclient.world.Warp
 import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.world.WorldSource
@@ -52,7 +53,7 @@ class ReachabilityTest {
      * 'N' a warp tile entered (a gatehouse entrance), 'H' floor at height 24, 'l' at height 16, 'o' at height 0 (the
      * others flat).
      */
-    private fun area(zone: Int, rows: List<String>, warps: List<Warp> = emptyList(), people: List<PersonTemplate> = emptyList()): Area {
+    private fun area(zone: Int, rows: List<String>, warps: List<Warp> = emptyList(), people: List<PersonTemplate> = emptyList(), triggers: List<Trigger> = emptyList()): Area {
         val width = rows.maxOf { it.length }
         val tiles = Array<TileInfo?>(width * rows.size) { i ->
             when (rows[i / width].getOrElse(i % width) { '#' }) {
@@ -67,20 +68,54 @@ class ReachabilityTest {
                 else -> TileInfo(false, TileKind.Floor)
             }
         }
-        return Area(zone, "Map $zone", 0, 0, width, rows.size, tiles, warps = warps, people = people)
+        return Area(zone, "Map $zone", 0, 0, width, rows.size, tiles, warps = warps, people = people, triggers = triggers)
     }
 
     private fun person(n: Int, x: Int, y: Int, label: String = "man", height: Int? = null, kind: FieldObjectKind = FieldObjectKind.PERSON) =
         FieldObject("person:$n", label, kind, x, y, Direction.SOUTH, height = height)
 
-    private fun state(zone: Int, x: Int, y: Int, objects: List<FieldObject> = emptyList(), height: Int = 0, flags: EventFlags? = null, puzzle: PuzzleState? = null) =
+    private fun state(
+        zone: Int, x: Int, y: Int, objects: List<FieldObject> = emptyList(), height: Int = 0, flags: EventFlags? = null, puzzle: PuzzleState? = null,
+        triggers: Set<Pair<Int, Int>> = emptySet(),
+    ) =
         GameState(
             0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null,
-            FieldState(zone, MapName(zone, map = "Map $zone"), x, y, height, Direction.SOUTH, MovementMode.WALK, moving = false, objects = objects, puzzle = puzzle),
+            FieldState(zone, MapName(zone, map = "Map $zone"), x, y, height, Direction.SOUTH, MovementMode.WALK, moving = false, objects = objects, puzzle = puzzle, activeTriggers = triggers),
             eventFlags = flags,
         )
 
     private fun survey(game: MapGame, state: GameState, settings: ActionSettings = ActionSettings()) = ReachSurvey(game, state, settings)
+
+    /**
+     * Race notes (the Goldenrod Underground's barricade on warp:5): someone standing on the warp itself; the view says
+     * who, like go_to (which no longer walks there to time out). Nobody on it: nothing to say.
+     */
+    @Test
+    fun aWarpSomeoneStandsOnNamesThemAndAFreeOneNothing() {
+        val room = area(1, listOf("....", "...."), warps = listOf(Warp(1, 0, 3, 1, 2, 0)))
+        val held = survey(MapGame(mapOf(1 to room)), state(1, 0, 0, listOf(person(5, 3, 1, "barricade")))).of("warp:0")
+        assertEquals("person:5", held.blockedByPerson?.id)
+        assertEquals(" [blocked_by_person: person:5 (barricade)]", held.suffix())
+        assertEquals(Reachability.DIRECT, survey(MapGame(mapOf(1 to room)), state(1, 0, 0, listOf(person(5, 3, 0, "bystander")))).of("warp:0"))
+    }
+
+    /**
+     * NOTES-run-map-randomizer (Mahogany's `exit:east`, no label while a man sends the player back): an exit reached
+     * only through a scene trigger names it ([Reachability.blockedByScene]); with a way around, nothing.
+     */
+    @Test
+    fun anExitReachedOnlyThroughASceneNamesTheTrigger() {
+        val trigger = Trigger(1, 0, 2, 1, 1, 1, 7, 0x4000, 0)
+        val corridor = area(1, listOf("#####", "....N", "#####"), warps = listOf(Warp(1, 0, 4, 1, 2, 0)), triggers = listOf(trigger))
+        val through = survey(MapGame(mapOf(1 to corridor)), state(1, 0, 1, triggers = setOf(2 to 1))).of("warp:0")
+        assertEquals("trigger:0", through.blockedByScene)
+        assertEquals(" [blocked_by_scene: trigger:0]", through.suffix())
+        // The trigger not armed now: nothing.
+        assertEquals(Reachability.DIRECT, survey(MapGame(mapOf(1 to corridor)), state(1, 0, 1)).of("warp:0"))
+        // A way around it: nothing either.
+        val wide = area(1, listOf(".....", "....N", "#####"), warps = listOf(Warp(1, 0, 4, 1, 2, 0)), triggers = listOf(trigger))
+        assertEquals(Reachability.DIRECT, survey(MapGame(mapOf(1 to wide)), state(1, 0, 1, triggers = setOf(2 to 1))).of("warp:0"))
+    }
 
     @Test
     fun whatAWalkReachesGetsNothing() {
@@ -201,7 +236,9 @@ class ReachabilityTest {
             " [requires_field_moves: [surf, strength]; blocked_by_person: person:1 (worker)]",
             Reachability.of(failure, blockers, field)?.suffix(),
         )
-        assertEquals(" [requires_intermediate_warp]", Reachability.of(dev.kotlinds.pokemonclient.world.RouteFailure.DifferentLevel, blockers, field)?.suffix())
+        // Another level: with someone in that way too (the diagnosis's last step), they are named; else the level alone.
+        assertEquals(" [requires_intermediate_warp; blocked_by_person: person:1 (worker)]", Reachability.of(dev.kotlinds.pokemonclient.world.RouteFailure.DifferentLevel, blockers, field)?.suffix())
+        assertEquals(" [requires_intermediate_warp]", Reachability.of(dev.kotlinds.pokemonclient.world.RouteFailure.DifferentLevel, dev.kotlinds.pokemonclient.world.Blockers(), field)?.suffix())
         assertEquals(" [one_way]", Reachability.of(dev.kotlinds.pokemonclient.world.RouteFailure.OnlyOneWay, blockers, field)?.suffix())
     }
 }

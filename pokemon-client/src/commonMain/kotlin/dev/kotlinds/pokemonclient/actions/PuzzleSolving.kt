@@ -131,7 +131,8 @@ internal object PuzzleSolving {
         return when (failure.mechanism) {
             PuzzleMechanism.STRENGTH_BOULDER -> "$left: the way needs the boulder ${id ?: ""} at ${failure.x},${failure.y} pushed $dir" +
                 (failure.objectTo?.let { " (to ${it.first},${it.second})" } ?: "") +
-                ": stand on $from, use Strength on it (interact ${id ?: "with it"}, answer yes), then step $dir"
+                (if (id != null && failure.direction != null) ": " + FieldMoveWalk.pushCall(id, failure.direction, failure.from)
+                else ": stand on $from, use Strength on it (interact with it, answer yes), then step $dir")
             PuzzleMechanism.ICE_BLOCK -> "$left: the way needs the ice block ${id ?: ""} at ${failure.x},${failure.y} pushed: " +
                 "from $from, step $dir and slide into it" + (failure.objectTo?.let { " (it slides to ${it.first},${it.second})" } ?: "")
             PuzzleMechanism.MOVING_PLATFORM -> "$left: the way needs a platform moved: step on its trigger at ${failure.x},${failure.y} " +

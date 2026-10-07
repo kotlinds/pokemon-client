@@ -71,6 +71,13 @@ sealed interface GameEvent {
      */
     data class BattleDecided(override val seq: Long, override val frame: Long, val outcome: BattleOutcome, val kind: BattleKind) : GameEvent
 
+    /**
+     * The opposing Pokémon at [position] fainted (its HP read at 0, seen frame by frame: the faint is over before the
+     * next Pokémon comes in). Not told to the agent (the battle messages say it); what tells a trainer's next Pokémon
+     * sent after a knock-out from a switch of its own ([dev.kotlinds.pokemonclient.view.AgentView]'s battle style line).
+     */
+    data class FoeFainted(override val seq: Long, override val frame: Long, val position: BattlerRef) : GameEvent
+
     /** A Pokémon learned [move] (level up, TM / HM, tutor), forgetting [forgot] when it already knew four. */
     data class LearnedMove(override val seq: Long, override val frame: Long, val mon: MonId, val name: String, val move: String, val forgot: String? = null) : GameEvent
 

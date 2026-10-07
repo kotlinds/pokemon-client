@@ -138,6 +138,41 @@ class FieldRecipesTest {
         assertTrue(ui.game.presses.isEmpty())
     }
 
+    /** The data of [teachUi]'s game: TM01 (item 328) teaches Focus Punch, which only MON2's species can learn. */
+    private fun tmData(mon1CanLearn: Boolean) = StubGameData(
+        speciesInfo = listOfNotNull(
+            species(1, if (mon1CanLearn) setOf(dev.kotlinds.pokemonclient.data.MachineId(1)) else emptySet()),
+            species(2, setOf(dev.kotlinds.pokemonclient.data.MachineId(1))),
+        ).associateBy { it.id },
+        machines = mapOf(dev.kotlinds.pokemonclient.data.MachineId(1) to MoveId(264)),
+        machineItems = mapOf(ItemId(328) to dev.kotlinds.pokemonclient.data.MachineId(1)),
+    )
+
+    private fun species(n: Int, machines: Set<dev.kotlinds.pokemonclient.data.MachineId>) = dev.kotlinds.pokemonclient.data.SpeciesInfo(
+        dev.kotlinds.pokemonclient.state.SpeciesId(n), "MON$n", emptyList(), dev.kotlinds.pokemonclient.data.BaseStats(1, 1, 1, 1, 1, 1),
+        emptyList(), 45, 64, null, emptyList(), machines,
+    )
+
+    @Test
+    fun teachRefusesAPokemonThatCantLearnTheMachineBeforeOpeningTheBag() {
+        // Race: four `teach` answered UNABLE! on the party screen, the bag opened each time.
+        val ui = teachUi(fourMoves)
+        ui.game.data = tmData(mon1CanLearn = false)
+        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context()))
+        val error = assertIs<ActionError.Unavailable>(failed.error)
+        assertEquals(UnavailableReason.CANNOT_LEARN, error.reason)
+        assertEquals("party can learn it: ${MonId(2, 1)} MON2", error.hint)
+        assertTrue(ui.game.presses.isEmpty(), "the bag wasn't opened: ${ui.game.presses}")
+    }
+
+    @Test
+    fun teachGoesOnForAPokemonThatCanLearnTheMachine() {
+        val ui = teachUi(fourMoves)
+        ui.game.data = tmData(mon1CanLearn = true)
+        assertIs<ActionOutcome.Done>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context()))
+        assertEquals(listOf(436, 15, 53, 264), ui.party.first().moves.map { it.move.id.value })
+    }
+
     @Test
     fun aMachineOnTheSecondPageIsReachedWithThePageArrow() {
         // Page 1 shows TM01 only; the ▶ arrow (touch only) shows page 2 with HM04.
@@ -231,6 +266,40 @@ class FieldRecipesTest {
         assertEquals(UnavailableReason.CANNOT_USE_HERE, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertIs<Screen.Overworld>(ui.game.screen)
         assertEquals(MovementMode.WALK, ui.field!!.movement)
+    }
+
+    @Test
+    fun aKeyWithoutUseInTheBagIsRefusedBeforeTheBagOpens() {
+        // NOTES (Claude, Basement Key): "No USE on context_menu (entries: , , , MOVE, CANCEL)", the menu left open.
+        val basementKey = item(476, "Basement Key")
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), bag = listOf(BagPocket("key_items", listOf(goodRod, basementKey))))
+        ui.field = field(5, 5, Direction.NORTH)
+        ui.game.data = StubGameData(items = mapOf(
+            ItemId(476) to dev.kotlinds.pokemonclient.data.ItemInfo(ItemId(476), "Basement Key", dev.kotlinds.pokemonclient.data.ItemPocket.KEY_ITEMS, 0, usableFromBag = false),
+        ))
+        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("item:476")), ui.context()))
+        assertEquals(UnavailableReason.NOT_USABLE_FROM_BAG, assertIs<ActionError.Unavailable>(failed.error).reason)
+        assertTrue(ui.game.presses.isEmpty(), ui.game.presses.toString())
+    }
+
+    @Test
+    fun aKeyItemMenuWithoutUseIsClosedWhenTheGameHasNoItemData() {
+        // Without item data (a game whose data isn't read): the bag is tried, and what was opened is closed again.
+        val basementKey = item(476, "Basement Key")
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), bag = listOf(BagPocket("key_items", listOf(goodRod, basementKey))))
+        ui.field = field(5, 5, Direction.NORTH)
+        val keyPocket = bag("key_items", listOf(Entry("item:446", "Good Rod"), Entry("item:476", "Basement Key")))
+        ui.onA = { screen, id ->
+            when {
+                isStart(screen) && id == "option:bag" -> keyPocket
+                screen is Screen.Bag && id == "item:476" -> menu("option:move", "option:cancel", item = ItemId(476))
+                else -> screen
+            }
+        }
+        ui.onB = { screen -> if (screen is Screen.ContextMenu) keyPocket else OVERWORLD }
+        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("item:476")), ui.context()))
+        assertIs<ActionError.NotOnScreen>(failed.error)
+        assertIs<Screen.Overworld>(ui.game.screen)
     }
 
     @Test
@@ -415,6 +484,30 @@ class FieldRecipesTest {
         assertEquals("landed in map 49 (flew via Indigo Plateau: Fly only reaches the other region from there)", done.detail)
         assertEquals(listOf(indigo.touch, pallet.touch), ui.game.touches)
         assertEquals(49, ui.field?.mapId)
+    }
+
+    @Test
+    fun aFlightLandingElsewhereThanTheTownTouchedIsAVerificationError() {
+        // The touch on Violet's point lands in map 74: the game went elsewhere, never told as arrived in Violet.
+        val ui = flyUi({ flyMap(violet) }, landings = mapOf(violet.touch!! to 74))
+        val failed = assertIs<ActionOutcome.Failed>(FieldPlans.fly.run(GameAction.Fly("Violet City"), ui.context()))
+        val error = assertIs<ActionError.VerificationFailed>(failed.error)
+        assertEquals("fly", error.step)
+        assertTrue("fly:73" in error.expected && "map 74" in error.actual, "$error")
+    }
+
+    @Test
+    fun theSecondFlightOfAHubTripIsCheckedToo() {
+        // Via Indigo Plateau (landing checked: 58), then Pallet's point leads to map 50: the second flight's error.
+        lateinit var ui: ScriptedUi
+        ui = flyUi({
+            if (ui.field?.mapId == 58) flyMap(violet, pallet.copy(selectable = true), indigo)
+            else flyMap(violet, pallet, indigo).copy(otherRegion = setOf(pallet.id), regionHub = indigo.id)
+        }, landings = mapOf(violet.touch!! to 73, pallet.touch!! to 50, indigo.touch!! to 58))
+        val failed = assertIs<ActionOutcome.Failed>(FieldPlans.fly.run(GameAction.Fly("Pallet Town"), ui.context()))
+        val batch = assertIs<ActionError.BatchStepFailed>(failed.error)
+        assertEquals(listOf("flew to Indigo Plateau (Fly only reaches the other region from there)"), batch.done)
+        assertIs<ActionError.VerificationFailed>(batch.cause)
     }
 
     @Test

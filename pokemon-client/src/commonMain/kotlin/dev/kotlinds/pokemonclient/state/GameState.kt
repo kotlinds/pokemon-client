@@ -26,8 +26,10 @@ data class GameState(
      */
     val registeredItems: List<ItemId?> = emptyList(),
     /**
-     * Where the story stands (from the game's flags and variables): the next goal and what blocks the way. A
-     * walkthrough-level knowledge: shown to agents only at [dev.kotlinds.pokemonclient.data.KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH].
+     * Where the story stands (from the game's flags and variables): the next goal and what blocks the way. The goals
+     * and the blockers' [Blocker.reason] are walkthrough knowledge (shown to agents only at
+     * [dev.kotlinds.pokemonclient.data.KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH]); what blocks a way ([Blocker.target],
+     * [Blocker.scene]) is what the player sees on screen, shown at every level.
      */
     val story: StoryState? = null,
     /** The PC boxes (from the save data, readable anywhere), null when unreadable. */
@@ -110,15 +112,46 @@ data class StoryStep(
     val place: Int? = null,
 )
 
-/** Something on the current map that blocks a way, and the condition that lifts it when it's known. */
+/**
+ * Something on the current map that blocks a way, and the condition that lifts it when it's known.
+ *
+ * What it is ([target], [scene]) is what the player sees on screen (a person standing in the way, a scene that turns
+ * them back): agents get it at every knowledge level. Why it blocks and what lifts it ([reason]) is our walkthrough.
+ */
 data class Blocker(
     /** The person or trigger, as targets use it: `person:N`, `trigger:N`. */
     val target: String,
-    /** Why it blocks and how to get past (our walkthrough text). */
+    /** Why it blocks and how to get past (our walkthrough text: story knowledge, never shown below a walkthrough). */
     val reason: String,
     /** The mechanism, when it is a known one (a password door, a Pokémon to battle). */
     val cause: BlockerCause? = null,
+    /** For a coordinate trigger (`trigger:N`): where it is and what stepping there does; null for a person. */
+    val scene: SceneTrigger? = null,
 )
+
+/**
+ * A coordinate trigger of the map that starts a story scene now: the same for every game (Gen 4: the zone's
+ * coordinate events whose variable has the awaited value).
+ */
+data class SceneTrigger(
+    /** Its index in the zone's coordinate events: the `N` of `trigger:N`. */
+    val id: Int,
+    /** The tiles it covers (columns). */
+    val x: IntRange,
+    /** The tiles it covers (rows). */
+    val y: IntRange,
+    /**
+     * True when the scene turns the player back and starts again each time they step there, as long as the story
+     * hasn't moved on (a guard sending them back); false for an event that happens once and then lets them through (a
+     * rival's battle); null when not known.
+     */
+    val repeats: Boolean?,
+) {
+    /** "540,177" or "540,177..179": the tiles, as coordinates elsewhere in the view are written. */
+    val tiles: String get() = "${span(x)},${span(y)}"
+
+    private fun span(r: IntRange) = if (r.first == r.last) "${r.first}" else "${r.first}..${r.last}"
+}
 
 /** The player's trainer card. */
 data class PlayerInfo(
@@ -262,6 +295,11 @@ data class FieldObject(
     val height: Int? = null,
     /** For a shop clerk: what the shop sells, when known before talking. */
     val catalog: List<ShopItem>? = null,
+    /**
+     * For a door placed as an object ([PersonRole.GATE]): true once it has slid aside (open: it no longer stands in the
+     * way), false while it is closed, null when the game doesn't tell (taken as closed).
+     */
+    val open: Boolean? = null,
 )
 
 /** Obstacles placed on the map as objects, told by their sprite. */

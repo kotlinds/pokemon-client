@@ -194,4 +194,16 @@ object HgssTileBehaviors {
         DOOR, WARP_ENTRANCE_NORTH, WARP_NORTH, WARP_PANEL, LADDER_DOWN, ESCALATOR, ESCALATOR_FLIP_FACE -> WarpTrigger.Enter
         else -> WarpTrigger.Never
     }
+
+    /**
+     * Where the game moves the player arriving on a warp tile of [behavior] (the ladder transitions, `NewFieldTransitionEnvironment`
+     * types 7 and 8 of src/field/field_control.c, end with the player stepped off the ladder): north off the hole of a
+     * ladder down (come up the ladder), south off the foot of a ladder north (come down it). Measured on the bench in
+     * the Bell Tower: 1F → 2F lands on 9,7 for the hole at 9,8, 4F → 3F on 24,9 for the ladder's foot at 24,8.
+     */
+    fun arrivalStep(behavior: Int): Direction? = when (behavior) {
+        LADDER_DOWN -> Direction.NORTH
+        LADDER_NORTH -> Direction.SOUTH
+        else -> null
+    }
 }

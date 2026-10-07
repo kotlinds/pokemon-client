@@ -4,6 +4,9 @@ import dev.kotlinds.pokemonclient.data.MoveCategory
 import dev.kotlinds.pokemonclient.games.hgss.HgssStatuses
 import dev.kotlinds.pokemonclient.state.BattleKind
 import dev.kotlinds.pokemonclient.state.BattleState
+import dev.kotlinds.pokemonclient.state.BattleWeather
+import dev.kotlinds.pokemonclient.state.VolatileStatus
+import dev.kotlinds.pokemonclient.state.WeatherKind
 import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.BattlerState
 import dev.kotlinds.pokemonclient.state.KnownMove
@@ -54,5 +57,20 @@ class BattleViewTest {
         assertEquals(MajorStatus.BadlyPoisoned(2), status)
         assertEquals("badly poisoned(2, next 3/16 HP)", view(battler(status, emptyList()))["status"]?.jsonPrimitive?.content)
         assertEquals("badly poisoned", view(battler(MajorStatus.BadlyPoisoned(0), emptyList()))["status"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun weatherAndTheMovesOfEncoreAndDisableAreShown() {
+        // Map randomizer run: Solar Beam fired at once against Erika while the state said nothing of the sunlight.
+        val encored = VolatileStatus.Encored(Named(MoveId(55), "Water Gun"), 2)
+        val disabled = VolatileStatus.Disabled(Named(MoveId(33), "Tackle"), 4)
+        val b = battler(null, emptyList()).copy(volatile = setOf(encored, disabled))
+        val sunny = StateView.battle(BattleState(BattleKind.WILD, false, null, listOf(b), emptyList(), emptyList(), null, weather = BattleWeather(WeatherKind.SUN, 3)))
+        assertEquals("sun (3 turns left)", sunny["weather"]?.jsonPrimitive?.content)
+        val volatile = (((sunny["battlers"] as JsonArray)[0] as JsonObject)["volatile"] as JsonArray).map { it.jsonPrimitive.content }
+        assertEquals(listOf("encored(move:55 Water Gun, 2 turns)", "disabled(move:33 Tackle, 4 turns)"), volatile)
+        // Clear skies (or a reader that doesn't know): no line.
+        val clear = StateView.battle(BattleState(BattleKind.WILD, false, null, listOf(b), emptyList(), emptyList(), null, weather = BattleWeather(WeatherKind.CLEAR, null)))
+        assertEquals(null, clear["weather"])
     }
 }

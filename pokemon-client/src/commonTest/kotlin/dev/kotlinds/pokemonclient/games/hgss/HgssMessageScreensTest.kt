@@ -76,10 +76,10 @@ class HgssMessageScreensTest {
 
     @Test
     fun trainerScriptsGiveTheTrainerId() {
-        assertEquals(1, HgssScriptScreens.trainerOfScript(3000))
-        assertEquals(143, HgssScriptScreens.trainerOfScript(3142))
-        assertEquals(2, HgssScriptScreens.trainerOfScript(5001))
-        assertEquals(null, HgssScriptScreens.trainerOfScript(12))
+        assertEquals(1, dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(3000))
+        assertEquals(143, dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(3142))
+        assertEquals(2, dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(5001))
+        assertEquals(null, dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(12))
     }
 
     @Test

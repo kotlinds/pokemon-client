@@ -9,6 +9,7 @@ import dev.kotlinds.pokemonclient.state.CancelBehavior
 import dev.kotlinds.pokemonclient.state.ContinueReason
 import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.Entry
+import dev.kotlinds.pokemonclient.state.FieldNotice
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.TextSource
@@ -131,6 +132,8 @@ internal object HgssScriptScreens {
                 message?.let { Screen.Dialogue(source, speaker, it.visible, Awaiting.ANIMATION) }
             else -> message?.let { Screen.Dialogue(source, speaker, it.visible, Awaiting.ANIMATION) }
         }
+        // A message the game shows by itself on the field (a Repel wearing off): told by the script printing it.
+        if (screen is Screen.Dialogue) noticeOf(mem.u16(env + S.SM_SCRIPT_ID))?.let { return screen.copy(notice = it) }
         if (screen != null || !boxOpen) return screen
         // A message box is open but its text couldn't be read: say so (Unknown) rather than leave it to the generic
         // field mapping (a busy overworld), where a box waiting for A would stall the agent silently. It waits for a
@@ -158,7 +161,7 @@ internal object HgssScriptScreens {
     /** A message started by a background event (sign, notice...): no object talked to and a BG event runs this script. */
     private fun isSign(mem: HgssMemory, env: Long, state: HgssState): Boolean {
         if (mem.u32(env + A.SE_LAST_INTERACTED) != 0L) return false
-        val script = mem.u16(env + A.SE_ACTIVE_SCRIPT)
+        val script = mem.u16(env + S.SM_SCRIPT_ID)
         return state.surroundings?.bgEvents?.any { it.scriptId == script && it.type == "sign" } == true
     }
 
@@ -175,7 +178,7 @@ internal object HgssScriptScreens {
         if (mem.u32(obj + A.MO_FLAGS) and A.MO_FLAG_ACTIVE == 0L) return null
         val script = mem.u16(obj + A.MO_SCRIPT_ID)
         // A common trainer script, else a trainer its map's own scripts battle (Kimono Girls, Elite Four...).
-        val trainer = trainerOfScript(script)
+        val trainer = dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.trainerOfScript(script)
             ?: mem.s32(obj + A.MO_MAP_ID).takeIf { it >= 0 }?.let { zone -> HgssTrainers.trainerOf(zone, mem.u16(obj + S.MO_LOCAL_ID), script) }
         trainer?.let { HgssData.gameData?.trainerLabel(it)?.let { label -> return label } }
         val sprite = HgssData.spriteName(mem.s32(obj + A.MO_SPRITE_ID))
@@ -184,19 +187,11 @@ internal object HgssScriptScreens {
         return HgssLabels.person(sprite)
     }
 
-    /**
-     * The trainer id of an NPC trainer's script, null for other scripts (src/fieldmap.c ScriptNumToTrainerNum:
-     * `std_trainer` scripts 3000.., `std_trainer_2` (second trainer of a double) 5000.., FIRST_TRAINER_INDEX = 1).
-     */
-    fun trainerOfScript(script: Int): Int? = when (script) {
-        in STD_TRAINER until STD_TRAINER_2 -> script - STD_TRAINER + 1
-        in STD_TRAINER_2 until STD_TRAINER_2 + MAX_TRAINERS -> script - STD_TRAINER_2 + 1
-        else -> null
-    }
+    /** The [FieldNotice] script [script] prints, or null (src/field/field_control.c → `std_repel_wore_off`). */
+    private fun noticeOf(script: Int): FieldNotice? = if (script == STD_REPEL_WORE_OFF) FieldNotice.REPEL_WORE_OFF else null
 
-    private const val STD_TRAINER = 3000
-    private const val STD_TRAINER_2 = 5000
-    private const val MAX_TRAINERS = 1000
+    /** `std_repel_wore_off` (include/constants/std_script.h), started by `PlayerStepEvent_RepelCounterDecrement`. */
+    private const val STD_REPEL_WORE_OFF = 2022
 
     /**
      * A top-screen multichoice (`ScrCmd_064`..`067`): the `FieldMenu` at `ScriptEnvironment.unk10`, its options being

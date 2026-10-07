@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.state.BlockerCause
+import dev.kotlinds.pokemonclient.state.SceneTrigger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -111,6 +112,21 @@ class HgssBlockersTest {
         assertEquals(listOf("trigger:0"), generic.map { it.target })
         // Fifteen armed pits (Ecruteak Gym): a mechanism, not story blockers.
         assertTrue(HgssBlockers.of(state(80, triggers = (0 until 15).map { trigger(it, true) })).isEmpty())
+    }
+
+    /**
+     * What every knowledge level is told of a trigger ([SceneTrigger]): its tiles, and whether its scene turns the
+     * player back each time (curated: New Bark's east exit), happens once (the rival's battle), or isn't known
+     * (generic). People carry none.
+     */
+    @Test
+    fun triggersCarryTheirTilesAndWhetherTheirSceneRepeats() {
+        fun trigger(index: Int) = TriggerInfo(index = index, x = 700, z = 398, width = 1, height = 5, scriptId = 12, active = true, variable = 0x4081, value = 2)
+        assertEquals(SceneTrigger(3, 700..700, 398..402, repeats = true), HgssBlockers.of(state(60, triggers = listOf(trigger(3)))).single().scene)
+        assertEquals(SceneTrigger(0, 700..700, 398..402, repeats = false), HgssBlockers.of(state(74, triggers = listOf(trigger(0)))).single().scene)
+        assertEquals(SceneTrigger(0, 700..700, 398..402, repeats = null), HgssBlockers.of(state(500, triggers = listOf(trigger(0)))).single().scene)
+        assertEquals("700,398..402", SceneTrigger(0, 700..700, 398..402, repeats = null).tiles)
+        assertEquals(null, HgssBlockers.of(state(40, listOf(person(4, 415, 246, mapId = 40, eventFlag = 0x1C2)))).single().scene)
     }
 
     @Test

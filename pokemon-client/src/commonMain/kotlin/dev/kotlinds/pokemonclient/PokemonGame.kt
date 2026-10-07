@@ -62,6 +62,26 @@ interface PokemonGame {
      */
     fun registeredItemTouch(slot: Int): dev.kotlinds.pokemonclient.console.TouchPoint? = null
 
+    /**
+     * The movement puzzles of other maps whose state the save keeps (event flags), by zone, as they stand now: what a
+     * way through those maps may need (the Ice Path boulders that must fall to the floor below). Only what the global
+     * state tells (a map's temporary variables are unknown away from it); empty when the game has none or can't tell.
+     * The current map's own puzzle is [dev.kotlinds.pokemonclient.state.FieldState.puzzle].
+     */
+    fun savedPuzzles(memory: Memory): Map<Int, dev.kotlinds.pokemonclient.state.PuzzleState> = emptyMap()
+
+    /**
+     * The direction the player must face to use a PC (they stand on the tile on the other side), or null when the
+     * game answers from any side or doesn't say.
+     */
+    val pcFacing: dev.kotlinds.pokemonclient.Direction? get() = null
+
     /** The item id of the bicycle (a key item ridden from the field), or null when this game has none. */
     val bicycleItem: Int? get() = null
+
+    /**
+     * The item ids of the Repels, the longest-lasting first (what a walk uses again with `on_repel_end: reapply`), or
+     * empty when this game has none known.
+     */
+    val repelItems: List<Int> get() = emptyList()
 }

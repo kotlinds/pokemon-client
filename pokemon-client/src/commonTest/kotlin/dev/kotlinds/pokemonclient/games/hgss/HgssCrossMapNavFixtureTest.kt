@@ -1,6 +1,8 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.actions.MovePlans
+import dev.kotlinds.pokemonclient.actions.MoveOptions
+import dev.kotlinds.pokemonclient.actions.LocalDetour
 import dev.kotlinds.pokemonclient.actions.WorldTravel
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.MovementMode
@@ -48,7 +50,7 @@ class HgssCrossMapNavFixtureTest {
         val area = assertNotNull(HgssData.world?.areaOf(field.mapId))
         val tree = 1034 to 137
         assertTrue(field.objects.none { it.x to it.y == tree }, "Route 2's objects aren't loaded in Pewter City")
-        val neighbours = MovePlans.neighbourObstacles(area, field)
+        val neighbours = MovePlans.neighbourObjects(area, field, null)
         assertEquals(FieldMoveKind.CUT, neighbours.single { it.x to it.y == tree }.clearedBy)
         // The gatehouse's mat (Route 2 warp:2) from the player: with the obstacles of the other zones, Cut on the tree.
         val gatehouse: (Node) -> Boolean = { it.x == 1050 && it.y == 183 }
@@ -79,6 +81,12 @@ class HgssCrossMapNavFixtureTest {
         // The way the world router finds: more warps than go_to takes for a target of this map (refused before moving).
         val loop = assertNotNull(WorldRouter(world).route(92, start, options, goalTiles = { a -> if (a === area) setOf(warp.x to warp.y) else emptySet() }) { it.area === area && onWarp(it.node) })
         assertTrue(loop.links.size > 8, loop.links.toString())
+        // go_to's rule ([WorldTravel.chooseWay]): no shorter way exists (the ratio sees nothing), and for a target of
+        // this very map the loop is refused by default; taken only with on_local_detour go.
+        assertEquals(WorldTravel.WayChoice.LocalLoop(loop), WorldTravel.chooseWay(loop, local = true, MoveOptions()) { loop })
+        assertEquals(WorldTravel.WayChoice.Go(loop), WorldTravel.chooseWay(loop, local = true, MoveOptions(onLocalDetour = LocalDetour.GO)) { loop })
+        // The same way to another map is just a long trip: taken.
+        assertEquals(WorldTravel.WayChoice.Go(loop), WorldTravel.chooseWay(loop, local = false, MoveOptions()) { loop })
         // The other entrance, warp:0, is right there.
         val other = area.warps.single { it.zone == 92 && it.id == 0 }
         assertIs<Pathfinder.Result.Found>(Pathfinder(area, Overlay(objects = live(field))).route(start, options, setOf(other.x to other.y)) { it.x == other.x && it.y == other.y })

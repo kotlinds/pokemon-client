@@ -13,6 +13,7 @@ import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MonId
+import dev.kotlinds.pokemonclient.state.MoveContext
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.world.FieldMoveAccess
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
@@ -111,21 +112,17 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             val battle = state.battle ?: return@spec Availability.Hidden
-            if (state.screen !is Screen.BattleCommand) return@spec Availability.Hidden
+            // From the command menu, or from the battle's move list already open (a previous attempt left it there).
+            if (state.screen !is Screen.BattleCommand && (state.screen as? Screen.MoveSelect)?.context != MoveContext.BATTLE) return@spec Availability.Hidden
             val actor = battle.battlers.firstOrNull { it.ref == (battle.actor ?: BattlerRef.PLAYER_LEFT) } ?: return@spec Availability.Hidden
-            val usable = actor.moves.filter { it.pp > 0 }
-            if (usable.isEmpty()) {
-                Availability.Unavailable(UnavailableReason.NO_PP, "${actor.species.name} has no PP left", "Struggle is used through FIGHT with raw buttons")
-            } else {
-                Availability.Available(mapOf("move" to usable.map { Choice("move:${it.move.id.value}", "${it.move.name} (${it.type ?: "?"}, ${it.pp}/${it.maxPp} PP)") }))
-            }
+            Availability.Available(mapOf("move" to BattleMoveChoice.choices(actor).map { (id, label) -> Choice(id, label) }))
         },
         parse = { json -> GameAction.Attack(MoveRef(string(json, "move")), json["target"]?.jsonPrimitive?.contentOrNull?.let(::battler)) },
         enumerate = { state ->
             val battle = state.battle ?: return@spec emptyList()
             val actor = battle.battlers.firstOrNull { it.ref == (battle.actor ?: BattlerRef.PLAYER_LEFT) } ?: return@spec emptyList()
             val foes = if (battle.isDouble) battle.battlers.filter { !it.ref.isPlayerSide && it.hp > 0 }.map { it.ref } else listOf(null)
-            actor.moves.filter { it.pp > 0 }.flatMap { m -> foes.map { GameAction.Attack(MoveRef("move:${m.move.id.value}"), it) } }
+            BattleMoveChoice.choices(actor).flatMap { (id, _) -> foes.map { GameAction.Attack(MoveRef(id), it) } }
         },
     ), BasicPlans.attack)
 
@@ -223,6 +220,11 @@ object CommonActions {
                 "items", ParameterType.ARRAY,
                 "Field only, instead of item / target / move: a list of uses [{\"item\": …, \"target\": …, \"move\": …}, …] done one after the other in the same bag session.",
                 required = false,
+                fields = listOf(
+                    Parameter("item", ParameterType.STRING, "The item: its id (item:17) or its name."),
+                    Parameter("target", ParameterType.STRING, "The Pokémon's id (mon:…), for items used on a Pokémon.", required = false),
+                    Parameter("move", ParameterType.STRING, "For PP restoring items: the move (move:221 or its name).", required = false),
+                ),
             ),
         ),
         modes = assisted,
@@ -346,6 +348,27 @@ object CommonActions {
             required = false,
         ),
         Parameter("bike", ParameterType.BOOLEAN, "Ride the Bicycle (from the bag, or Y when registered) where cycling is allowed: faster.", required = false),
+        Parameter(
+            "on_repel_end", ParameterType.STRING,
+            "When the Repel wears off on the way: stop (default: stops on that tile, INTERRUPTED repel_ended, you decide), continue " +
+                "(walk on without one), reapply (use a Repel from the bag, then walk on; none left: stop) or auto (reapply when the rest " +
+                "of the way crosses tiles where wild Pokémon appear and a Repel is left, else continue).",
+            required = false, values = RepelEnd.entries.map { it.wire },
+        ),
+        Parameter(
+            "on_avoid_detour", ParameterType.STRING,
+            "With avoid_trainers / avoid_tall_grass, when the way around them is a detour (more than twice the steps of the shortest " +
+                "way, and at least 30 more) while the short way goes through them: refuse (default: refused before moving, the error " +
+                "gives both ways, you decide) or short_way (take the short way, each walk still avoiding them where it can; those in " +
+                "the way may stop you).",
+            required = false, values = AvoidDetour.entries.map { it.wire },
+        ),
+        Parameter(
+            "on_local_detour", ParameterType.STRING,
+            "When a target of the map you are on is reached only by a loop through many other maps (rocks, walls or heights in " +
+                "between): refuse (default: refused before moving, the error gives the loop, you decide) or go (take the loop).",
+            required = false, values = LocalDetour.entries.map { it.wire },
+        ),
     )
 
     val goTo = ActionDefinition(GameAction.GoTo::class, spec(
@@ -354,8 +377,11 @@ object CommonActions {
             "hole:N (goes through), cart:N / teleport:N of the puzzle (rides it), exit:north|south|east|west (into the neighbouring map that way), a map's name " +
             "(\"Route 26\", \"Victory Road 2F\": walks until entering it), or frontier (the nearest way out of this map " +
             "you are not standing at; stops before it). With map, x / y are on that map (another floor or a neighbour). " +
-            "Goes through warps, stairs, holes and map edges when needed (a target of this map reachable only by a long detour through other maps is refused before moving, with the way). Walks onto a scene trigger only when it is the " +
-            "destination or the only way (and says so). Stops early when something happens (battle, trainer, phone call, script). " +
+            "Goes through warps, stairs, holes and map edges when needed, however far the map asked for (a target of this map reachable only by a loop through many other maps is refused before moving, with the way, " +
+            "unless on_local_detour go; so is a way around what avoid_trainers / avoid_tall_grass avoid that is more than twice the shortest way's steps, unless on_avoid_detour short_way; " +
+            "a way the walk's own costs, wild Pokémon and trainers' battles, make that long is replaced by the shorter one, said so). Walks onto a scene trigger only when it is the " +
+            "destination or the only way (and says so). Stops early when something happens (battle, trainer, phone call, script, " +
+            "and the Repel wearing off: on_repel_end continue / reapply / auto walk on instead). " +
             "Runs by default, walking onto the tiles where wild Pokémon can appear (run, run_in_encounter_areas). " +
             "Uses field moves by itself when the party can (a Pokémon knows the move and the badge is owned; a fainted Pokémon " +
             "can still use its field moves outside battle): Surf from the shore, " +
@@ -394,7 +420,8 @@ object CommonActions {
     val step = ActionDefinition(GameAction.Step::class, spec(
         name = "step",
         description = "Walk a few tiles straight in a direction (turning first if needed: no press is lost to the turn). " +
-            "Stops early when the way is blocked (says where) or something happens (battle, trainer, script). " +
+            "Stops early when the way is blocked (says where) or something happens (battle, trainer, script, the Repel wearing off: " +
+            "see on_repel_end). " +
             "Runs by default, walking onto the tiles where wild Pokémon can appear (run, run_in_encounter_areas).",
         parameters = listOf(
             Parameter("direction", ParameterType.STRING, "north, south, west or east.", values = Direction.entries.map { it.name.lowercase() }),
@@ -468,7 +495,12 @@ object CommonActions {
             "{\"op\":\"deposit\",\"pokemon\":\"mon:…\",\"box\":2?}, {\"op\":\"withdraw\",\"pokemon\":\"mon:…\"}, " +
             "{\"op\":\"move\",\"pokemon\":\"mon:…\",\"box\":3} (to another box), {\"op\":\"swap\",\"pokemon\":\"<party mon>\",\"with\":\"<stored mon>\"}. " +
             "Boxes are numbered from 1 like in the game.",
-        parameters = listOf(Parameter("operations", ParameterType.ARRAY, "The operations, in order.")),
+        parameters = listOf(Parameter("operations", ParameterType.ARRAY, "The operations, in order.", fields = listOf(
+            Parameter("op", ParameterType.STRING, "What to do.", values = listOf("deposit", "withdraw", "move", "swap")),
+            Parameter("pokemon", ParameterType.STRING, "The Pokémon (mon:…): for swap, the party one."),
+            Parameter("box", ParameterType.INTEGER, "The box, from 1: where deposit puts it (optional) or move takes it.", required = false),
+            Parameter("with", ParameterType.STRING, "For swap: the stored Pokémon (mon:…) that joins the party.", required = false),
+        ))),
         modes = assisted,
         availability = { state ->
             if (!MovePlans.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return@spec Availability.Hidden
@@ -489,7 +521,10 @@ object CommonActions {
         parameters = listOf(
             Parameter("item", ParameterType.STRING, "The item: its id (item:4) or its name.", required = false),
             Parameter("quantity", ParameterType.INTEGER, "How many, 1 to 99 (default 1).", required = false),
-            Parameter("items", ParameterType.ARRAY, "Several purchases in one visit: [{\"item\": \"item:23\", \"quantity\": 15}, ...].", required = false),
+            Parameter("items", ParameterType.ARRAY, "Several purchases in one visit: [{\"item\": \"item:23\", \"quantity\": 15}, ...].", required = false, fields = listOf(
+                Parameter("item", ParameterType.STRING, "The item: its id (item:4) or its name."),
+                Parameter("quantity", ParameterType.INTEGER, "How many, 1 to 99 (default 1).", required = false),
+            )),
         ),
         modes = assisted,
         availability = { state ->
@@ -623,7 +658,8 @@ object CommonActions {
 
     val useKeyItem = ActionDefinition(GameAction.UseKeyItem::class, spec(
         name = "use_key_item",
-        description = "Use a key item from the bag (Bicycle, Itemfinder, Squirtbottle...).",
+        description = "Use a key item from the bag (Bicycle, Dowsing Machine, a rod...). Keys that work by interacting with what " +
+            "they open or wake (Basement Key, Card Key, SquirtBottle) have no USE: interact instead.",
         parameters = listOf(Parameter("item", ParameterType.STRING, "The key item: its id or its name.")),
         modes = assisted,
         availability = { state ->
@@ -721,7 +757,13 @@ object CommonActions {
         parameters = listOf(
             Parameter("text_speed", ParameterType.STRING, "How fast messages print.", required = false, values = listOf("slow", "mid", "fast")),
             Parameter("battle_scene", ParameterType.STRING, "Battle animations.", required = false, values = listOf("on", "off")),
-            Parameter("battle_style", ParameterType.STRING, "shift: offered a switch when the foe sends a new Pokémon; set: not.", required = false, values = listOf("shift", "set")),
+            Parameter(
+                "battle_style", ParameterType.STRING,
+                "shift: when you knock out a trainer's Pokémon, the game asks whether to switch before the foe sends its next one: " +
+                    "a free switch (seeing what comes, no turn lost, no hit taken); answer KEEP BATTLING (keep_battling) to stay. " +
+                    "set: no question (one call fewer per K.O.), but changing Pokémon then costs a turn and the foe's hit.",
+                required = false, values = listOf("shift", "set"),
+            ),
         ),
         modes = assisted,
         availability = { state ->
@@ -821,7 +863,19 @@ object CommonActions {
         run = bool(json, "run", default = true),
         runInEncounterAreas = bool(json, "run_in_encounter_areas"),
         bike = bool(json, "bike"),
+        onRepelEnd = wireValue(json, "on_repel_end", RepelEnd.entries, RepelEnd::wire) ?: RepelEnd.STOP,
+        onAvoidDetour = wireValue(json, "on_avoid_detour", AvoidDetour.entries, AvoidDetour::wire) ?: AvoidDetour.REFUSE,
+        onLocalDetour = wireValue(json, "on_local_detour", LocalDetour.entries, LocalDetour::wire) ?: LocalDetour.REFUSE,
     )
+
+    /**
+     * The value of string parameter [key] of [json] among [entries] by its [wire] form, null when absent; any other
+     * value is refused with the allowed ones (never aliased).
+     */
+    private fun <E> wireValue(json: JsonObject, key: String, entries: List<E>, wire: (E) -> String): E? =
+        json[key]?.jsonPrimitive?.contentOrNull?.let { raw ->
+            entries.firstOrNull { wire(it) == raw } ?: throw ActionException(ActionError.InvalidParameter(key, raw, entries.map(wire)))
+        }
 
     /** Stored Pokémon as choices: "mon:… = HO-OH Lv45 (BOX 1)". */
     private fun storedChoices(storage: dev.kotlinds.pokemonclient.state.PcStorage) = storage.boxes.flatMap { box ->

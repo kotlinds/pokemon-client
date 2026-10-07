@@ -17,7 +17,7 @@ import dev.kotlinds.pokemonclient.Direction
  * direction than the player arrived in is a turn too, the player faces the object first), the same ledge rule
  * ([boundedLedgeRule]: the way back is checked with the objects where the route leaves them) and the same warnings
  * ([Pathfinder.describe]). Pushes are expensive so routes push as little as possible, and the search gives up after
- * [maxStates] places (positions × configurations; null: no plan within the bound).
+ * [maxStates] places (positions × configurations: [PushProof.OverBound], no plan within the bound).
  */
 class PushPlanner(private val area: Area, private val overlay: Overlay, private val maxStates: Int = DEFAULT_MAX_STATES) {
 
@@ -47,13 +47,25 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
     private val warpTiles = area.warps.map { it.x to it.y }.toSet()
     private val pathfinders = HashMap<List<Movable>, Pathfinder>()
 
+    /** Whether pushing boulders opens a way ([opensWay]): proven with its plan, no plan at all, or not known. */
+    sealed interface PushProof {
+        /** The pushes open the way: [route] does it. */
+        data class Opens(val route: Route) : PushProof
+
+        /** No plan exists (a wall behind the boulder, a push into a dead end): the boulders are no way. */
+        data object NoPlan : PushProof
+
+        /** The search gave up at its bound ([maxStates]) before finding a plan: nothing is proven either way. */
+        data object OverBound : PushProof
+    }
+
     /** True when the overlay has objects this planner can move with [options]. */
     fun hasMovables(options: RouteOptions): Boolean =
         movableTemplates.any { it.iceBlock || FieldMoveKind.STRENGTH in options.fieldMoves }
 
     /** The cheapest route from [start] to a node satisfying [isGoal], pushing objects on the way; null when none. */
     fun route(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>> = emptySet(), isGoal: (Node) -> Boolean): Route? =
-        search(start, options, goalTiles) { isGoal(it.node) }
+        (proof(start, options, goalTiles) { isGoal(it.node) } as? PushProof.Opens)?.route
 
     /**
      * The cheapest pushes from [start] that drop the boulder at [boulder] through its own hole ([LiveObject.fallsInto]),
@@ -63,13 +75,63 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
     fun pushInto(start: Node, options: RouteOptions, boulder: Pair<Int, Int>): Route? {
         val chosen = movableTemplates.firstOrNull { it.x == boulder.first && it.y == boulder.second && it.clearedBy == FieldMoveKind.STRENGTH && it.fallsInto != null }
             ?: return null
-        // The others become plain obstacles: only the chosen boulder moves.
-        val fixed = overlay.objects.map { o -> if (o === chosen || (o.clearedBy != FieldMoveKind.STRENGTH && !o.iceBlock)) o else o.copy(clearedBy = null, iceBlock = false) }
-        return PushPlanner(area, overlay.copy(objects = fixed), maxStates).search(start, options, emptySet()) { state -> state.movables.single().gone }
+        return alone(chosen).search(start, options, emptySet()) { state -> state.movables.single().gone }
     }
 
-    /** The cheapest plan from [start] to a state where [isDone] holds, under the [boundedLedgeRule]; null when none. */
-    private fun search(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, isDone: (State) -> Boolean): Route? {
+    /**
+     * The walk from [start] to the side of the Strength boulder at [boulder] and its one push towards [direction] (the
+     * `push` action with a direction), every other object staying where it is; null when it isn't a boulder, Strength
+     * isn't in [RouteOptions.fieldMoves], the tile behind it refuses it (a wall, water, another object, a hole that
+     * isn't its own) or the tile to push it from can't be reached. The boulder moves that way only, so the plan pushes
+     * it exactly once.
+     */
+    fun pushOnce(start: Node, options: RouteOptions, boulder: Pair<Int, Int>, direction: Direction): Route? {
+        val chosen = movableTemplates.firstOrNull { it.x == boulder.first && it.y == boulder.second && it.clearedBy == FieldMoveKind.STRENGTH }
+            ?: return null
+        val to = boulder.first + direction.dx to boulder.second + direction.dy
+        return alone(chosen).search(start, options, emptySet(), pushes = direction) { state -> state.movables.single().let { it.x to it.y == to } }
+    }
+
+    /** A planner where only [chosen] moves: the other movable objects become plain obstacles. */
+    private fun alone(chosen: LiveObject): PushPlanner = only { it === chosen }
+
+    /** A planner where only the movable objects [moves] keeps move: the others become plain obstacles. */
+    private fun only(moves: (LiveObject) -> Boolean): PushPlanner {
+        val fixed = overlay.objects.map { o -> if (moves(o) || (o.clearedBy != FieldMoveKind.STRENGTH && !o.iceBlock)) o else o.copy(clearedBy = null, iceBlock = false) }
+        return PushPlanner(area, overlay.copy(objects = fixed), maxStates)
+    }
+
+    /**
+     * The proof that pushing Strength boulders opens a way from [start] to [isGoal] (what a diagnosis crossing the
+     * boulders assumes, [Pathfinder.diagnose]): the cheapest plan with Strength and [moves] (the other field moves the
+     * way needs) usable on top of [options], ledges allowed like the diagnosis does. Only the Strength boulders at
+     * [moving] move (the ones the way crosses; null: every movable object), the others stay where they are: a much
+     * smaller search. [PushProof.NoPlan] when there is none (a wall behind the boulder, a push into a dead end): the
+     * boulders are no way; [PushProof.OverBound] when the search gave up at its bound: not proven either way.
+     */
+    fun opensWay(
+        start: Node, options: RouteOptions, moves: Collection<FieldMoveKind>, goalTiles: Set<Pair<Int, Int>>,
+        moving: Set<Pair<Int, Int>>? = null, isGoal: (Node) -> Boolean,
+    ): PushProof {
+        val assumed = options.copy(
+            fieldMoves = options.fieldMoves + moves + FieldMoveKind.STRENGTH,
+            canSurf = options.canSurf || FieldMoveKind.SURF in moves,
+            acceptOneWay = true,
+        )
+        val planner = if (moving == null) this else only { it.clearedBy == FieldMoveKind.STRENGTH && (it.x to it.y) in moving }
+        return planner.proof(start, assumed, goalTiles) { isGoal(it.node) }
+    }
+
+    /** [proof]'s plan, or null when there is none or the search gave up at its bound. */
+    private fun search(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, pushes: Direction? = null, isDone: (State) -> Boolean): Route? =
+        (proof(start, options, goalTiles, pushes, isDone) as? PushProof.Opens)?.route
+
+    /**
+     * The cheapest plan from [start] to a state where [isDone] holds, under the [boundedLedgeRule]
+     * ([PushProof.NoPlan]: none at all, [PushProof.OverBound]: none within the bound). [pushes]: the only direction
+     * Strength boulders may be pushed (null: any).
+     */
+    private fun proof(start: Node, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, pushes: Direction? = null, isDone: (State) -> Boolean): PushProof {
         val initial = State(Heading(start, null), movableTemplates.map { Movable(it.x, it.y, boulder = it.clearedBy == FieldMoveKind.STRENGTH, fallsInto = it.fallsInto) })
         fun plan(allowJumps: Boolean): SearchResult<State, *, Edge> = repelDijkstra(
             start = initial,
@@ -80,15 +142,19 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
             turnCost = { state, now -> pathfinder(state.movables).turnCostAt(state.node, now) },
         ) { state, now, turnCost ->
             // Every move ends on its edge's tile (a push too: the player stays, the edge is "to" their own tile).
-            moves(state, now, goalTiles, allowJumps).map { (edge, movables) ->
+            moves(state, now, goalTiles, allowJumps, pushes).map { (edge, movables) ->
                 SearchMove(State(Heading(edge.to, edge.endDirection), movables), edge.cost + turn(state.heading.direction, edge, turnCost), edge, edge.gameSteps)
             }
         }
         // The way back is walked with the objects where the plan leaves them.
         val wayBack = { end: State -> pathfinder(end.movables).hasWayBack(end.node, start, options) }
-        return when (val ledges = boundedLedgeRule(options, ::plan, wayBack)) {
-            is LedgeChoice.Take -> pathfinder(initial.movables).describe(ledges.edges, ledges.oneWay)
-            LedgeChoice.OnlyOneWay, null -> null
+        return when (val bounded = boundedLedgeRule(options, ::plan, wayBack)) {
+            BoundedLedgeChoice.OverBound -> PushProof.OverBound
+            null -> PushProof.NoPlan
+            is BoundedLedgeChoice.Chosen -> when (val ledges = bounded.choice) {
+                is LedgeChoice.Take -> PushProof.Opens(pathfinder(initial.movables).describe(ledges.edges, ledges.oneWay))
+                LedgeChoice.OnlyOneWay -> PushProof.NoPlan
+            }
         }
     }
 
@@ -100,14 +166,14 @@ class PushPlanner(private val area: Area, private val overlay: Overlay, private 
     }
 
     /** The moves from [state], with where the objects are after each: the plain ones (objects unmoved), and the pushes. */
-    private fun moves(state: State, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, allowJumps: Boolean): List<Pair<Edge, List<Movable>>> {
+    private fun moves(state: State, options: RouteOptions, goalTiles: Set<Pair<Int, Int>>, allowJumps: Boolean, pushes: Direction? = null): List<Pair<Edge, List<Movable>>> {
         val node = state.node
         val result = mutableListOf<Pair<Edge, List<Movable>>>()
         for (edge in pathfinder(state.movables).neighbours(node, options, goalTiles, allowJumps = allowJumps)) {
             result += (icePush(edge, state) ?: (edge to state.movables))
         }
         if (FieldMoveKind.STRENGTH in options.fieldMoves) {
-            for (dir in Direction.entries) strengthPush(state, dir)?.let { result += it }
+            for (dir in Direction.entries) if (pushes == null || dir == pushes) strengthPush(state, dir)?.let { result += it }
         }
         return result
     }

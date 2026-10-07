@@ -234,6 +234,9 @@ data class Battler(
     val status2: Long = 0,
     val moveEffects: Long = 0,
     val counters: Long = 0,
+    /** `unk88.disabledMove` / `unk88.encoredMove`: the move Disable / Encore hold (0: none). */
+    val disabledMove: Int = 0,
+    val encoredMove: Int = 0,
     val side: String,
     val partySlot: Int? = null,
     val species: Int,
@@ -292,6 +295,9 @@ data class BattleInfo(
      * from what is in RAM before the game runs it: the end flag is only set once the faint messages are over.
      */
     val sidesOut: Set<Int> = emptySet(),
+    /** `BattleContext.fieldCondition` (FIELD_CONDITION_* bits: the weather among them) and `weatherTurns`. */
+    val fieldCondition: Long = 0,
+    val weatherTurns: Int = 0,
 )
 
 @Serializable

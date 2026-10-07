@@ -302,6 +302,8 @@ private class Bench(
                     if (p.unmodeled != null) println("    unmodeled: ${p.unmodeled}")
                     p.herds.forEach { println("    $it") }
                     p.boulderHoles.forEach { println("    $it") }
+                    p.iceBlocks.forEach { println("    $it") }
+                    p.stepAside.forEach { println("    $it") }
                     p.platforms.forEach { pl -> println("    ${pl.id} pivot ${pl.pivot.x},${pl.pivot.y} r${pl.rotation} " + pl.triggers.joinToString { "${it.tile.x},${it.tile.y}=${it.effect}${if (it.possible) "" else "(blocked)"}" }) }
                 } ?: println("  no puzzle")
             }

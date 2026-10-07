@@ -14,6 +14,7 @@ import dev.kotlinds.pokemonclient.world.SignKind
 import dev.kotlinds.pokemonclient.world.TileKind
 import dev.kotlinds.pokemonclient.world.WarpTrigger
 import dev.kotlinds.pokemonclient.world.WorldLinks
+import dev.kotlinds.pokemonclient.world.choice
 import dev.kotlinds.pokemonclient.world.WorldSource
 import dev.kotlinds.pokemonclient.world.ZoneLink
 import kotlinx.serialization.json.JsonArray
@@ -43,6 +44,8 @@ object MapView {
      * neighbouring maps would give the geography away too). Everything of the current map stays shown.
      * [reach]: what reaching each listed target (by id) needs ([dev.kotlinds.pokemonclient.actions.ReachSurvey]),
      * appended to its line only when it needs something ([Reachability.suffix]).
+     * [blockers]: the targets the view's `blocked_by` lists (`trigger:N`, `person:N`), so the legend points there only
+     * for what it really lists.
      */
     fun render(
         area: Area,
@@ -54,6 +57,7 @@ object MapView {
         showHidden: Boolean = true,
         hideDestinations: Boolean = false,
         reach: (id: String) -> Reachability = { Reachability.DIRECT },
+        blockers: Set<String> = emptySet(),
     ): JsonObject {
         // The fields told on the lines, explained once below them (only those used).
         val told = linkedSetOf<String>()
@@ -108,7 +112,7 @@ object MapView {
             put("map", JsonArray(listOf("     " + (left until left + width).joinToString(" ") { (it % 10).toString() }).plus(rows).map(::JsonPrimitive)))
             put("map_origin", "x $left..${left + width - 1}, y $top..${top + height - 1} (columns show x mod 10)")
             put("legend", "a partial view: only the $width×$height tiles around you (see map_origin), the map goes on beyond " +
-                "(exits and people_off_screen list what is further) · " + used.mapNotNull { c -> LEGEND[c]?.let { "$c $it" } }.joinToString(" · "))
+                "(exits and people_off_screen list what is further) · " + used.mapNotNull { c -> legendOf(c, field, blockers)?.let { "$c $it" } }.joinToString(" · "))
             levels(area, field, left, top, width, height)?.let { (grid, mine) ->
                 put("levels", JsonArray(grid.map(::JsonPrimitive)))
                 put("levels_legend", "height level of each walkable tile (you are on level $mine): two neighbouring tiles with the same number are walked between (flat floor, slopes, stairs), " +
@@ -118,18 +122,28 @@ object MapView {
             // one the agent reads, with the map's name.
             // Double doors: one doorway in the game, two warps in the data; each keeps its id, the line names the others.
             val doors = WorldLinks.sameDoors(world, area, field.mapId)
+            // A lift's way out leads to the floor it was sent to: said so, with how it's sent there.
+            val lift = world?.elevatorOf(field.mapId)
+            fun liftExit(w: dev.kotlinds.pokemonclient.world.Warp): String? {
+                if (lift == null || w.zone != field.mapId || w.id !in lift.exitWarps) return null
+                val floors = if (hideDestinations) "" else " (" + lift.stops.map { mapName(it.zone).toString() }.distinct().joinToString(", ") + ")"
+                return " → the floor the lift goes to$floors: " + (lift.operator.choice ?: "it rides by itself to the other floor")
+            }
             val exits = buildList {
                 warps.forEach { w ->
                     val arrival = arrivals["warp:${w.id}"]?.takeIf { it.zone == w.zone && !hideDestinations }
-                    val to = " → ${destination(w.targetZone)}" + (arrival?.toX?.let { " (${it},${arrival.toY})" } ?: "")
+                    val to = liftExit(w) ?: (" → ${destination(w.targetZone)}" + (arrival?.toX?.let { " (${it},${arrival.toY})" } ?: ""))
                     val door = doors[w.id]?.takeIf { w.zone == field.mapId }?.let { others ->
                         " (${if (others.size == 1) "double" else "multiple"} door with ${others.joinToString(" and ") { "warp:$it" }}: the same doorway, test it once)"
                     } ?: ""
                     add(distance(field, w.x, w.y) to "warp:${w.id} at ${w.x},${w.y} (${relative(field, w.x, w.y)})$to$door" +
                         when (val trigger = w.trigger) {
                             is WarpTrigger.Press -> " (step on it, then press ${trigger.direction.name.lowercase()})"
-                            // Its tile has no warp behaviour: the other side arrives here, nothing takes it from here.
-                            WarpTrigger.Never -> " (an arrival point only: it can't be taken from here)"
+                            // Its tile has no warp behaviour, or an earlier warp of the same tile is the one the game
+                            // takes there: the other side arrives here, nothing takes it from here.
+                            WarpTrigger.Never -> warps.firstOrNull { it.zone == w.zone && it.x == w.x && it.y == w.y && it.id < w.id }
+                                ?.let { " (same tile as warp:${it.id}, the warp the game takes there: this one is only an arrival point)" }
+                                ?: " (an arrival point only: it can't be taken from here)"
                             WarpTrigger.Enter -> ""
                         } + said(reach("warp:${w.id}")))
                 }
@@ -150,12 +164,12 @@ object MapView {
             val people = objects.filter { it.kind != FieldObjectKind.FOLLOWER && it.kind != FieldObjectKind.ITEM_BALL }
             if (people.isNotEmpty()) put("people", JsonArray(people.sortedBy { distance(field, it.x, it.y) }.map { o ->
                 JsonPrimitive("${o.id} ${o.label} at ${o.x},${o.y} (${relative(field, o.x, o.y)})" + (o.facing?.let { " facing ${it.name.lowercase()}" } ?: "") +
-                    (o.role?.let { " [${it.name.lowercase()}]" } ?: "") + said(reach(o.id)))
+                    role(o) + said(reach(o.id)))
             }))
             // Everyone else on the map (the game tracks every object of the map, not only those on screen): compact.
             val far = field.objects.filter { !shown(it.x, it.y) && it.kind == FieldObjectKind.PERSON }.sortedBy { distance(field, it.x, it.y) }
             if (far.isNotEmpty()) put("people_off_screen", JsonArray(far.take(MAX_FAR_PEOPLE).map { o ->
-                JsonPrimitive("${o.id} ${o.label} at ${o.x},${o.y}" + (o.role?.let { " [${it.name.lowercase()}]" } ?: "") + said(reach(o.id)))
+                JsonPrimitive("${o.id} ${o.label} at ${o.x},${o.y}" + role(o) + said(reach(o.id)))
             } + listOfNotNull((far.size - MAX_FAR_PEOPLE).takeIf { it > 0 }?.let { JsonPrimitive("… and $it more (go_to or interact them by id)") })))
             val items = objects.filter { it.kind == FieldObjectKind.ITEM_BALL }
             if (items.isNotEmpty()) put("items", JsonArray(items.sortedBy { distance(field, it.x, it.y) }.map { o ->
@@ -174,6 +188,13 @@ object MapView {
             if (told.isNotEmpty()) put(REACH_LEGEND, "[...] after a target: what reaching it from where you stand needs, on this map only · " +
                 told.mapNotNull { REACH_FIELDS[it]?.let { meaning -> "$it: $meaning" } }.joinToString(" · "))
         }
+    }
+
+    /** " [nurse]", " [gate: open]": a person's role, with a door's state when known; "" without a role. */
+    private fun role(o: dev.kotlinds.pokemonclient.state.FieldObject): String {
+        val role = o.role ?: return ""
+        val state = o.open?.let { if (it) ": open" else ": closed" } ?: ""
+        return " [${role.name.lowercase()}$state]"
     }
 
     /** "895,402..405" / "896..899,388": the edge tiles of a connection. */
@@ -278,8 +299,8 @@ object MapView {
         return rows to mine
     }
 
-    /** The symbol of a map object: obstacles by what clears them. */
-    private fun objectSymbol(o: dev.kotlinds.pokemonclient.state.FieldObject): Char = when (o.obstacle) {
+    /** The symbol of a map object: obstacles by what clears them, an open door apart from people (it stands in nobody's way). */
+    private fun objectSymbol(o: dev.kotlinds.pokemonclient.state.FieldObject): Char = if (o.open == true) OPEN_DOOR else when (o.obstacle) {
         dev.kotlinds.pokemonclient.state.ObstacleKind.CUT_TREE -> 'T'
         dev.kotlinds.pokemonclient.state.ObstacleKind.SMASH_ROCK -> 'K'
         dev.kotlinds.pokemonclient.state.ObstacleKind.BOULDER -> 'B'
@@ -351,6 +372,16 @@ object MapView {
     /** The meaning of a map symbol, as the [render] legend says it, or null for an unknown one. */
     fun legend(symbol: Char): String? = LEGEND[symbol]
 
+    /**
+     * [legend] of [c] in a view of [field]: a scene trigger ('x') points to the fields that say more about it only when
+     * the view carries them (`blocked_by` listing a trigger, [blockers]; the map's `puzzle`).
+     */
+    private fun legendOf(c: Char, field: FieldState, blockers: Set<String>): String? {
+        if (c != 'x') return LEGEND[c]
+        val see = listOfNotNull("blocked_by".takeIf { blockers.any { it.startsWith("trigger:") } }, "puzzle".takeIf { field.puzzle != null })
+        return LEGEND.getValue(c) + if (see.isEmpty()) "" else " (see ${see.joinToString(" / ")})"
+    }
+
     /** The symbol of a tile kind. */
     fun symbol(kind: TileKind, blocked: Boolean): Char = when (kind) {
         TileKind.Floor, TileKind.Sand, TileKind.Cave, is TileKind.Railing -> if (blocked) '#' else '.'
@@ -383,6 +414,9 @@ object MapView {
     /** The map's tiles in the void around a room ([Area.outside]): drawn as floor by the map data, but no place. */
     const val OUTSIDE_SYMBOL = ','
 
+    /** An open door object ([dev.kotlinds.pokemonclient.state.FieldObject.open]): slid aside, out of the way. */
+    const val OPEN_DOOR = 'D'
+
     /** The key of the explanation of the reachability fields shown ([Reachability.fields]). */
     const val REACH_LEGEND = "reach_legend"
 
@@ -392,6 +426,7 @@ object MapView {
         Reachability.REQUIRES_FIELD_MOVES to "field moves the way needs that your party can't use yet",
         Reachability.BLOCKED_BY_PERSON to "who stands in the only way: talk to them (some step aside), or they leave with the story",
         Reachability.BLOCKED_BY_PUZZLE to "a puzzle closes the way (see field.puzzle)",
+        Reachability.BLOCKED_BY_SCENE to "the only way crosses this scene trigger ('x' on the map): stepping there starts a scene, which may stop you or turn you back until the story moves on",
         Reachability.ONE_WAY to "no way back once there (ledges down; for an exit, nothing takes you back from where it leads)",
     )
 
@@ -451,11 +486,11 @@ object MapView {
         '$' to "hidden item (see hidden_items)", 'e' to "something invisible to examine (see examinables)",
         'W' to "teleport tile: a pad, pit or cart station that moves you (see puzzle.teleports)",
         'L' to "lift: stepping on it takes you to the other floor (see puzzle)", 'G' to "closed gate / shutter (see puzzle)",
-        'f' to "your Pokémon (follows you)", 'o' to "item ball (see items)", 'R' to "obstacle", 'S' to "sign (see signs)",
+        OPEN_DOOR to "open door (slid aside: out of the way)", 'f' to "your Pokémon (follows you)", 'o' to "item ball (see items)", 'R' to "obstacle", 'S' to "sign (see signs)",
         'T' to "small tree (Cut)", 'K' to "cracked rock (Rock Smash)", 'B' to "boulder (Strength pushes it)",
         'I' to "ice block (slide into it on the ice to push it)",
         '&' to "moving platform over the lava (walkable; see puzzle.platforms)", 'X' to "platform trigger: stepping here turns or slides the platform (see puzzle.platforms)",
-        'x' to "trigger: stepping here starts a scene or an event now (see blocked_by / puzzle)",
+        'x' to "trigger: stepping here starts a scene or an event now",
         OUTSIDE_SYMBOL to "outside the map: the void around this room, where no way of the game leads (never walk in: you may not get back)",
     )
 }

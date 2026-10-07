@@ -10,6 +10,9 @@ import dev.kotlinds.pokemonclient.data.BattleKnowledge
 import dev.kotlinds.pokemonclient.data.CatchChance
 import dev.kotlinds.pokemonclient.data.KnowledgeLevel
 import dev.kotlinds.pokemonclient.data.Matchups
+import dev.kotlinds.pokemonclient.state.Blocker
+import dev.kotlinds.pokemonclient.state.BlockerCause
+import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.GameEvent
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
@@ -49,7 +52,9 @@ data class AgentOptions(
     val walkthrough: Boolean get() = knowledge.allows(KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH)
 
     /** What the recipes may do by themselves under these options. */
-    val actionSettings: ActionSettings get() = ActionSettings(solvePuzzles = solvePuzzles, revealHidden = walkthrough, hideDestinations = hideDestinations)
+    val actionSettings: ActionSettings get() = ActionSettings(
+        solvePuzzles = solvePuzzles, revealHidden = walkthrough, hideDestinations = hideDestinations, pokedex = knowledge.allows(KnowledgeLevel.POKEDEX),
+    )
 }
 
 /**
@@ -59,7 +64,8 @@ data class AgentOptions(
  * It carries the messages and events given to it ([describe]'s `events`: which ones is the host's business, see
  * `EventFeed`), the state ([StateView]: screen, position, team, battle), the bag and boxes, the battle estimates
  * (effectiveness, switch candidates, what is known of the opponents, catch chance), the text map ([MapView]), the
- * movement puzzles left to the agent, the story goals and blockers (walkthrough), and the actions possible now.
+ * movement puzzles left to the agent, what blocks a way (every level; why, with a walkthrough), the story goals
+ * (walkthrough), and the actions possible now.
  *
  * Stateful, one per agent: what the agent has seen (teleports once on screen: [Sightings]), what it learned of the
  * opponents this battle ([BattleKnowledge]), the fly suggestions (each costs a search of the world) and what a compact
@@ -83,6 +89,12 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
     private val battleKnowledge = BattleKnowledge()
     private val flyAdvisor = FlyAdvisor(game)
     private val compactView = CompactView()
+
+    /** The opponents on the field at the previous view (by position: who it is), to see the foe send its next Pokémon. */
+    private var lastFoes: Map<dev.kotlinds.pokemonclient.state.BattlerRef, Foe> = emptyMap()
+
+    /** A foe as the previous view saw it at its position: which Pokémon (its personality and party slot), fainted. */
+    private data class Foe(val personality: Long?, val partySlot: Int?, val fainted: Boolean)
 
     /**
      * Writes the view of [state] into [into]: [events] are the game events the agent hasn't received yet (oldest
@@ -112,6 +124,7 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
             state.options?.let { put("options", StateView.options(it)) }
         }
         battle(state, messages, options, compact)
+        battleStyle(state, events)
         // The text map of the surroundings: the common MapView on the ROM's maps (none when the game has no ROM maps).
         if (state.screen is Screen.Overworld) {
             val field = state.field
@@ -120,7 +133,10 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
             else if (field != null && area != null) {
                 // What reaching each listed target needs: one search over this map for the whole view.
                 val survey = ReachSurvey(game, state, options.actionSettings)
-                MapView.render(area, field, game::mapName, world = game.world, showHidden = walkthrough, hideDestinations = hidden, reach = survey::of)
+                MapView.render(
+                    area, field, game::mapName, world = game.world, showHidden = walkthrough, hideDestinations = hidden, reach = survey::of,
+                    blockers = state.story?.blockers.orEmpty().map { it.target }.toSet(),
+                )
                     .forEach { (k, v) -> put(k, v) }
             }
         }
@@ -164,22 +180,41 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
         }
     }
 
-    /** The story goals and what blocks a way, for agents allowed a walkthrough. */
+    /**
+     * In the SET battle style, the line [SET_STYLE_HINT] when a trainer's next Pokémon came in since the previous view
+     * after the one at its position fainted (seen fainted by the previous view, or a [GameEvent.FoeFainted] among
+     * [events]): the moment SHIFT would have offered a free switch. Not when the foe switched by itself (no question
+     * in either style). What the player sees on screen and set themselves: every knowledge level.
+     */
+    private fun JsonObjectBuilder.battleStyle(state: GameState, events: List<GameEvent>) {
+        val battle = state.battle
+        val foes = battle?.battlers.orEmpty().filter { !it.ref.isPlayerSide }.associate { it.ref to Foe(it.personality, it.partySlot, it.hp == 0) }
+        val fainted = events.filterIsInstance<GameEvent.FoeFainted>().map { it.position }.toSet()
+        val replaced = battle?.kind == dev.kotlinds.pokemonclient.state.BattleKind.TRAINER &&
+            foes.any { (ref, now) ->
+                val was = lastFoes[ref] ?: return@any false
+                (was.personality != now.personality || was.partySlot != now.partySlot) && (was.fainted || ref in fainted)
+            }
+        lastFoes = foes
+        if (replaced && state.options?.battleStyle == dev.kotlinds.pokemonclient.state.BattleStyle.SET) put("battle_style", SET_STYLE_HINT)
+    }
+
+    /**
+     * What blocks a way on this map ([BLOCKED_BY], every knowledge level: the player sees the person standing there or
+     * the scene turning them back), and the story goals (walkthrough only).
+     */
     private fun JsonObjectBuilder.story(state: GameState, walkthrough: Boolean, hidden: Boolean) {
         val story = state.story ?: return
-        if (!walkthrough) return
-        // Always a list: one goal, or every open goal when the game leaves the choice (the Kanto gyms...). A goal in
-        // one place says which visited fly destination lands nearest when flying beats walking there. Destinations
-        // hidden: no fly suggestion (it says which town lands nearest the goal: where it is).
-        put("story_goals", JsonArray(story.openGoals.map { goal ->
-            val fly = goal.place?.takeIf { !hidden }?.let { flyAdvisor.suggest(state, it) }
-            JsonPrimitive(goal.description + (fly?.let { " (${it.text})" } ?: ""))
-        }))
-        // The walkthrough's reasons often say where to go to lift a blocker ("clear the Slowpoke Well, north of
-        // town"): only that it blocks while destinations are hidden.
-        if (story.blockers.isNotEmpty()) put("blocked_by", JsonArray(story.blockers.map {
-            JsonPrimitive("${it.target}: " + if (hidden) BLOCKER_WHERE_HIDDEN else it.reason)
-        }))
+        if (walkthrough) {
+            // Always a list: one goal, or every open goal when the game leaves the choice (the Kanto gyms...). A goal in
+            // one place says which visited fly destination lands nearest when flying beats walking there. Destinations
+            // hidden: no fly suggestion (it says which town lands nearest the goal: where it is).
+            put("story_goals", JsonArray(story.openGoals.map { goal ->
+                val fly = goal.place?.takeIf { !hidden }?.let { flyAdvisor.suggest(state, it) }
+                JsonPrimitive(goal.description + (fly?.let { " (${it.text})" } ?: ""))
+            }))
+        }
+        if (story.blockers.isNotEmpty()) put(BLOCKED_BY, JsonArray(story.blockers.map { JsonPrimitive(blockedBy(it, state.field, walkthrough, hidden)) }))
     }
 
     /** The actions possible now (names only in a compact answer), and those shown but not possible, with why. */
@@ -242,9 +277,43 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
             "PUZZLE_LEFT_TO_AGENT naming it. Operate them yourself: step into a boulder after using Strength on it (interact), " +
             "slide into an ice block, go_to / step onto a trigger or a lift; push moves a boulder into its hole"
 
-        /** A story blocker while destinations are hidden: its walkthrough reason names places, so only what it does. */
-        const val BLOCKER_WHERE_HIDDEN = "blocks a way until the story moves on (destinations are hidden: the reason, which " +
-            "names places, is left out); talk to them to learn what they wait for"
+        /** The SET battle style's reminder when the foe sent its next Pokémon ([battleStyle]). */
+        const val SET_STYLE_HINT = "set: the foe sent its next Pokémon without the game asking whether you switch; in the shift style " +
+            "it asks first, a free switch (no turn lost, no hit taken): set_options battle_style:shift"
+
+        /** What blocks a way on this map ([blockedBy]), one line each: at every knowledge level. */
+        const val BLOCKED_BY = "blocked_by"
+
+        /** A story blocker while destinations are hidden: its walkthrough reason names places, so it is left out. */
+        const val BLOCKER_WHERE_HIDDEN = "the walkthrough's reason is left out: it names places, and destinations are hidden"
+
+        /**
+         * The line of [blocker] in [BLOCKED_BY]: what the player sees, at every knowledge level (who stands where, or the
+         * trigger's tiles and what its scene does, [dev.kotlinds.pokemonclient.state.SceneTrigger]); with a [walkthrough],
+         * then why it blocks and what lifts it ([Blocker.reason], story knowledge), unless destinations are [hidden]
+         * (the reasons name places: [BLOCKER_WHERE_HIDDEN]).
+         */
+        internal fun blockedBy(blocker: Blocker, field: FieldState?, walkthrough: Boolean, hidden: Boolean): String {
+            val scene = blocker.scene
+            val seen = if (scene != null) {
+                "${blocker.target} at ${scene.tiles}: stepping there starts a scene " + when (scene.repeats) {
+                    true -> "that turns you back, again each time you step there, until the story moves on"
+                    false -> "(an event that happens once, then the way is free)"
+                    null -> "that may stop you or turn you back until the story moves on"
+                }
+            } else {
+                val o = field?.objects?.firstOrNull { it.id == blocker.target }
+                blocker.target + (o?.let { " (${it.label}) at ${it.x},${it.y}" } ?: "") + ": " + when (val cause = blocker.cause) {
+                    is BlockerCause.PasswordDoor -> "a locked door that opens with a password: talk to it (A)" +
+                        if (cause.known) " now, you have heard it" else " once you have heard it"
+                    is BlockerCause.WildPokemon -> "a Pokémon in the way: battle it (interact); it leaves once it faints or is caught"
+                    is BlockerCause.SleepingPokemon -> "a sleeping Pokémon in the way: talking to it doesn't wake it, something else must"
+                    null -> "stands in the way until a story event moves them; talk to them to learn what they wait for"
+                }
+            }
+            if (!walkthrough) return seen
+            return "$seen. Walkthrough: " + if (hidden) BLOCKER_WHERE_HIDDEN else blocker.reason
+        }
     }
 }
 

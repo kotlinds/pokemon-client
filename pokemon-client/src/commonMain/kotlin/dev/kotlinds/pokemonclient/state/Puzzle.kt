@@ -42,6 +42,14 @@ data class PuzzleState(
     val herds: List<PuzzleHerd> = emptyList(),
     /** Boulders to push into their hole (Ice Path B1F): each one drops to the floor below, where it stops slides. */
     val boulderHoles: List<PuzzleBoulderHole> = emptyList(),
+    /** Ice blocks pushed by sliding into them on the ice (the Mahogany Gym rooms): where each is, and whether it still moves. */
+    val iceBlocks: List<PuzzleIceBlock> = emptyList(),
+    /**
+     * People who step one tile aside once beaten (the Cinnabar Gym's trainers), and which way: `interact` / `go_to`
+     * talk to them from a side where that step keeps the way open. Which way is the game's script, shown to agents
+     * allowed a walkthrough only.
+     */
+    val stepAside: List<PuzzleStepAside> = emptyList(),
     /**
      * How to read what only a walkthrough shows of this puzzle (the herds' blind spots and plans...), in our words:
      * added to [rule] when the agent has a walkthrough, left out otherwise (it would name fields it doesn't get). Null
@@ -55,6 +63,24 @@ data class PuzzleState(
  * ([fallen] once it did). Other boulders can't fill that hole.
  */
 data class PuzzleBoulderHole(val boulder: String, val hole: PuzzleTile, val fallen: Boolean)
+
+/**
+ * An ice block ([block], `person:N`) on the ice at [at]: sliding into it pushes it on until it stops; [movable] false
+ * once it froze against another block (it never moves again until the room is entered anew).
+ */
+data class PuzzleIceBlock(val block: String, val at: PuzzleTile, val movable: Boolean)
+
+/**
+ * A trainer ([person], `person:N`) who steps one tile aside once beaten, the way [steps] says for each side the player
+ * talks from; [beaten]: already done (they don't step again).
+ */
+data class PuzzleStepAside(val person: String, val beaten: Boolean, val steps: List<StepAsideMove>) {
+    /** The way they step when the player talks to them facing [playerFacing]; null when unknown. */
+    fun stepFor(playerFacing: Direction): Direction? = steps.firstOrNull { it.playerFacing == playerFacing }?.steps
+}
+
+/** Talked to by a player facing [playerFacing], the trainer steps one tile towards [steps] once beaten. */
+data class StepAsideMove(val playerFacing: Direction, val steps: Direction)
 
 /** Kinds of [PuzzleState]. */
 enum class PuzzleKind {
@@ -92,6 +118,12 @@ enum class PuzzleKind {
 
     /** Strength boulders to push into holes so that they land on the floor below (Ice Path B1F). */
     BOULDER_HOLES,
+
+    /** Ice blocks pushed by sliding into them on the ice, which stop the slides where they come to rest (Mahogany Gym). */
+    ICE_BLOCKS,
+
+    /** Trainers who step one tile aside once beaten, opening or closing a way (Cinnabar Gym, in the Seafoam Islands). */
+    TRAINERS_STEP_ASIDE,
 }
 
 /**

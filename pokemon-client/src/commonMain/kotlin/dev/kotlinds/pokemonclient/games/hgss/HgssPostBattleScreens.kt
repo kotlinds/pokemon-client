@@ -2,6 +2,7 @@ package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.console.Button
+import dev.kotlinds.pokemonclient.data.MachineCompatibility
 import dev.kotlinds.pokemonclient.data.MachineId
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.Awaiting
@@ -134,8 +135,13 @@ internal object HgssPostBattleAddresses {
     const val ITEM_HM08 = 427
 }
 
-/** Can a Pokémon learn a TM / HM, as the party menu draws it (party_context_menu.c:838, msg_0300 158-160). */
-enum class TmCompatibility(val label: String) { ABLE("ABLE!"), UNABLE("UNABLE!"), LEARNED("LEARNED") }
+/** The label the TM party menu draws for each [MachineCompatibility.Fit] (party_context_menu.c:838, msg_0300 158-160): display only. */
+private val MachineCompatibility.Fit.label: String
+    get() = when (this) {
+        MachineCompatibility.Fit.ABLE -> "ABLE!"
+        MachineCompatibility.Fit.UNABLE -> "UNABLE!"
+        MachineCompatibility.Fit.LEARNED -> "LEARNED"
+    }
 
 /**
  * TM / HM data (`sTMHMMoves` src/item.c:31, personal data `tmhm`): from the ROM when one is loaded
@@ -166,14 +172,13 @@ object HgssMachines {
     /** True for the 8 HM moves (MoveIsHM, src/item.c:946): they can't be forgotten. */
     fun isHm(moveId: Int): Boolean = moveId != 0 && moves.drop(92).contains(moveId)
 
-    fun compatibility(species: Int, isEgg: Boolean, knownMoves: List<Int>, itemId: Int): TmCompatibility {
-        val machine = machineOf(itemId) ?: return TmCompatibility.UNABLE
-        return when {
-            isEgg -> TmCompatibility.UNABLE
-            moveOf(itemId) in knownMoves -> TmCompatibility.LEARNED
-            machine in compatibleMachines(species) -> TmCompatibility.ABLE
-            else -> TmCompatibility.UNABLE
-        }
+    /**
+     * Can [species] learn the machine [itemId] ([MachineCompatibility.of], the one rule), with this game's machine data:
+     * the ROM's when loaded, else the bundled tables (the screen is decoded without a ROM too).
+     */
+    fun compatibility(species: Int, isEgg: Boolean, knownMoves: List<Int>, itemId: Int): MachineCompatibility.Fit {
+        val machine = machineOf(itemId) ?: return MachineCompatibility.Fit.UNABLE
+        return MachineCompatibility.of(isEgg, knownMoves.map(::MoveId), moveOf(itemId).takeIf { it != 0 }?.let(::MoveId), machine in compatibleMachines(species))
     }
 }
 
@@ -453,7 +458,7 @@ internal object HgssPostBattleScreens : HgssScreenDecoder {
             } else {
                 val compat = HgssMachines.compatibility(mon.species, mon.isEgg, mon.moves.map { it.id }, item)
                 val name = if (mon.isEgg) "EGG" else mon.nickname ?: mon.speciesName
-                Entry(MonId(mon.personality, mon.otId).toString(), "$name Lv${mon.level} ${compat.label}", selectable = compat == TmCompatibility.ABLE)
+                Entry(MonId(mon.personality, mon.otId).toString(), "$name Lv${mon.level} ${compat.label}", selectable = compat == MachineCompatibility.Fit.ABLE)
             }
         } + Entry("option:cancel", "CANCEL")
         val raw = mem.u8(pm + P.PM_CURSOR)

@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.world
 
 import dev.kotlinds.pokemonclient.Direction
+import dev.kotlinds.pokemonclient.state.EventFlags
 
 /**
  * A way from a tile of [zone] to another zone: a door, stairs or ladder ([Kind.WARP]), or a hole the player falls
@@ -18,6 +19,8 @@ data class ZoneLink(
     /** Where the player arrives (the destination warp's tile, the hole's landing tile), when known. */
     val toX: Int?,
     val toY: Int?,
+    /** The step the game makes the player take once arrived ([Warp.arrivalStep]: off a ladder), or null. */
+    val arrivalStep: Direction? = null,
 ) {
     enum class Kind { WARP, HOLE }
 
@@ -48,7 +51,7 @@ object WorldLinks {
     fun links(world: WorldSource?, area: Area, zone: Int): List<ZoneLink> {
         val warps = area.warps.filter { it.zone == zone }.map { w ->
             val arrival = world?.areaOf(w.targetZone)?.warps?.firstOrNull { it.zone == w.targetZone && it.id == w.targetWarp }
-            ZoneLink(ZoneLink.Kind.WARP, "warp:${w.id}", zone, w.x, w.y, w.trigger, w.targetZone, arrival?.x, arrival?.y)
+            ZoneLink(ZoneLink.Kind.WARP, "warp:${w.id}", zone, w.x, w.y, w.trigger, w.targetZone, arrival?.x, arrival?.y, arrival?.arrivalStep)
         }
         val holes = area.triggerWarps.filter { it.zone == zone }.map { h ->
             ZoneLink(ZoneLink.Kind.HOLE, "hole:${h.trigger}", zone, h.x, h.y, WarpTrigger.Enter, h.targetZone, h.toX, h.toY)
@@ -69,6 +72,23 @@ object WorldLinks {
     }
 
     /**
+     * The ways out of a lift's room ([WorldSource.elevatorOf], [zone]) to the floors the lift goes to by itself
+     * ([ElevatorOperator.Shuttle]: entering rides it to the other floor), one link per floor from each way out, the
+     * player arriving on the floor's warp ([ElevatorStop]). Only the floor the ride went to is reached in the game: the
+     * walk planned again on arrival goes on from where the player really is. A lift whose floor is chosen (an
+     * attendant, a panel, a menu) has none: going there would need the choice (the error names who operates it).
+     */
+    fun elevatorLinks(world: WorldSource?, area: Area, zone: Int): List<ZoneLink> {
+        val elevator = world?.elevatorOf(zone)?.takeIf { it.operator == ElevatorOperator.Shuttle } ?: return emptyList()
+        return area.warps.filter { it.zone == zone && it.id in elevator.exitWarps }.flatMap { exit ->
+            elevator.stops.mapNotNull { stop ->
+                val arrival = world.areaOf(stop.zone)?.warps?.firstOrNull { it.zone == stop.zone && it.id == stop.warp } ?: return@mapNotNull null
+                ZoneLink(ZoneLink.Kind.WARP, "warp:${exit.id}", zone, exit.x, exit.y, exit.trigger, stop.zone, arrival.x, arrival.y, arrival.arrivalStep)
+            }
+        }
+    }
+
+    /**
      * True when taking [link] leaves no way back to [link]'s map from where the player arrives (`one_way` of the
      * agent's exits; holes always). The arrival is the destination warp's tile ([ZoneLink.toX], [ZoneLink.toY]):
      * - the warp there takes the player back when it leads to [link]'s map (a dynamic one, an elevator's, too) and can
@@ -81,24 +101,24 @@ object WorldLinks {
      * - else another warp of that map leading back, reached by walking from the arrival ([Pathfinder.reaches], at
      *   most [BACK_SEARCH] places: beyond, not known, so not called one way): the forest exit doors just above the
      *   floor tile where Viridian Forest is entered.
-     * People of the destination stand where its events place them when [present] says they are there: the man waiting
-     * for the Power Plant on the only free side of Route 5's underground gate entrance, the Radio Tower 2F guard on the
-     * stairs reached from Route 12, an item ball on the Goldenrod Tunnel B1F arrival reached from Route 36
-     * (NOTES-run-map-randomizer). Unknown arrivals (no destination warp) aren't called one way. [options]: how the
-     * player can move (field moves).
+     * People of the destination stand where its events place them when the save's event [flags] say they are there
+     * ([WorldRouter.knownOverlay]): the man waiting for the Power Plant on the only free side of Route 5's underground
+     * gate entrance, the Radio Tower 2F guard on the stairs reached from Route 12, an item ball on the Goldenrod Tunnel
+     * B1F arrival reached from Route 36 (NOTES-run-map-randomizer). Unknown arrivals (no destination warp) aren't
+     * called one way. [options]: how the player can move (field moves).
      */
-    fun noWayBack(world: WorldSource, link: ZoneLink, options: RouteOptions, present: (PersonTemplate) -> Boolean): Boolean {
+    fun noWayBack(world: WorldSource, link: ZoneLink, options: RouteOptions, flags: EventFlags?): Boolean {
         if (link.oneWay) return true
         val toX = link.toX ?: return false
         val toY = link.toY ?: return false
         val area = world.areaOf(link.targetZone) ?: return false
         val arrival = area.warps.firstOrNull { it.zone == link.targetZone && it.x == toX && it.y == toY } ?: return false
-        val people = area.people.filter { it.zone == link.targetZone && it.obstacle == null && present(it) }
-        val pathfinder = Pathfinder(area, WorldRouter.staticOverlay(area).let { o -> o.copy(objects = o.objects + people.map { LiveObject(it.x, it.y, it.facing) }) })
+        val overlay = WorldRouter.knownOverlay(area, flags)
+        val pathfinder = Pathfinder(area, overlay)
         val at = Node(toX, toY)
         // A destination unknown to the map data (an elevator's dynamic warp) leads wherever the player came from.
         fun leadsBack(w: Warp) = w.targetZone == link.zone || world.areaOf(w.targetZone) == null
-        if (leadsBack(arrival) && arrival.trigger != WarpTrigger.Never && people.none { it.x == toX && it.y == toY }) {
+        if (leadsBack(arrival) && arrival.trigger != WarpTrigger.Never && overlay.objects.none { it.clearedBy == null && it.x == toX && it.y == toY }) {
             // Taken again without leaving the tile: a press on it, or a door (collision) faced from where the game
             // walked the player out to.
             val again = arrival.trigger is WarpTrigger.Press || area.tile(toX, toY)?.blocked == true
@@ -115,13 +135,15 @@ object WorldLinks {
     /**
      * The warps of [zone] that are one door with others ([Warp.id] → the other warps' ids, in order): side by side
      * (orthogonal neighbours, chained) and leading to the same place (the same destination warp, or destination warps
-     * side by side themselves, [world] telling where they are). A double door is two warps in the map data, but one
+     * side by side themselves, [world] telling where they are), or on the very same tile (the game only takes the first
+     * of them, the others are never taken: [WarpTrigger.Never]). A double door is two warps in the map data, but one
      * doorway in the game (a map randomizer shuffles them together): an explorer tests it once. Ids stay one per warp.
      */
     fun sameDoors(world: WorldSource?, area: Area, zone: Int): Map<Int, List<Int>> {
         val warps = area.warps.filter { it.zone == zone }
         fun arrival(w: Warp) = world?.areaOf(w.targetZone)?.warps?.firstOrNull { it.zone == w.targetZone && it.id == w.targetWarp }
         fun together(a: Warp, b: Warp): Boolean {
+            if (a.x == b.x && a.y == b.y) return true
             if (kotlin.math.abs(a.x - b.x) + kotlin.math.abs(a.y - b.y) != 1 || a.targetZone != b.targetZone) return false
             if (a.targetWarp == b.targetWarp) return true
             val ta = arrival(a) ?: return false
@@ -142,6 +164,24 @@ object WorldLinks {
             ids.forEach { id -> groups[id] = ids - id }
         }
         return groups
+    }
+
+    /**
+     * The level ([Node.level], an index of [TileInfo.heights]) the warp on ([x], [y]) of [area] is taken at, when its
+     * tile has several surfaces: the one level a neighbouring tile with a single surface leads onto (the ground in front
+     * of the door). A bridge passing over a door (Route 47's warp:1 at 130,385: the door at height 160, the bridge deck
+     * at 208) is the other surface, from which the door isn't taken. Null on a tile of one surface, or when the
+     * neighbours don't tell one level (any level then).
+     */
+    fun warpLevel(area: Area, x: Int, y: Int): Int? {
+        val heights = area.tile(x, y)?.heights.orEmpty()
+        if (heights.size <= 1) return null
+        val climb = RouteOptions.DEFAULT_MAX_CLIMB
+        val levels = Direction.entries.flatMap { d ->
+            val next = area.tile(x + d.dx, y + d.dy)?.takeIf { !it.blocked && it.kind != TileKind.Wall && it.heights.size == 1 } ?: return@flatMap emptyList()
+            heights.indices.filter { kotlin.math.abs(heights[it] - next.heights.single()) <= climb }
+        }.toSet()
+        return levels.singleOrNull()
     }
 
     /** Warps of [zone] whose destination is [zone] itself (see [sameZoneTeleports]). */

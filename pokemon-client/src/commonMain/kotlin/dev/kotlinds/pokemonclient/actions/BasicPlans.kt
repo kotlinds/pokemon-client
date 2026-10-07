@@ -99,7 +99,7 @@ internal object BasicPlans {
                     return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "${call.caller} hung up: no call to answer"))
                 }
                 if (screen !is Screen.Overworld && screen !is Screen.Animation && screen !is Screen.Unknown && screen !is Screen.Dialogue) {
-                    return Step.Failed(ActionError.UnexpectedScreen("${call.caller}'s call", screen.kind))
+                    return Step.Failed(ActionError.UnexpectedScreen("${call.caller}'s call", screen))
                 }
             }
         }
@@ -189,33 +189,56 @@ internal object BasicPlans {
                     .then { ActionOutcome.Done() }
                 state.battle == null -> ActionOutcome.Done("no switch question: the battle is over")
                 state.screen is Screen.BattleCommand -> ActionOutcome.Done("no switch question: the foe sent its next Pokémon")
-                else -> ActionOutcome.Failed(ActionError.UnexpectedScreen("the switch-or-keep question", state.screen.kind))
+                else -> ActionOutcome.Failed(ActionError.UnexpectedScreen("the switch-or-keep question", state.screen))
             }
         }
     }
 
     /**
      * FIGHT, then the move (checked by id / name), then the target in doubles. The move is checked against the active
-     * Pokémon's moves BEFORE anything is pressed (a move it doesn't know, or without PP, leaves the menu untouched).
-     * On the target screen, a move with a single possible choice (spread moves: "all targets") is confirmed without
-     * asking for a target.
+     * Pokémon's moves BEFORE anything is pressed ([BattleMoveChoice.refusal]: a move it doesn't know, without PP,
+     * disabled, taunted, or another than the encored one leaves the menu untouched). Under Encore, or when no move can
+     * be chosen (Struggle), the game skips the move list: FIGHT alone plays the turn, and that is the success.
+     * Started from the move list already open (a previous attempt), the move is picked there. A move the list refuses
+     * (Torment, Imprison, a Choice item: not selectable) backs out to the command menu with a typed error. On the
+     * target screen, a move with a single possible choice (spread moves: "all targets") is confirmed without asking
+     * for a target.
      */
     val attack = ActionPlan<GameAction.Attack> { action, context ->
         val start = context.state()
         val battle = start.battle
-        val actor = battle?.battlers?.firstOrNull { it.ref == ((start.screen as? Screen.BattleCommand)?.actor ?: battle.actor ?: BattlerRef.PLAYER_LEFT) }
-        if (actor != null && actor.moves.isNotEmpty()) {
-            val known = actor.moves.firstOrNull { matchesRef(action.move.raw, "move", it.move.id.value, it.move.name) }
-                ?: return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("move", action.move.raw, actor.moves.map { "move:${it.move.id.value} = ${it.move.name}" }))
-            if (known.pp == 0) return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PP, "${known.move.name} has no PP left"))
-        }
-        context.navigator.choose(Screen.BattleCommand::class, "FIGHT") { it.id == "option:fight" }.then {
-            val moves = context.state().screen as? Screen.MoveSelect
-                ?: return@then ActionOutcome.Failed(ActionError.UnexpectedScreen("the move list", context.state().screen.toString()))
+        val actorRef = (start.screen as? Screen.BattleCommand)?.actor ?: battle?.actor ?: BattlerRef.PLAYER_LEFT
+        val actor = battle?.battlers?.firstOrNull { it.ref == actorRef }
+        if (actor != null) BattleMoveChoice.refusal(actor, action.move)?.let { return@ActionPlan ActionOutcome.Failed(it) }
+        val toList = if (start.screen is Screen.MoveSelect) Step.Done(start)
+        else context.navigator.choose(Screen.BattleCommand::class, "FIGHT") { it.id == "option:fight" }
+        toList.then {
+            val now = context.state()
+            val moves = now.screen as? Screen.MoveSelect
+            if (moves == null) {
+                // Encore / Struggle: no move list, the turn is under way (or the next Pokémon's command menu is up).
+                val skipped = actor?.let(BattleMoveChoice::skippedList)
+                return@then when {
+                    skipped != null -> ActionOutcome.Done(skipped)
+                    // What the state can't tell left no move (Torment, Imprison, Gravity, Heal Block, a Choice item):
+                    // the game skipped the list for Struggle, seen as the turn under way (its messages, animations) or
+                    // the next Pokémon's command menu (doubles).
+                    turnUnderWay(now.screen, actorRef, battle?.isDouble == true) -> ActionOutcome.Done(BattleMoveChoice.STRUGGLED_UNSEEN)
+                    else -> ActionOutcome.Failed(ActionError.UnexpectedScreen("the move list", now.screen))
+                }
+            }
             val wanted = moves.entries.firstOrNull { entry ->
                 val id = entry.id.removePrefix("move:").toIntOrNull() ?: return@firstOrNull false
                 matchesRef(action.move.raw, "move", id, entry.label.substringBefore(" ("))
-            } ?: return@then backOut(context, ActionError.InvalidParameter("move", action.move.raw, moves.entries.filter { it.id.startsWith("move:") }.map { it.label.substringBefore(" (") }))
+            } ?: return@then backOut(context, ActionError.InvalidParameter("move", action.move.raw, moves.entries.filter { it.id.startsWith("move:") && it.selectable }.map { "${it.id} = ${it.label.substringBefore(" (")}" }))
+            if (!wanted.selectable) return@then backOut(
+                context,
+                ActionError.Unavailable(
+                    UnavailableReason.MOVE_REFUSED,
+                    "the game refuses ${wanted.label.substringBefore(" (")} this turn (Disable, Taunt, Torment, Imprison or a Choice item)",
+                    "choose among " + moves.entries.filter { it.id.startsWith("move:") && it.selectable }.joinToString { "${it.id} ${it.label.substringBefore(" (")}" },
+                ),
+            )
             context.navigator.choose(Screen.MoveSelect::class, wanted.label) { it.id == wanted.id }.then { after ->
                 val targets = after.screen as? Screen.TargetSelect
                 if (targets == null) {
@@ -234,9 +257,16 @@ internal object BasicPlans {
                         is Step.Failed -> backOut(context, chosen.error)
                     }
                 }
-            }
+            }.let { outcome -> if (outcome is ActionOutcome.Failed && context.state().screen.let { it is Screen.MoveSelect || it is Screen.TargetSelect }) backOut(context, outcome.error) else outcome }
         }
     }
+
+    /**
+     * True when [screen], right after FIGHT for [actor], is the turn being played: the battle's messages and
+     * animations, or in a [double] battle the command menu of the player's other Pokémon. Never the same actor's menu.
+     */
+    private fun turnUnderWay(screen: Screen, actor: BattlerRef, double: Boolean): Boolean =
+        screen is Screen.Battle || (double && screen is Screen.BattleCommand && screen.actor != null && screen.actor != actor)
 
     /** Leaves the move / target screens (B) back to the command menu, then fails with [error]. */
     private fun backOut(context: PlanContext, error: ActionError): ActionOutcome {

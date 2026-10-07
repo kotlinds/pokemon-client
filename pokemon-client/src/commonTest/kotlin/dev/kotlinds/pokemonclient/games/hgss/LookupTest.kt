@@ -80,6 +80,63 @@ class LookupTest {
     }
 
     @Test
+    fun itemsTellWhatTheyDoAtEveryKnowledgeLevel() {
+        // What the bag's description tells a player: shown without the Pokédex.
+        val none = lookup(KnowledgeLevel.NONE)
+        fun effect(name: String) = none.lookup(LookupKind.ITEM, name).getOrThrow()["effect"]?.jsonObject
+        assertEquals("20", effect("Potion")!!["hp"]!!.jsonPrimitive.content)
+        assertEquals("full", effect("Max Potion")!!["hp"]!!.jsonPrimitive.content)
+        // Full Heal: every major status and confusion (not infatuation).
+        assertEquals(listOf("sleep", "poison", "burn", "freeze", "paralysis", "confusion"), effect("Full Heal")!!["cures"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("paralysis"), effect("Parlyz Heal")!!["cures"]!!.jsonArray.map { it.jsonPrimitive.content })
+        // Full Restore: HP and statuses in one turn (Claude used a Max Potion then a status heal on Lance's Dragonite).
+        val fullRestore = effect("Full Restore")!!
+        assertEquals("full", fullRestore["hp"]!!.jsonPrimitive.content)
+        assertEquals("a fainted Pokémon", effect("Revive")!!["revives"]!!.jsonPrimitive.content)
+        assertEquals("10 PP to one move", effect("Ether")!!["pp"]!!.jsonPrimitive.content)
+        assertEquals("1", effect("X Attack")!!["battle_stages"]!!.jsonObject["attack"]!!.jsonPrimitive.content)
+        assertEquals("1", effect("Rare Candy")!!["level_up"]!!.jsonPrimitive.content)
+        assertEquals("10", effect("HP Up")!!["effort_values"]!!.jsonObject["hp"]!!.jsonPrimitive.content)
+        // Nothing to use on a Pokémon: no effect.
+        assertEquals(null, effect("Poke Ball"))
+    }
+
+    /** A party member of species [species] (index [n]) knowing [moves], for `mon:` ids and who can learn a TM. */
+    private fun partyMon(n: Int, species: Int, moves: List<Int> = emptyList()) = dev.kotlinds.pokemonclient.state.PartyMon(
+        id = dev.kotlinds.pokemonclient.state.MonId(n.toLong(), 7), slot = n - 1,
+        species = dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.SpeciesId(species), "MON$n"), nickname = null, level = 30,
+        hp = 50, maxHp = 50, status = null, types = emptyList(), heldItem = null, ability = null,
+        moves = moves.map { dev.kotlinds.pokemonclient.state.KnownMove(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.MoveId(it), "M$it"), 10, 10) },
+        stats = emptyMap(), exp = 0, expToNextLevel = null, isEgg = false,
+    )
+
+    @Test
+    fun machinesSayWhoOfThePartyCanLearnThem() {
+        // Race: Shadow Ball (TM30) taught blindly to Tentacruel and Feraligatr (their first stages here), Fly (HM02) to Togepi and Rattata.
+        val party = listOf(partyMon(1, 72), partyMon(2, 92), partyMon(3, 158), partyMon(4, 18))
+        val data = HgssWorldRom.requireData()
+        val lookup = Lookup(data, KnowledgeLevel.POKEDEX, party = party)
+        val shadowBall = lookup.lookup(LookupKind.MACHINE, "TM30").getOrThrow()
+        assertEquals(listOf("${party[1].id} MON2"), shadowBall["party_can_learn"]!!.jsonArray.map { it.jsonPrimitive.content })
+        // The machine's item id gives the same answer; Fly: Pidgeot only.
+        assertEquals(shadowBall, lookup.lookup(LookupKind.MACHINE, "item:357").getOrThrow())
+        assertEquals(listOf("${party[3].id} MON4"), lookup.lookup(LookupKind.MACHINE, "HM02").getOrThrow()["party_can_learn"]!!.jsonArray.map { it.jsonPrimitive.content })
+        // Nobody: said so.
+        assertEquals(listOf("nobody in the party"), Lookup(data, KnowledgeLevel.POKEDEX, party = listOf(party[2])).lookup(LookupKind.MACHINE, "HM02").getOrThrow()["party_can_learn"]!!.jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun learnsetsListTheMachinesAndAcceptPartyIds() {
+        val party = listOf(partyMon(1, 1))
+        val lookup = Lookup(HgssWorldRom.requireData(), KnowledgeLevel.POKEDEX, party = party)
+        val byMon = lookup.lookup(LookupKind.LEARNSET, party[0].id.toString()).getOrThrow()
+        assertEquals(lookup.lookup(LookupKind.LEARNSET, "species:1").getOrThrow(), byMon)
+        assertTrue(byMon["machines"]!!.jsonArray.any { it.jsonPrimitive.content.startsWith("HM01 ") }, "Bulbasaur learns Cut")
+        assertEquals(lookup.lookup(LookupKind.SPECIES, "species:1").getOrThrow(), lookup.lookup(LookupKind.SPECIES, party[0].id.toString()).getOrThrow())
+        assertTrue(lookup.lookup(LookupKind.SPECIES, "mon:00000009.00000009").exceptionOrNull()?.message.orEmpty().contains("in the party"))
+    }
+
+    @Test
     fun itemsAreFoundByTheirNames() {
         val none = lookup(KnowledgeLevel.NONE)
         for ((name, id) in listOf("Revive" to 28, "REVIVE" to 28, "Full Restore" to 23, "Poke Ball" to 4, "Poké Ball" to 4, "Max Repel" to 77, "HP Up" to 45, "Parlyz Heal" to 22, "X Sp. Def" to 62)) {

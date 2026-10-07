@@ -30,6 +30,8 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
 
     override fun scriptFlag(memory: Memory, id: Int): Boolean? = HgssReader(memory, version).flag(id)
 
+    override fun savedPuzzles(memory: Memory) = HgssPuzzles.saved(HgssPuzzles.reads(HgssReader(memory, version)))
+
     /**
      * The place shown in game and the map's own name: "New Bark Town (New Bark Player House 2F)", read from this game's
      * ROM ([HgssWorldSource.mapName]); from the bundled decomp tables without a ROM ([HgssData.bundledMapName]).
@@ -72,7 +74,9 @@ class HgssGame(private val version: HgssVersion, rom: NdsRom? = null) : dev.kotl
     private fun withMapState(mapped: GameState, field: dev.kotlinds.pokemonclient.state.FieldState, reader: HgssReader, state: HgssState): GameState {
         val area = world?.areaOf(field.mapId)
         val people = field.objects.mapNotNull { o -> o.id.removePrefix("person:").toIntOrNull()?.let { HgssIlexFarfetchd.ObjectAt(it, o.x, o.y, o.facing) } }
-        val puzzle = HgssPuzzles.read(field.mapId, HgssPuzzles.reads(reader), area, people)
+        val iceBlocks = field.objects.filter { it.obstacle == dev.kotlinds.pokemonclient.state.ObstacleKind.ICE_BLOCK }
+            .mapNotNull { o -> o.id.removePrefix("person:").toIntOrNull()?.let { HgssIlexFarfetchd.ObjectAt(it, o.x, o.y, o.facing) } }
+        val puzzle = HgssPuzzles.read(field.mapId, HgssPuzzles.reads(reader), area, people, iceBlocks)
         val pickedUp = area?.signs.orEmpty()
             .filter { it.zone == field.mapId && it.kind == SignKind.HIDDEN_ITEM && it.flag?.let(reader::flag) == true }
             .map { "hidden_item:${it.id}" }.toSet()

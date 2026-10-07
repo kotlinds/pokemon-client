@@ -84,6 +84,17 @@ sealed interface ChainStop {
         override val code = "NOT_OFFERED"
         override val message get() = "`$key` isn't an option on this screen: the steps left were chosen for another one, choose again"
     }
+
+    /**
+     * A step names [target], an id of the map the chain started on ([GameAction.mapLocalTarget]: `person:6` of
+     * [from]), while an earlier step took the player to [now]: the ids there are another map's (another person, or
+     * none), so the step and those after it are given back. Look at the new map's ids, then choose again.
+     */
+    data class TargetOnOtherMap(val key: String, val target: String, val from: String, val now: String) : ChainStop {
+        override val code = "TARGET_ON_OTHER_MAP"
+        override val message get() = "`$key` names $target of $from, but you are now on $now: ids like $target belong to the map they " +
+            "were read on, look at this map's ids and choose again"
+    }
 }
 
 /**
@@ -399,6 +410,7 @@ class ChainRunner(
                 }
                 if (drops(resolved, now)) continue
                 stopBefore(watch, now, started)?.let { stop -> return result(skipped = steps.drop(index), stop = stop) }
+                if (step is ChainStep.Planned) otherMap(resolved, start, now)?.let { stop -> return result(skipped = steps.drop(index), stop = stop) }
                 action = resolved
             } else {
                 action = step.on(start) ?: return result(skipped = steps, stop = ChainStop.NotOffered(step.key))
@@ -448,6 +460,19 @@ class ChainRunner(
         }
         flush()
         return merged
+    }
+
+    /**
+     * Why planned [action] mustn't run in [now]: it names an id of the map the chain started on ([start]) and the
+     * player is on another one ([ChainStop.TargetOnOtherMap]). The ids of an agent's chain were read on the state it
+     * saw before calling; a step keyed on the screen reached ([ChainStep.ByKey]) resolves on that map and isn't checked.
+     */
+    private fun otherMap(action: GameAction, start: GameState, now: GameState): ChainStop? {
+        val target = action.mapLocalTarget ?: return null
+        val from = start.field ?: return null
+        val here = now.field ?: return null
+        if (here.mapId == from.mapId) return null
+        return ChainStop.TargetOnOtherMap(action.key, target, from.mapName.toString(), here.mapName.toString())
     }
 
     /** The battle still plays out by itself in [state] (a turn, faint messages, the end of the battle). */

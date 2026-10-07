@@ -1,5 +1,6 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.games.gen4.Gen4BattleWeather
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Pokemon
 import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.console.Button
@@ -182,6 +183,7 @@ class HgssStateMapper {
                                 in SHUTTER_SPRITES -> PersonRole.SHUTTER
                                 else -> null
                             },
+                            open = if (o.sprite in GATE_SPRITES) HgssBlockers.doorOpen(o.mapId.takeIf { it >= 0 } ?: l.mapId, o.id, o.x, o.z) else null,
                             obstacle = when (o.sprite) {
                                 "TREE" -> ObstacleKind.CUT_TREE
                                 "BREAKROCK" -> ObstacleKind.SMASH_ROCK
@@ -414,7 +416,7 @@ class HgssStateMapper {
                 hp = battler.hp,
                 maxHp = battler.maxHp,
                 status = HgssStatuses.major(battler.statusRaw),
-                volatile = HgssStatuses.volatile(battler.status2, battler.moveEffects, battler.counters),
+                volatile = HgssStatuses.volatile(battler.status2, battler.moveEffects, battler.counters, battler.disabledMove, battler.encoredMove) { HgssData.moveName(it) },
                 statStages = battler.statStages.mapNotNull { (name, value) ->
                     STAGE_NAMES[name]?.takeIf { value != 0 }?.let { it to value }
                 }.toMap(),
@@ -444,6 +446,7 @@ class HgssStateMapper {
             message = b.message,
             turn = b.turn,
             outcome = outcome(b),
+            weather = Gen4BattleWeather.of(b.fieldCondition, b.weatherTurns),
         )
     }
 

@@ -63,6 +63,8 @@ class HgssWorldSource(rom: NdsRom, private val version: HgssVersion) : Gen4World
 
     override fun warpTrigger(behavior: Int): WarpTrigger = HgssTileBehaviors.warpTrigger(behavior)
 
+    override fun arrivalStep(behavior: Int): dev.kotlinds.pokemonclient.Direction? = HgssTileBehaviors.arrivalStep(behavior)
+
     /** The obstacles by sprite name (include/constants/sprites.h): the sprite ids are HGSS's. */
     override fun obstacle(sprite: Int): FieldMoveKind? = when (HgssData.spriteName(sprite)) {
         "TREE" -> FieldMoveKind.CUT
@@ -117,6 +119,13 @@ class HgssWorldSource(rom: NdsRom, private val version: HgssVersion) : Gen4World
                 ?.let { w -> TriggerWarp(zone, i, c.x, c.z, w.zone, w.x, w.z) }
         }
     }
+
+    /** The people of [zone] its scripts move elsewhere ([HgssScripts.movedPeople]). */
+    override fun movedPeople(zone: Int): Set<Int> = scriptFile(zone)?.let(HgssScripts::movedPeople).orEmpty()
+
+    /** The lift commands (`SetDynamicWarp`) of zone [zoneId]'s scripts ([HgssScripts.dynamicWarps]). */
+    override fun dynamicWarps(zoneId: Int): List<DynamicWarp> =
+        scriptFile(zoneId)?.let { file -> HgssScripts.dynamicWarps(file, headers.size).map { DynamicWarp(it.scriptId, it.zone, it.warp) } }.orEmpty()
 
     /** Coordinate triggers of [zone] whose script warps the player within [zone] itself ([HgssScripts]). */
     override fun scriptWarps(zone: Int, events: Gen4ZoneEvents): List<ScriptWarp> {

@@ -11,7 +11,6 @@ import dev.kotlinds.pokemonclient.world.FieldMoves
 import dev.kotlinds.pokemonclient.world.NeedsMechanism
 import dev.kotlinds.pokemonclient.world.Node
 import dev.kotlinds.pokemonclient.world.Pathfinder
-import dev.kotlinds.pokemonclient.world.PersonTemplate
 import dev.kotlinds.pokemonclient.world.RouteFailure
 import dev.kotlinds.pokemonclient.world.StepWeights
 import dev.kotlinds.pokemonclient.world.WorldLinks
@@ -33,6 +32,11 @@ data class Reachability(
     /** A puzzle in the only way: a closed shutter, or a mechanism left to the agent (a lift, a boulder to push). */
     val blockedByPuzzle: String? = null,
     /**
+     * The scene trigger the only way crosses (`trigger:N`): stepping there starts a scene, which may stop the player or
+     * turn them back (Mahogany's east exit, closed by a man sending the player back: NOTES-run-map-randomizer).
+     */
+    val blockedByScene: String? = null,
+    /**
      * No way back: reached only by jumping down ledges, or (exits) taking it leaves no way back through the warp the
      * player arrives on ([WorldLinks.noWayBack]: a hole, an arrival-only warp, an arrival someone stands on).
      */
@@ -44,13 +48,14 @@ data class Reachability(
     /**
      * The set fields as the agent reads them, snake_case like the rest of the MCP (`accept_one_way`...):
      * `requires_intermediate_warp`, `requires_field_moves: [surf, strength]`, `blocked_by_person: person:3 (gym guide)`,
-     * `blocked_by_puzzle: ...`, `one_way`. Empty when [direct].
+     * `blocked_by_puzzle: ...`, `blocked_by_scene: trigger:0`, `one_way`. Empty when [direct].
      */
     fun fields(): List<String> = buildList {
         if (requiresIntermediateWarp) add(REQUIRES_INTERMEDIATE_WARP)
         if (requiresFieldMoves.isNotEmpty()) add("$REQUIRES_FIELD_MOVES: [${requiresFieldMoves.joinToString { it.name.lowercase() }}]")
         blockedByPerson?.let { add("$BLOCKED_BY_PERSON: ${MovePlans.objectTargetId(it)} (${it.label})") }
         blockedByPuzzle?.let { add("$BLOCKED_BY_PUZZLE: $it") }
+        blockedByScene?.let { add("$BLOCKED_BY_SCENE: $it") }
         if (oneWay) add(ONE_WAY)
     }
 
@@ -64,6 +69,7 @@ data class Reachability(
         const val REQUIRES_FIELD_MOVES = "requires_field_moves"
         const val BLOCKED_BY_PERSON = "blocked_by_person"
         const val BLOCKED_BY_PUZZLE = "blocked_by_puzzle"
+        const val BLOCKED_BY_SCENE = "blocked_by_scene"
         const val ONE_WAY = "one_way"
 
         /**
@@ -73,9 +79,10 @@ data class Reachability(
         fun of(failure: RouteFailure, blockers: Blockers, field: FieldState?): Reachability? {
             fun objectAt(at: Pair<Int, Int>?) = at?.let { (x, y) -> field?.objects?.firstOrNull { it.x == x && it.y == y } }
             return when (failure) {
-                RouteFailure.StartUnknown, RouteFailure.TargetUnknown, is RouteFailure.LongDetour -> null
+                RouteFailure.StartUnknown, RouteFailure.TargetUnknown, is RouteFailure.LongDetour, is RouteFailure.Oscillation, is RouteFailure.ElevatorFloor -> null
                 RouteFailure.OnlyOneWay -> Reachability(oneWay = true)
-                RouteFailure.DifferentLevel, RouteFailure.Unreachable -> Reachability(requiresIntermediateWarp = true)
+                // Another level, and maybe someone standing in that way too ([Pathfinder.diagnose]'s last step).
+                RouteFailure.DifferentLevel, RouteFailure.Unreachable -> Reachability(requiresIntermediateWarp = true, blockedByPerson = objectAt(blockers.person))
                 is NeedsMechanism -> Reachability(blockedByPuzzle = "${failure.mechanism.name.lowercase()} at ${failure.x},${failure.y} (left to you, see field.puzzle)")
                 is RouteFailure.NeedsFieldMove, is RouteFailure.BlockedByPerson, is RouteFailure.BlockedByBarrier -> {
                     val moves = blockers.fieldMoves.ifEmpty { listOfNotNull((failure as? RouteFailure.NeedsFieldMove)?.move) }
@@ -123,11 +130,11 @@ internal class ReachSurvey(private val game: PokemonGame, private val state: Gam
     private val triggers: Set<Pair<Int, Int>> = field?.activeTriggers.orEmpty()
 
     private val pathfinder: Pathfinder? =
-        if (!surveyed) null else Pathfinder(area!!, MovePlans.overlay(area, field!!, emptySet(), triggers, settings.solvePuzzles, onThisMap = true))
+        if (!surveyed) null else Pathfinder(area!!, MovePlans.overlay(area, field!!, emptySet(), triggers, settings.solvePuzzles, onThisMap = true, state.eventFlags))
     private val start: Node? = field?.let { pathfinder?.nodeOf(it) }
 
     /** The overlay where puzzles are solved, to name the mechanism a way needs while they are left to the agent. */
-    private val solving by lazy { MovePlans.overlay(area, field!!, emptySet(), triggers, solve = true, onThisMap = true) }
+    private val solving by lazy { MovePlans.overlay(area, field!!, emptySet(), triggers, solve = true, onThisMap = true, state.eventFlags) }
 
     /** Tiles any target may enter (warps, holes, the next map's first tiles): entered, never walked through. */
     private val enterable: Set<Pair<Int, Int>> by lazy {
@@ -142,6 +149,13 @@ internal class ReachSurvey(private val game: PokemonGame, private val state: Gam
     private val jumped: Set<Node> by lazy { flood(allowJumps = true) }
 
     /**
+     * The same searches never stepping on an active scene trigger (only made when the map has some): a target only
+     * they miss is reached through a scene ([Reachability.blockedByScene]).
+     */
+    private val walkedClear: Set<Node> by lazy { if (triggers.isEmpty()) walked else flood(allowJumps = false, allowTriggers = false) }
+    private val jumpedClear: Set<Node> by lazy { if (triggers.isEmpty()) jumped else flood(allowJumps = true, allowTriggers = false) }
+
+    /**
      * Only for the targets [walked] and [jumped] miss: the places a diagnosis can reach at all, crossing what it
      * crosses ([crossed]), or climbing any height ([anyHeight]). A target out of both is [RouteFailure.Unreachable]
      * without a diagnosis of its own (each would search the whole map again): the very answer [Pathfinder.diagnose]
@@ -152,10 +166,15 @@ internal class ReachSurvey(private val game: PokemonGame, private val state: Gam
         flood(allowJumps = true, options = options?.copy(maxClimb = Int.MAX_VALUE / 2)).map { it.x to it.y }.toSet()
     }
 
-    private fun flood(allowJumps: Boolean, crossing: Boolean = false, options: dev.kotlinds.pokemonclient.world.RouteOptions? = this.options): Set<Node> {
+    /** Climbing any height and crossing what [crossed] crosses: the last places a diagnosis can reach (a person on a way between levels). */
+    private val anyHeightCrossed: Set<Pair<Int, Int>> by lazy {
+        flood(allowJumps = true, crossing = true, options = options?.copy(maxClimb = Int.MAX_VALUE / 2)).map { it.x to it.y }.toSet()
+    }
+
+    private fun flood(allowJumps: Boolean, crossing: Boolean = false, options: dev.kotlinds.pokemonclient.world.RouteOptions? = this.options, allowTriggers: Boolean = true): Set<Node> {
         val p = pathfinder ?: return emptySet()
         val s = start ?: return emptySet()
-        return p.reachable(s, options!!, maxCost = Int.MAX_VALUE, allowJumps = allowJumps, allowTriggers = true, goalTiles = enterable, crossing = crossing).keys + s
+        return p.reachable(s, options!!, maxCost = Int.MAX_VALUE, allowJumps = allowJumps, allowTriggers = allowTriggers, goalTiles = enterable, crossing = crossing).keys + s
     }
 
     private val byId = HashMap<String, Reachability>()
@@ -189,20 +208,40 @@ internal class ReachSurvey(private val game: PokemonGame, private val state: Gam
         // Standing on it (a warp: go_to presses it, or steps off and on) or next to it already.
         if (isGoal(s) || (s.x to s.y) in goals) return Reachability.DIRECT
         val reached = { nodes: Set<Node> -> nodes.firstOrNull { it != s && (it.x to it.y) in goals && isGoal(it) } }
-        if (reached(walked) != null) return Reachability.DIRECT
-        // Only over ledges: fine while the player can walk back (ledges are a shortcut then), one way otherwise.
-        reached(jumped)?.let { end -> return if (p.hasWayBack(end, s, options!!, triggers = true)) Reachability.DIRECT else Reachability(oneWay = true) }
         val enter = if (target.adjacent) emptySet() else goals
+        // Reached only through a scene trigger: say which one (the scene may turn the player back).
+        val scene = { if (reached(walkedClear) == null && reached(jumpedClear) == null) sceneOnTheWay(p, s, enter, MovePlans.beside(a, target), isGoal) else null }
+        if (reached(walked) != null) return scene()?.let { Reachability(blockedByScene = it) } ?: Reachability.DIRECT
+        // Only over ledges: fine while the player can walk back (ledges are a shortcut then), one way otherwise.
+        reached(jumped)?.let { end ->
+            val oneWay = !p.hasWayBack(end, s, options!!, triggers = true)
+            return Reachability(oneWay = oneWay, blockedByScene = scene())
+        }
         val beside = MovePlans.beside(a, target)
         // Out of reach of any diagnosis (next to it at another height is told by the diagnosis itself).
         if (goals.none { it in crossed } && (beside == null || jumped.none { (it.x to it.y) in beside.tiles })) {
-            return Reachability.of(if (goals.any { it in anyHeight }) RouteFailure.DifferentLevel else RouteFailure.Unreachable, Blockers(), field)!!
+            if (goals.any { it in anyHeight }) return Reachability.of(RouteFailure.DifferentLevel, Blockers(), field)!!
+            // Only a person on a way between levels is left to the diagnosis below ([Pathfinder.diagnose]'s last step).
+            if (goals.none { it in anyHeightCrossed }) return Reachability.of(RouteFailure.Unreachable, Blockers(), field)!!
         }
         val failed = p.diagnose(s, options!!, enter, beside, isGoal)
         // Movement puzzles left to the agent: the mechanism the way needs, like go_to tells it (MovePlans.walkTo).
         val mechanism = if (settings.solvePuzzles) null
         else PuzzleSolving.diagnose(a, field!!, solving, s, options, enter, isGoal)
         return Reachability.of(mechanism ?: failed.failure, failed.blockers, field) ?: Reachability.DIRECT
+    }
+
+    /**
+     * The scene trigger (`trigger:N`) the route to [isGoal] steps on ([dev.kotlinds.pokemonclient.world.RouteWarning.StartsScene]),
+     * a story scene only ([MovePlans.sceneTiles]: not a mechanism of the map), or null.
+     */
+    private fun sceneOnTheWay(p: Pathfinder, s: Node, enter: Set<Pair<Int, Int>>, beside: Pathfinder.Beside?, isGoal: (Node) -> Boolean): String? {
+        val f = field ?: return null
+        val a = area ?: return null
+        val route = (p.route(s, options!!.copy(acceptOneWay = true), enter, beside, isGoal) as? Pathfinder.Result.Found)?.route ?: return null
+        val at = route.warnings.filterIsInstance<dev.kotlinds.pokemonclient.world.RouteWarning.StartsScene>().firstOrNull() ?: return null
+        if ((at.x to at.y) !in MovePlans.sceneTiles(a, f, MovePlans.overlay(a, f, emptySet(), triggers, settings.solvePuzzles, onThisMap = true, state.eventFlags), enter)) return null
+        return MovePlans.sceneTriggerAt(a, f.mapId, at.x, at.y)?.let { "trigger:${it.id}" }
     }
 
     /**
@@ -213,15 +252,6 @@ internal class ReachSurvey(private val game: PokemonGame, private val state: Gam
         val reach = of(target)
         val world = game.world ?: return reach
         val o = options ?: return reach
-        return if (!reach.oneWay && WorldLinks.noWayBack(world, link, o, ::present)) reach.copy(oneWay = true) else reach
-    }
-
-    /**
-     * True when the person [t] of another map is there now: always without an event flag, else while its flag is
-     * clear; unknown flags (a game that doesn't read them) count it as absent, so nothing is called one way on a guess.
-     */
-    private fun present(t: PersonTemplate): Boolean {
-        if (t.hiddenByFlag == 0) return true
-        return state.eventFlags?.get(t.hiddenByFlag) == false
+        return if (!reach.oneWay && WorldLinks.noWayBack(world, link, o, state.eventFlags)) reach.copy(oneWay = true) else reach
     }
 }

@@ -43,7 +43,7 @@ class HgssPuzzlesLeftToAgentFixtureTest {
             LiveObject(
                 o.x, o.y, o.facing,
                 clearedBy = if (o.obstacle == ObstacleKind.BOULDER) FieldMoveKind.STRENGTH else null,
-                iceBlock = o.obstacle == ObstacleKind.ICE_BLOCK && o.facing == Direction.SOUTH,
+                iceBlock = o.obstacle == ObstacleKind.ICE_BLOCK && field.puzzle?.iceBlocks?.firstOrNull { it.block == o.id }?.movable == true,
                 fallsInto = field.puzzle?.boulderHoles?.firstOrNull { it.boulder == o.id && !it.fallen }?.let { it.hole.x to it.hole.y },
             )
         },
@@ -71,6 +71,12 @@ class HgssPuzzlesLeftToAgentFixtureTest {
     @Test
     fun `Mahogany Gym - the way on needs an ice block pushed`() {
         val field = field("mp_mahogany_ice")
+        // The room's puzzle tells the agent about the blocks (the randomizer run needed a screenshot without it).
+        val puzzle = assertNotNull(field.puzzle)
+        assertEquals(dev.kotlinds.pokemonclient.state.PuzzleKind.ICE_BLOCKS, puzzle.kind)
+        val block = puzzle.iceBlocks.single { it.at == dev.kotlinds.pokemonclient.state.PuzzleTile(4, 12) }
+        assertTrue(block.movable && block.block.startsWith("person:"), puzzle.iceBlocks.toString())
+        assertTrue("Leaving the room" in puzzle.rule, puzzle.rule)
         val area = assertNotNull(HgssWorldRom.require().areaOf(field.mapId))
         val solving = overlay(field)
         val start = start(field, solving, area)

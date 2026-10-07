@@ -131,7 +131,7 @@ class MechanismPlanner<S>(
         }
         // The way back is walked with the mechanism where the plan leaves it.
         fun ledges(triggers: Boolean): LedgeChoice? =
-            boundedLedgeRule(options, { plan(it, triggers) }) { end -> pathfinder(end.mechanism).hasWayBack(end.node, start, options, triggers) }
+            (boundedLedgeRule(options, { plan(it, triggers) }) { end -> pathfinder(end.mechanism).hasWayBack(end.node, start, options, triggers) } as? BoundedLedgeChoice.Chosen)?.choice
         // Active triggers only when there is no other way (as in Pathfinder.route).
         return when (val choice = ledges(triggers = false) ?: ledges(triggers = true)) {
             is LedgeChoice.Take -> pathfinder(initial.mechanism).describe(choice.edges, choice.oneWay)

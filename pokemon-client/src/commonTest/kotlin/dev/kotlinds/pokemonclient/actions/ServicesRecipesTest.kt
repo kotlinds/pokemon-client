@@ -153,6 +153,32 @@ class ServicesRecipesTest {
         assertTrue(ui.game.presses.isEmpty())
     }
 
+    @Test
+    fun aTmOnSaleSaysWhoOfThePartyCanLearnItAtThePokedexLevelOnly() {
+        // Map randomizer run: False Swipe bought for ₽2000 while nobody in the party could learn it.
+        val tm = dev.kotlinds.pokemonclient.state.ShopItem(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.ItemId(381), "TM54"), 2000)
+        val clerk = FieldObject("person:0", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK, catalog = listOf(tm))
+        val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1), mon(2)), world = world(3, 3))
+        ui.field = field(1, 2, Direction.NORTH, listOf(clerk))
+        val tm54 = dev.kotlinds.pokemonclient.data.MachineId(54)
+        fun species(n: Int, machines: Set<dev.kotlinds.pokemonclient.data.MachineId>) = dev.kotlinds.pokemonclient.data.SpeciesInfo(
+            dev.kotlinds.pokemonclient.state.SpeciesId(n), "MON$n", emptyList(), dev.kotlinds.pokemonclient.data.BaseStats(1, 1, 1, 1, 1, 1),
+            emptyList(), 45, 64, null, emptyList(), machines,
+        )
+        ui.game.data = StubGameData(
+            speciesInfo = listOf(species(1, emptySet()), species(2, setOf(tm54))).associateBy { it.id },
+            machineItems = mapOf(dev.kotlinds.pokemonclient.state.ItemId(381) to tm54),
+        )
+        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000, party can learn: ${MonId(2, 1)} MON2)", done.detail)
+        // Below the Pokédex level: only what the shop shows.
+        val plain = PlanContext(ui.game.scope(), ui.game, settings = ActionSettings(pokedex = false))
+        assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000)", assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), plain)).detail)
+        // Nobody: said so.
+        ui.game.data = StubGameData(speciesInfo = listOf(species(1, emptySet()), species(2, emptySet())).associateBy { it.id }, machineItems = mapOf(dev.kotlinds.pokemonclient.state.ItemId(381) to tm54))
+        assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000, party can learn: nobody)", assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context())).detail)
+    }
+
     /**
      * A department store floor with two clerks (NOTES, map randomizer run: `buy` used the nearest clerk and listed one
      * catalog mixing both): the medicine counter next to the player, the ball counter further.
@@ -227,7 +253,7 @@ class ServicesRecipesTest {
      * The PC in front of the player (Pc tile north): top menu → storage menu (DEPOSIT, WITHDRAW, MOVE, MOVE ITEMS,
      * SEE YA!) → boxes. B on a box asks "Continue Box operations?" (NO leaves); B on the menus goes back.
      */
-    private fun pcUi(party: List<PartyMon>, stored: List<BoxMon>): ScriptedUi {
+    private fun pcUi(party: List<PartyMon>, stored: List<BoxMon>, opened: MutableList<PcMode> = mutableListOf()): ScriptedUi {
         val ui = ScriptedUi(OVERWORLD, party = party, world = world(3, 3, mapOf((1 to 0) to TileInfo(true, TileKind.Pc))))
         ui.field = field(1, 1, Direction.NORTH)
         fun storage(mons: List<BoxMon>) = PcStorage(0, listOf(PcBoxContents(0, box1, mons, 30), PcBoxContents(1, "BOX 2", emptyList(), 30)))
@@ -248,8 +274,8 @@ class ServicesRecipesTest {
                 screen is Screen.Dialogue && screen.text.contains("booted") -> top
                 screen is Screen.ListMenu && screen.entries.size == 3 && id == "option:0" -> dialogue("Accessed the Pokémon Storage System.", TextSource.FIELD)
                 screen is Screen.Dialogue && screen.text.contains("Storage") -> storageMenu
-                screen is Screen.ListMenu && screen.entries.size == 5 && id == "option:0" -> box(PcMode.DEPOSIT.also { mode = it })
-                screen is Screen.ListMenu && screen.entries.size == 5 && id == "option:1" -> box(PcMode.WITHDRAW.also { mode = it })
+                screen is Screen.ListMenu && screen.entries.size == 5 && id == "option:0" -> box(PcMode.DEPOSIT.also { mode = it; opened += it })
+                screen is Screen.ListMenu && screen.entries.size == 5 && id == "option:1" -> box(PcMode.WITHDRAW.also { mode = it; opened += it })
                 screen is Screen.PcBox && id != null && id.startsWith("mon:") -> {
                     picked = MonId(id.substringAfter(':').substringBefore('.').toLong(16), id.substringAfter('.').toLong(16))
                     if (mode == PcMode.DEPOSIT) menu("option:deposit", "option:summary", "option:marking", "option:release", "option:cancel")
@@ -289,11 +315,52 @@ class ServicesRecipesTest {
     @Test
     fun onePcSessionDepositsThenWithdrawsAndChecksBoth() {
         val stored = BoxMon(MonId(7, 1), 0, 0, dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.SpeciesId(7), "MON7"), null, 20, null, false)
-        val ui = pcUi(listOf(mon(1), mon(2)), listOf(stored))
+        val opened = mutableListOf<PcMode>()
+        val ui = pcUi(listOf(mon(1), mon(2)), listOf(stored), opened)
         val ops = listOf(PcOperation.Deposit(MonId(2, 1)), PcOperation.Withdraw(MonId(7, 1)))
         val done = assertIs<ActionOutcome.Done>(PcPlans.pc.run(GameAction.Pc(ops), ui.context()))
         assertEquals("deposited MON2 in BOX 1 (2/30); withdrew MON7 (party: 2/6)", done.detail)
         assertEquals(listOf(MonId(1, 1), MonId(7, 1)), ui.party.map { it.id })
+        assertIs<Screen.Overworld>(ui.game.screen)
+        // Two modes: the box screen is left once for the storage menu, the PC stays on.
+        assertEquals(listOf(PcMode.DEPOSIT, PcMode.WITHDRAW), opened)
+    }
+
+    @Test
+    fun severalOperationsOfOneModeStayOnTheBoxScreen() {
+        // NOTES (Nathan, watching Claude): the box closed and reopened between every operation.
+        val opened = mutableListOf<PcMode>()
+        val ui = pcUi(listOf(mon(1), mon(2), mon(3)), emptyList(), opened)
+        val ops = listOf(PcOperation.Deposit(MonId(2, 1)), PcOperation.Deposit(MonId(3, 1)))
+        val done = assertIs<ActionOutcome.Done>(PcPlans.pc.run(GameAction.Pc(ops), ui.context()))
+        assertEquals("deposited MON2 in BOX 1 (1/30); deposited MON3 in BOX 1 (2/30)", done.detail)
+        assertEquals(listOf(MonId(1, 1)), ui.party.map { it.id })
+        assertEquals(listOf(PcMode.DEPOSIT), opened)
+        assertIs<Screen.Overworld>(ui.game.screen)
+    }
+
+    @Test
+    fun leavingTheBoxThatFailsAfterTheOperationsIsTold() {
+        // Review impl13 B3: the way out of the box is checked once after the operations; its failure (a question with
+        // a lasting answer it won't confirm) is in the answer, the deposit done before it too.
+        val ui = pcUi(listOf(mon(1), mon(2)), emptyList())
+        val leave = ui.onB
+        ui.onB = { screen ->
+            if (screen is Screen.PcBox) Screen.YesNo("Release it?", listOf(Entry("option:yes", "YES", dangerous = true), Entry("option:no", "NO")), Cursor.At(1), Topology.vertical(2))
+            else leave(screen)
+        }
+        val done = assertIs<ActionOutcome.Done>(PcPlans.deposit.run(GameAction.Deposit(MonId(2, 1)), ui.context()))
+        assertTrue(done.detail.orEmpty().startsWith("deposited MON2 in BOX 1 (1/30); then leaving the box failed: UNEXPECTED_SCREEN"), done.detail)
+        // Left the usual way: nothing more said (aSingleDepositStillOpensTheBoxOnceAndSwitchesThePcOff).
+    }
+
+    @Test
+    fun aSingleDepositStillOpensTheBoxOnceAndSwitchesThePcOff() {
+        val opened = mutableListOf<PcMode>()
+        val ui = pcUi(listOf(mon(1), mon(2)), emptyList(), opened)
+        val done = assertIs<ActionOutcome.Done>(PcPlans.deposit.run(GameAction.Deposit(MonId(2, 1)), ui.context()))
+        assertEquals("deposited MON2 in BOX 1 (1/30)", done.detail)
+        assertEquals(listOf(PcMode.DEPOSIT), opened)
         assertIs<Screen.Overworld>(ui.game.screen)
     }
 

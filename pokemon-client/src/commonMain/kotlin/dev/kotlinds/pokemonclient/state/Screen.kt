@@ -192,6 +192,11 @@ sealed interface Screen {
          */
         val text: String,
         override val awaiting: Awaiting,
+        /**
+         * Which message of the game this is, when it is one the game shows by itself on the field, outside any scene
+         * (told by the script that prints it, never by its text): null for every other message.
+         */
+        val notice: FieldNotice? = null,
     ) : Screen
 
     /**
@@ -422,6 +427,16 @@ enum class MoveContext {
 
 /** Why the party grid is shown. */
 enum class PartyPurpose { FIELD, SWITCH, USE_ITEM, GIVE_ITEM, TEACH, BATTLE_SWITCH, BATTLE_REPLACE_FAINTED, BATTLE_USE_ITEM, OTHER }
+
+/**
+ * Messages the game shows by itself while the player walks, outside any scene: closing the box gives the control back
+ * where the player stands, nothing else happens. Each game names the script that prints it (a common script id, the
+ * same in every language), so a walk can tell it from a scene that started ([Screen.Dialogue.notice]).
+ */
+enum class FieldNotice {
+    /** The Repel's steps ran out ("REPEL's effect wore off..."): HGSS `std_repel_wore_off`, Platinum common script 32. */
+    REPEL_WORE_OFF,
+}
 
 /** Sources of text. */
 enum class TextSource {

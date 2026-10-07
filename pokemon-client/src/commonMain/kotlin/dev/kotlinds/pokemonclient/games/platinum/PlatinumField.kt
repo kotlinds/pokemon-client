@@ -2,6 +2,7 @@ package dev.kotlinds.pokemonclient.games.platinum
 
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs as S
 import dev.kotlinds.pokemonclient.state.AnimationKind
+import dev.kotlinds.pokemonclient.state.FieldNotice
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldState
 import dev.kotlinds.pokemonclient.state.MapName
@@ -28,6 +29,12 @@ internal object PlatinumField {
     /** FieldProcessManager: `parent` (the field map overlay), `child` (an application launched from the field), `pause`. */
     private const val PM_CHILD = 0x04L
     private const val PM_PAUSE = 0x08L
+
+    /**
+     * `SCRIPT_ID(COMMON_SCRIPTS, 32)` (2000 + 32), the script `Repel_UpdateSteps` starts when the Repel's steps run out
+     * (src/overlay006/repel_step_update.c): [FieldNotice.REPEL_WORE_OFF].
+     */
+    private const val REPEL_WORE_OFF_SCRIPT = 2032
 
     /** ScriptManager.msgBuf (Platinum include/script_manager.h:162; HGSS has another field there). */
     private const val SM_MSG_BUF = 0x44L
@@ -89,7 +96,9 @@ internal object PlatinumField {
             printer != null -> if (mem.printerWaitsForInput(printer)) Awaiting.INPUT else Awaiting.TEXT_PRINTING
             else -> Awaiting.ANIMATION
         }
-        return Screen.Dialogue(TextSource.FIELD, null, text, awaiting)
+        // A message the game shows by itself on the field (a Repel wearing off): told by the script printing it.
+        val notice = if (mem.u16(sm + S.SM_SCRIPT_ID) == REPEL_WORE_OFF_SCRIPT) FieldNotice.REPEL_WORE_OFF else null
+        return Screen.Dialogue(TextSource.FIELD, null, text, awaiting, notice)
     }
 
     /** The page of the script's message (`ScriptManager.msgBuf`) the box shows, "" when unreadable. */

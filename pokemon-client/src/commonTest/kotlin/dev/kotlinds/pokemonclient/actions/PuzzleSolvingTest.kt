@@ -103,7 +103,8 @@ class PuzzleSolvingTest {
         val needs = PuzzleSolving.diagnose(map, f, overlay, Node(0, 1), options, emptySet()) { it.x == 2 && it.y == 0 }
         assertEquals(NeedsMechanism(PuzzleMechanism.STRENGTH_BOULDER, 2, 1, Node(1, 1), Direction.EAST, 3 to 1), needs)
         val hint = PuzzleSolving.hint(needs!!, f)
-        assertTrue("person:4" in hint && "step east" in hint && "1,1" in hint, hint)
+        // The agent's one call for it: `push` with the boulder and the direction (it walks to 1,1 itself).
+        assertTrue("push with boulder person:4 and direction east" in hint && "1,1" in hint, hint)
     }
 
     @Test

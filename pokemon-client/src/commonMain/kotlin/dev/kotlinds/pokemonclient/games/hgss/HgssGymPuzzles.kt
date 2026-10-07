@@ -1,7 +1,11 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
+import dev.kotlinds.pokemonclient.Direction
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes
 import dev.kotlinds.pokemonclient.state.PuzzleBarrier
+import dev.kotlinds.pokemonclient.state.PuzzleIceBlock
+import dev.kotlinds.pokemonclient.state.PuzzleStepAside
+import dev.kotlinds.pokemonclient.state.StepAsideMove
 import dev.kotlinds.pokemonclient.state.PuzzleIndicator
 import dev.kotlinds.pokemonclient.state.PuzzleKind
 import dev.kotlinds.pokemonclient.state.PuzzleState
@@ -35,6 +39,15 @@ import dev.kotlinds.pokemonclient.world.Area
  *   then `switches[1]`, a neighbour can, the second (opens gate 1: objects 0..2 on row 8). A wrong second can closes
  *   gate 0 and draws new cans (`ov04_022563C4`, `VermilionGymLockAction`, `PlaceVermilionGymSwitches`). With the
  *   Thunder Badge both gates start open.
+ * - **Mahogany Gym** (`MAP_MAHOGANY_GYM_ROOM_1` / `_ROOM_2` / `_LEADER_ROOM`): ice blocks (`ICE` objects) on the ice.
+ *   Sliding into a block pushes it on in that direction until it stops (a wall, a tile that isn't ice, another object);
+ *   two blocks meeting freeze together and both turn north: they never move again (src/unk_0206D494.c). The objects
+ *   are placed anew on each entry, so leaving the room puts every block back.
+ * - **Cinnabar Gym** (`MAP_SEAFOAM_ISLANDS_CINNABAR_GYM`, scr_seq_0015_D11R0106.s): each trainer, once beaten, walks
+ *   one tile and turns back (`ApplyMovement` after `TrainerBattle`), then sets its flag (`FLAG_UNK_13B`..`_140`).
+ *   Three always step the same way; three step away from the player (`GetPlayerFacing`): the way the player faces when
+ *   it is theirs, else a default. On entry the init script (`scr_seq_D11R0106_008`) puts three of them back where they
+ *   stepped (flags 13B, 13D, 13E); the others stand on their own tile again.
  */
 object HgssGymPuzzles {
 
@@ -50,6 +63,12 @@ object HgssGymPuzzles {
     /** `MAP_VERMILION_GYM` (T06GYM0101). */
     const val VERMILION_GYM = 365
 
+    /** `MAP_MAHOGANY_GYM_LEADER_ROOM` (T28GYM0101), `_ROOM_2` (T28GYM0102), `_ROOM_1` (T28GYM0103). */
+    val MAHOGANY_GYM = setOf(140, 396, 397)
+
+    /** `MAP_SEAFOAM_ISLANDS_CINNABAR_GYM` (D11R0106). */
+    const val CINNABAR_GYM = 457
+
     /** `GymmickType` (include/gymmick.h). */
     private const val GYMMICK_ECRUTEAK = 1
     private const val GYMMICK_CIANWOOD = 2
@@ -62,7 +81,9 @@ object HgssGymPuzzles {
     private const val DATA = 4
 
     /** The mechanism of gym [mapId] right now, or null (not one of these gyms, or its slot isn't set up). */
-    fun read(mapId: Int, reads: HgssPuzzles.Reads, area: Area?): PuzzleState? = when (mapId) {
+    fun read(mapId: Int, reads: HgssPuzzles.Reads, area: Area?, iceBlocks: List<HgssIlexFarfetchd.ObjectAt> = emptyList()): PuzzleState? = when (mapId) {
+        in MAHOGANY_GYM -> mahoganyGym(iceBlocks)
+        CINNABAR_GYM -> cinnabarGym(reads)
         VIOLET_GYM -> violetGym(reads)
         ECRUTEAK_GYM -> ecruteakGym(reads, area)
         CIANWOOD_GYM -> cianwoodGym(reads)
@@ -162,6 +183,66 @@ object HgssGymPuzzles {
             indicators = listOf(PuzzleIndicator("waterfall:0", !stopped, listOf(CHUCK), "flowing (Chuck won't battle)")),
         )
     }
+
+    // endregion
+
+    // region Mahogany Gym
+
+    private const val MAHOGANY_RULE =
+        "Ice blocks on the ice: sliding into one (walk onto the ice towards it) pushes it on that way until it stops " +
+            "against a wall, a tile that isn't ice or another object, and you stop where it was. Two blocks meeting freeze " +
+            "together and never move again. Leaving the room and coming back puts every block back in place (the way to " +
+            "start again after a wrong push). go_to pushes them by itself when it plans the puzzles (else slide into them with step)."
+
+    /**
+     * The ice blocks of a Mahogany Gym room ([blocks]: their objects): a block moves only while it faces south, as the
+     * map places it; one that froze to another faces north (`sub_0206D590` in src/unk_0206D494.c pushes an `SPRITE_ICE`
+     * object only when it faces `DIR_SOUTH`, asserting `DIR_NORTH` otherwise).
+     */
+    private fun mahoganyGym(blocks: List<HgssIlexFarfetchd.ObjectAt>): PuzzleState? {
+        if (blocks.isEmpty()) return null
+        return PuzzleState(
+            PuzzleKind.ICE_BLOCKS, MAHOGANY_RULE,
+            iceBlocks = blocks.map { PuzzleIceBlock("person:${it.id}", PuzzleTile(it.x, it.y), movable = it.facing == Direction.SOUTH) },
+        )
+    }
+
+    // endregion
+
+    // region Cinnabar Gym
+
+    /**
+     * A Cinnabar Gym trainer: object [id], its beaten flag, the way it steps ([always]), or away from the player
+     * ([away]: when the player faces that way, else [otherwise]).
+     */
+    private class Stepper(val id: Int, val flag: Int, val always: Direction? = null, val away: Direction? = null, val otherwise: Direction? = null) {
+        fun step(playerFacing: Direction): Direction = always ?: if (playerFacing == away) away else otherwise!!
+    }
+
+    /** The six trainers (scr_seq_D11R0106_002..007 and their movements _0424.._0484). */
+    private val CINNABAR_TRAINERS = listOf(
+        Stepper(2, 0x13E, always = Direction.NORTH),
+        Stepper(3, 0x13F, away = Direction.EAST, otherwise = Direction.WEST),
+        Stepper(4, 0x140, away = Direction.WEST, otherwise = Direction.EAST),
+        Stepper(5, 0x13B, always = Direction.EAST),
+        Stepper(6, 0x13C, away = Direction.NORTH, otherwise = Direction.SOUTH),
+        Stepper(7, 0x13D, always = Direction.SOUTH),
+    )
+
+    private const val CINNABAR_RULE =
+        "Each trainer steps one tile aside once beaten (some always the same way, others away from you, so the side " +
+            "you talk from decides it): a step can open the way or close it. interact and go_to talk to them from a side " +
+            "where the step keeps the way open. Some of them stand on their own tile again when you come back in."
+
+    /** Which way each one steps is the gym's script, not something seen in the game: a walkthrough's. */
+    private const val CINNABAR_WALKTHROUGH_RULE = "step_aside tells which way each trainer steps."
+
+    private fun cinnabarGym(reads: HgssPuzzles.Reads): PuzzleState = PuzzleState(
+        PuzzleKind.TRAINERS_STEP_ASIDE, CINNABAR_RULE, walkthroughRule = CINNABAR_WALKTHROUGH_RULE,
+        stepAside = CINNABAR_TRAINERS.map { t ->
+            PuzzleStepAside("person:${t.id}", reads.flag(t.flag) == true, Direction.entries.map { StepAsideMove(it, t.step(it)) })
+        },
+    )
 
     // endregion
 

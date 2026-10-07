@@ -102,7 +102,7 @@ object PokegearActions {
             if (preset != null && attempts == 0) context.scope.touch(preset) else drag(context, radio.cursor, channel.touch)
             attempts++
             radio = settledRadio(context) ?: return@ActionPlan ActionOutcome.Failed(
-                ActionError.UnexpectedScreen("the Pokégear radio", context.state().screen.kind),
+                ActionError.UnexpectedScreen("the Pokégear radio", context.state().screen),
             )
         }
         // The programme starts a few frames after the channel is tuned.
@@ -125,7 +125,7 @@ object PokegearActions {
         PartyBagPlans.closeToOverworld(context)
         val after = context.navigator.settle()
         if (after.screen !is Screen.Overworld) {
-            return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the field after closing the Pokégear", after.screen.kind))
+            return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the field after closing the Pokégear", after.screen))
         }
         val playing = after.field?.radioMusic
         ActionOutcome.Done("$detail; Pokégear closed" + (playing?.let { ", ${it.wire} still playing" } ?: ""))
@@ -148,10 +148,10 @@ object PokegearActions {
                         context.scope.touch(button.touch ?: return Step.Failed(ActionError.Unreachable("the radio", button.label)))
                         context.navigator.awaitChange(screen)
                     }
-                    else -> return Step.Failed(ActionError.UnexpectedScreen("the Pokégear", screen.kind))
+                    else -> return Step.Failed(ActionError.UnexpectedScreen("the Pokégear", screen))
                 }
                 is Screen.ListMenu -> {
-                    if (screen.kind != MenuKind.PHONE_CONTACTS) return Step.Failed(ActionError.UnexpectedScreen("the Pokégear", (screen as Screen).kind))
+                    if (screen.kind != MenuKind.PHONE_CONTACTS) return Step.Failed(ActionError.UnexpectedScreen("the Pokégear", (screen as Screen)))
                     if (screen.entries.firstOrNull { it.id == RADIO_APP }?.selectable == false) return Step.Failed(noRadioCard())
                     val touched = context.navigator.touchEntry(Screen.ListMenu::class, RADIO_APP, { it.id == RADIO_APP }, ActionError.Unreachable("the radio", RADIO_APP))
                     if (touched is Step.Failed) return touched
@@ -166,9 +166,9 @@ object PokegearActions {
                 is Screen.Animation -> context.scope.step(10)
                 is Screen.Dialogue -> return Step.Failed(
                     if (screen.source == TextSource.PHONE) ActionError.Interrupted(InterruptionCause.PHONE_CALL, "a call started: advance_dialogue reads it")
-                    else ActionError.UnexpectedScreen("the field or the Pokégear", screen.kind),
+                    else ActionError.UnexpectedScreen("the field or the Pokégear", screen),
                 )
-                else -> return Step.Failed(ActionError.UnexpectedScreen("the field or the Pokégear", screen.kind))
+                else -> return Step.Failed(ActionError.UnexpectedScreen("the field or the Pokégear", screen))
             }
         }
         return Step.Failed(ActionError.Timeout("the Pokégear radio didn't open"))

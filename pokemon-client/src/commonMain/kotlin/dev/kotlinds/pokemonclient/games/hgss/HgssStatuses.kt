@@ -2,6 +2,8 @@ package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.MajorStatus
+import dev.kotlinds.pokemonclient.state.MoveId
+import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.VolatileStatus
 
 /**
@@ -26,9 +28,13 @@ object HgssStatuses {
 
     /**
      * Volatile conditions from `status2` (STATUS2_*), `moveEffectFlags` (MOVE_EFFECT_FLAG_*) and the counters
-     * word of `BattleMon.unk88` (disable / encore / taunt / perish song turns).
+     * word of `BattleMon.unk88` (disable / encore / taunt / perish song turns), with the moves Disable and Encore hold
+     * ([disabledMove], [encoredMove]: `unk88.disabledMove` / `unk88.encoredMove`, 0 when none; named by [moveName]).
      */
-    fun volatile(status2: Long, moveEffects: Long, counters: Long): Set<VolatileStatus> = buildSet {
+    fun volatile(
+        status2: Long, moveEffects: Long, counters: Long, disabledMove: Int = 0, encoredMove: Int = 0, moveName: (Int) -> String? = { null },
+    ): Set<VolatileStatus> = buildSet {
+        fun move(id: Int) = id.takeIf { it != 0 }?.let { Named(MoveId(it), moveName(it) ?: "move:$it") }
         val s2 = status2.toInt()
         val me = moveEffects.toInt()
         val c = counters.toInt()
@@ -59,8 +65,8 @@ object HgssStatuses {
         if (me and (0x3 shl 11) != 0) add(VolatileStatus.Yawned)
         if (me and ((1 shl 6) or (1 shl 7) or (1 shl 18) or (1 shl 29)) != 0) add(VolatileStatus.SemiInvulnerable)
         if (me and (1 shl 5) != 0) add(VolatileStatus.PerishSong((c shr 13) and 0x3))
-        if (c and 0x7 != 0) add(VolatileStatus.Disabled)
-        if ((c shr 3) and 0x7 != 0) add(VolatileStatus.Encored)
+        if (c and 0x7 != 0) add(VolatileStatus.Disabled(move(disabledMove), c and 0x7))
+        if ((c shr 3) and 0x7 != 0) add(VolatileStatus.Encored(move(encoredMove), (c shr 3) and 0x7))
         if ((c shr 8) and 0x7 != 0) add(VolatileStatus.Taunted)
         if (s2 and (1 shl 23) != 0) add(VolatileStatus.Raging)
         // MOVE_EFFECT_FLAG_* (include/constants/battle.h:163).

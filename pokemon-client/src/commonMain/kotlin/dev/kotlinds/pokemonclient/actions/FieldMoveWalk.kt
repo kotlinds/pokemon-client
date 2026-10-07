@@ -161,9 +161,10 @@ internal object FieldMoveWalk {
 
     /**
      * What to tell the agent when a route needs a field move the party can't use: where to use it from (the land
-     * tile and the direction for Surf), and what is missing (the move, the badge).
+     * tile and the direction for Surf), and what is missing (the move, the badge). A Strength boulder the party can
+     * push (the diagnosis proved the push opens the way) names the `push` that does it, with the boulder's id on [field].
      */
-    fun hint(failure: RouteFailure.NeedsFieldMove, access: FieldMoveAccess?): String {
+    fun hint(failure: RouteFailure.NeedsFieldMove, access: FieldMoveAccess?, field: FieldState? = null): String {
         val what = when (failure.move) {
             FieldMoveKind.STRENGTH -> "a boulder blocks the way at ${failure.x},${failure.y}"
             FieldMoveKind.CUT -> "a small tree blocks the way at ${failure.x},${failure.y}"
@@ -183,12 +184,28 @@ internal object FieldMoveWalk {
             is FieldMoveAccess.NoBadge -> "${failure.move.label()} needs the ${access.badge} Badge"
             // Usable, but the route still can't use it here (Strength puzzle beyond the search, a whirlpool that
             // isn't crossed in line...): say how to do it by hand.
-            is FieldMoveAccess.Usable -> "use ${failure.move.label()} there by hand (${access.monName} knows it)"
+            is FieldMoveAccess.Usable -> pushAction(failure, field)?.let { "$it (${access.monName} knows Strength)" }
+                ?: "use ${failure.move.label()} there by hand (${access.monName} knows it)"
             FieldMoveAccess.NotSupported -> "using ${failure.move.label()} isn't supported in this game yet"
             FieldMoveAccess.Unknown, null -> "it needs ${failure.move.label()}"
         }
         return "$what$where: $missing"
     }
+
+    /** The `push` that moves the boulder of [failure] the way it names, when it is a boulder of [field]. */
+    private fun pushAction(failure: RouteFailure.NeedsFieldMove, field: FieldState?): String? {
+        if (failure.move != FieldMoveKind.STRENGTH) return null
+        val facing = failure.facing ?: return null
+        val id = field?.objects?.firstOrNull { it.x == failure.x && it.y == failure.y }?.id ?: return null
+        return "push it: " + pushCall(id, facing, failure.from)
+    }
+
+    /**
+     * The one wording of the `push` that moves boulder [id] towards [direction] (from [from], where the action walks
+     * first): this hint and the puzzle's ([PuzzleSolving.hint]).
+     */
+    internal fun pushCall(id: String, direction: dev.kotlinds.pokemonclient.Direction, from: dev.kotlinds.pokemonclient.world.Node?): String =
+        "push with boulder $id and direction ${direction.name.lowercase()}" + (from?.let { " (it walks to ${it.x},${it.y} and uses Strength)" } ?: "")
 
     /** The move's name as agents read it. */
     fun FieldMoveKind.label(): String = when (this) {

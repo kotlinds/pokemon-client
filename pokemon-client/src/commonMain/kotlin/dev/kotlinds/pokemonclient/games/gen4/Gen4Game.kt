@@ -38,6 +38,12 @@ abstract class Gen4Game(gSystem: Long) : PokemonGame {
     /** ITEM_BICYCLE: the same item id (450) in every Gen 4 game. */
     override val bicycleItem: Int? get() = ITEM_BICYCLE
 
+    /** A PC only answers when faced from the south (src/field/field_control.c: `IsPC && facingDirection == DIR_NORTH`). */
+    override val pcFacing: dev.kotlinds.pokemonclient.Direction? get() = dev.kotlinds.pokemonclient.Direction.NORTH
+
+    /** ITEM_MAX_REPEL (77), ITEM_SUPER_REPEL (76), ITEM_REPEL (79): the same ids in every Gen 4 game. */
+    override val repelItems: List<Int> get() = listOf(77, 76, 79)
+
     private companion object {
         const val ITEM_BICYCLE = 450
     }

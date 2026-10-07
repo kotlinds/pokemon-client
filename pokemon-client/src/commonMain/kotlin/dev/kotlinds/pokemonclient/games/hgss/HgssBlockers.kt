@@ -4,6 +4,7 @@ import dev.kotlinds.pokemonclient.games.gen4.Gen4ZoneEvents
 import dev.kotlinds.pokemonclient.state.Blocker
 import dev.kotlinds.pokemonclient.state.BlockerCause
 import dev.kotlinds.pokemonclient.state.RadioStation
+import dev.kotlinds.pokemonclient.state.SceneTrigger
 import dev.kotlinds.pokemonclient.state.StoryCondition
 
 /**
@@ -38,7 +39,8 @@ object HgssBlockers {
     /**
      * A known blocker: [reason] says why it blocks and how to lift it; it stops blocking once [liftedWhen] holds.
      * [closedAt]: for a door object that slides aside when it opens, the tiles it stands on while closed (it blocks
-     * only there). [cause]: the typed mechanism.
+     * only there). [cause]: the typed mechanism. [repeats], for a trigger ([SceneTrigger.repeats]): its scene turns the
+     * player back each time (true), or happens once and lets them through (false).
      */
     data class Curated(
         val target: Target,
@@ -46,6 +48,7 @@ object HgssBlockers {
         val liftedWhen: StoryCondition? = null,
         val closedAt: Set<Pair<Int, Int>>? = null,
         val cause: Cause? = null,
+        val repeats: Boolean? = null,
     )
 
     /** The typed mechanism of a [Curated] blocker, turned into a [BlockerCause] with the live story state. */
@@ -66,6 +69,13 @@ object HgssBlockers {
         }
     }
 
+    /**
+     * Whether the door object [objectId] of zone [zone], standing at ([x], [z]), is open: a curated door that slides
+     * aside ([Curated.closedAt]) is open once it stands elsewhere than its closed tiles. Null for any other object.
+     */
+    fun doorOpen(zone: Int, objectId: Int, x: Int, z: Int): Boolean? =
+        byPerson[Target.Person(zone, objectId)]?.closedAt?.let { (x to z) !in it }
+
     /** The blockers of the map the player stands on. Empty outside the field. */
     fun of(state: HgssState): List<Blocker> {
         val mapId = state.location?.mapId ?: return emptyList()
@@ -78,7 +88,7 @@ object HgssBlockers {
             val known = byPerson[Target.Person(zone, o.id)]
             if (known != null) {
                 // A door object slid aside is open.
-                if (known.closedAt != null && (o.x to o.z) !in known.closedAt) continue
+                if (doorOpen(zone, o.id, o.x, o.z) == true) continue
                 if (known.liftedWhen?.holds(story) != true) out += Blocker(HgssObjectIds.idOf(o, mapId), known.reason, known.cause?.toBlockerCause(story))
             } else if (zone == mapId && o.eventFlag != 0 && o.type !in Gen4ZoneEvents.TRAINER_TYPES && !battlesWhenTalkedTo(zone, o) &&
                 standsInPassage(around.grid, o.x, o.z)
@@ -105,17 +115,22 @@ object HgssBlockers {
         val (known, unknown) = active.partition { Target.Trigger(mapId, it.index) in byTrigger }
         for (t in known) {
             val curated = byTrigger.getValue(Target.Trigger(mapId, t.index))
-            if (curated.liftedWhen?.holds(story) != true) out += Blocker("trigger:${t.index}", curated.reason)
+            if (curated.liftedWhen?.holds(story) != true) out += Blocker("trigger:${t.index}", curated.reason, scene = scene(t, curated.repeats))
         }
         // Many armed triggers on one map are a mechanism (gym pits, hideout traps, puzzle tiles), not story gates.
         if (unknown.size <= MAX_GENERIC_TRIGGERS) for (t in unknown) {
             out += Blocker(
                 "trigger:${t.index}",
                 "Stepping here (x ${t.x}..${t.x + maxOf(t.width, 1) - 1}, y ${t.z}..${t.z + maxOf(t.height, 1) - 1}) starts a story scene now; it may stop you or send you back until the story moves on.",
+                scene = scene(t, repeats = null),
             )
         }
         return out
     }
+
+    /** The common description of the armed coordinate trigger [t] ([SceneTrigger]): its index, tiles and [repeats]. */
+    private fun scene(t: TriggerInfo, repeats: Boolean?) =
+        SceneTrigger(t.index, t.x until t.x + maxOf(t.width, 1), t.z until t.z + maxOf(t.height, 1), repeats)
 
     /**
      * True when [o] (of zone [zone]) starts a trainer battle when talked to: a gym leader, a scripted trainer. They wait
@@ -216,6 +231,7 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_ROUTE_32, 0),
             "Elm's aide stops you here until you have the Zephyr Badge AND the egg from Elm's aide in the Violet City Poké Mart.",
+            repeats = true,
         ),
         // Azalea: the Rocket on the Gym door (obj_T23_rocketm_2, FLAG_UNK_1A9) leaves once Proton is beaten in the well.
         Curated(
@@ -231,6 +247,7 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_AZALEA, 0),
             "Your rival waits at the west exit toward Ilex Forest: stepping here starts the battle (heal first).",
+            repeats = false,
         ),
         // Goldenrod: a woman stands on the tile in front of the Gym door (obj_T25_gswoman2_4 at 366,335, door 366,334)
         // until the Radio Tower 1F quiz is won (FLAG_UNK_318, scr_seq_0029_D23R0101.s:157): Whitney went to try it.
@@ -249,10 +266,12 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_BURNED_TOWER_1F, 1),
             "Your rival waits here in the Burned Tower: stepping here starts the battle (heal first).",
+            repeats = false,
         ),
         Curated(
             Target.Trigger(MAP_BURNED_TOWER_B1F, 0),
             "The legendary beasts sleep here: stepping here starts the scene where they flee (it opens the Ecruteak Gym).",
+            repeats = false,
         ),
         // The gym's old man (obj gsoldman1, FLAG_UNK_247) walks the player out until the Burned Tower is done.
         Curated(
@@ -286,6 +305,7 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_MAHOGANY, 0),
             "The east exit to Route 44 is closed: a man stops you and sends you back until Team Rocket is driven out of the Goldenrod Radio Tower.",
+            repeats = true,
         ),
         Curated(
             Target.Person(MAP_ROUTE_43_GATE, 0),
@@ -335,19 +355,23 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_BELL_TOWER_1F, 0),
             "The Bell Tower's sage stops you: only someone holding the Rainbow Wing (from the Goldenrod Radio Director) may climb.",
+            repeats = true,
         ),
         Curated(
             Target.Trigger(MAP_BELL_TOWER_1F, 1),
             "The Bell Tower's sage stops you: only someone holding the Rainbow Wing (from the Goldenrod Radio Director) may climb.",
+            repeats = true,
         ),
         // New Bark east exit (the way to Route 27 and the League): Mom, then Lyra, stop the player.
         Curated(
             Target.Trigger(MAP_NEW_BARK, 2),
             "Mom stops you at the east exit: visit Prof. Elm's lab first.",
+            repeats = true,
         ),
         Curated(
             Target.Trigger(MAP_NEW_BARK, 3),
             "Your friend stops you at the east exit: the Kimono Girls' story must be finished first (Clear Bell, then Ho-Oh at the top of the Bell Tower).",
+            repeats = true,
         ),
         // Goldenrod Gym: beaten, Whitney cries and gives no badge (VAR_UNK_410A = 1 arms this trigger) until the Lass
         // comes to the player on (13,11) (FLAG_UNK_0B7); then talking to Whitney again gives the Plain Badge.
@@ -355,6 +379,7 @@ object HgssBlockers {
             Target.Trigger(MAP_GOLDENROD_GYM, 0),
             "Whitney cries after losing and won't give the badge yet: step here (a trainer comes to talk to you), then talk to Whitney (person:0) again for the Plain Badge.",
             StoryCondition.Or(StoryCondition.FlagSet(FLAG_WHITNEY_CALMED), StoryCondition.HasBadge(HgssStoryTable.PLAIN)),
+            repeats = false,
         ),
         // Cianwood Gym: Chuck trains under the waterfall and won't battle (VAR_TEMP_x4000 == 0) until the winch is turned
         // (FLAG_SYS_CIANWOOD_WATERFALL_DISABLE, cleared on each entry); scr_seq_0877_T24GYM0101.s.
@@ -392,7 +417,7 @@ object HgssBlockers {
                 closedAt = setOf(23 to 15, 24 to 15),
                 cause = Cause.Password(
                     listOf("person:3", "person:4"),
-                    StoryCondition.And(HQ_B3F_PASSWORD_TRAINERS.map { StoryCondition.FlagSet(HgssSave.TRAINER_FLAG_BASE + it) }),
+                    StoryCondition.And(HQ_B3F_PASSWORD_TRAINERS.map { StoryCondition.FlagSet(dev.kotlinds.pokemonclient.games.gen4.Gen4Trainers.flagOf(it)) }),
                 ),
             )
         }.toTypedArray(),
@@ -400,6 +425,7 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_ROUTE_24, 0),
             "The Rocket grunt who fled the Cerulean Gym waits here: stepping here starts the battle.",
+            repeats = false,
         ),
         Curated(
             Target.Person(MAP_SS_AQUA_1F_SOUTHEAST_ROOMS, 0),
@@ -408,7 +434,7 @@ object HgssBlockers {
             StoryCondition.VarAtLeast(HgssStoryTable.Vars.SS_AQUA, 3),
         ),
         Curated(Target.Person(MAP_SS_AQUA_B1F, 1), SS_AQUA_GUARD, StoryCondition.VarAtLeast(HgssStoryTable.Vars.SS_AQUA, 3)),
-        Curated(Target.Trigger(MAP_SS_AQUA_B1F, 0), SS_AQUA_GUARD, StoryCondition.VarAtLeast(HgssStoryTable.Vars.SS_AQUA, 3)),
+        Curated(Target.Trigger(MAP_SS_AQUA_B1F, 0), SS_AQUA_GUARD, StoryCondition.VarAtLeast(HgssStoryTable.Vars.SS_AQUA, 3), repeats = true),
         *listOf(4, 7, 8, 9).map { id ->
             Curated(
                 Target.Person(MAP_ROUTE_11, id),
@@ -433,6 +459,7 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_LEAGUE_GATE, 2),
             "A guard closes the way west to Route 22 and Viridian City until you have been to western Kanto (through Diglett's Cave).",
+            repeats = true,
         ),
         Curated(
             Target.Person(MAP_LEAGUE_GATE, 1),
@@ -442,6 +469,7 @@ object HgssBlockers {
         Curated(
             Target.Trigger(MAP_LEAGUE_GATE, 1),
             "A guard closes the way to Route 28 and Mt. Silver: only Prof. Oak's permission (all 16 badges) opens it.",
+            repeats = true,
         ),
         *listOf(13, 14).map { id ->
             Curated(

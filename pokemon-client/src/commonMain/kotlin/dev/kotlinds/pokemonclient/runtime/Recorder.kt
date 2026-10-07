@@ -108,7 +108,34 @@ class Recorder(
         log.append { GameEvent.HumanInput(it, frame) }
     }
 
+    /**
+     * Forgets what was learned of the game being played (who is in the party with which moves and levels, the boxes,
+     * the changes waiting to be confirmed), so that the next readings prime the recorder again like at its start: the
+     * game loaded a save (a soft reset, CONTINUE), whose party is another one than a moment ago. Without it, a soft
+     * reset back to a save before a move was learned showed the difference as an event (NOTES: "learned Tackle,
+     * forgot Quick Attack" after a reset). The recorder calls it itself whenever the game is back to its title, its
+     * loading or its main menu ([isOutOfSave]), in every game; a host that loads a save state can call it too.
+     */
+    fun saveLoaded() {
+        known.clear()
+        pastSpecies.clear()
+        partyPolls = 0
+        pendingMoves.clear()
+        stored = null
+        pendingStored.clear()
+        pendingItems.clear()
+        recentIncreases.clear()
+        shopMessageStart = null
+        afterWildBattle = false
+    }
+
+    /** True while [screen] is before any saved game runs: the intro, the title screen, loading, the main menu. */
+    private fun isOutOfSave(screen: Screen): Boolean =
+        screen is Screen.Intro || (screen as? Screen.ListMenu)?.kind == dev.kotlinds.pokemonclient.state.MenuKind.MAIN_MENU
+
     private fun record(frame: Long, before: GameState?, now: GameState) {
+        // Back before the saved game (a soft reset, the title screen): the save loaded next primes the recorder again.
+        if (isOutOfSave(now.screen) && before?.screen?.let(::isOutOfSave) != true) saveLoaded()
         // Text: a field / sign / phone page once it is fully printed (waiting for A, or for a fanfare like "ACE found
         // one PP Up!"), each battle message once.
         val screen = now.screen
@@ -150,6 +177,11 @@ class Recorder(
         val outcome = now.battle?.outcome
         if (outcome != null && outcome != before?.battle?.outcome && now.battle.kind != BattleKind.DEMO) {
             log.append { GameEvent.BattleDecided(it, frame, outcome, now.battle.kind) }
+        }
+        // A foe's HP down to 0 (the same Pokémon as the frame before: not the next one coming in).
+        now.battle?.battlers.orEmpty().filter { !it.ref.isPlayerSide && it.hp == 0 && it.maxHp > 0 }.forEach { foe ->
+            val was = before?.battle?.battlers?.firstOrNull { it.ref == foe.ref } ?: return@forEach
+            if (was.hp > 0 && was.personality == foe.personality && was.partySlot == foe.partySlot) log.append { GameEvent.FoeFainted(it, frame, foe.ref) }
         }
 
         if (before == null) {

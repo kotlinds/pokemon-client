@@ -217,6 +217,8 @@ object StateView {
         put("kind", battle.kind.name.lowercase())
         if (battle.isDouble) put("double", true)
         battle.trainers.takeIf { it.isNotEmpty() }?.let { put("trainers", JsonArray(it.map(::JsonPrimitive))) }
+        // Weather changes what moves do (Solar Beam without its charging turn in the sun...): said while there is one.
+        battle.weather?.takeIf { it.kind != dev.kotlinds.pokemonclient.state.WeatherKind.CLEAR }?.let { put("weather", it.describe()) }
         putJsonArray("battlers") { battle.battlers.forEach { add(battler(it)) } }
         battle.message?.let { put("message", it) }
     }
@@ -380,6 +382,20 @@ object StateView {
                 add(JsonPrimitive("${b.boulder} → hole at ${b.hole.x},${b.hole.y}: " + if (b.fallen) "fallen (on the floor below)" else "still to push in"))
             }
         }
+        if (puzzle.iceBlocks.isNotEmpty()) putJsonArray("ice_blocks") {
+            puzzle.iceBlocks.forEach { b ->
+                add(JsonPrimitive("${b.block} at ${b.at.x},${b.at.y}: " + if (b.movable) "can be pushed" else "frozen against another block (can't move)"))
+            }
+        }
+        // Which way each trainer steps is read in the gym's script: walkthrough knowledge ([showHidden] only).
+        if (showHidden && puzzle.stepAside.isNotEmpty()) putJsonArray("step_aside") {
+            puzzle.stepAside.forEach { t ->
+                val ways = t.steps.groupBy({ it.steps }, { it.playerFacing })
+                val how = if (ways.size == 1) "steps ${ways.keys.single().name.lowercase()}"
+                else ways.entries.joinToString("; ") { (step, facing) -> "steps ${step.name.lowercase()} when talked to facing ${facing.joinToString("/") { it.name.lowercase() }}" }
+                add(JsonPrimitive("${t.person}: " + if (t.beaten) "beaten (stays where it is)" else "once beaten, $how"))
+            }
+        }
         if (puzzle.herds.isNotEmpty()) putJsonArray("herds") {
             puzzle.herds.forEach { h ->
                 add(buildJsonObject {
@@ -458,6 +474,8 @@ object StateView {
         is VolatileStatus.Infatuated -> "infatuated" + (status.with?.let { "(with ${it.wire})" } ?: "")
         is VolatileStatus.Bound -> "bound(${status.turns})"
         is VolatileStatus.PerishSong -> "perish_song(${status.turns})"
+        is VolatileStatus.Encored -> "encored(" + (status.move?.let { "move:${it.id.value} ${it.name}, " } ?: "") + "${status.turns} turns)"
+        is VolatileStatus.Disabled -> "disabled(" + (status.move?.let { "move:${it.id.value} ${it.name}, " } ?: "") + "${status.turns} turns)"
         else -> status.toString().substringBefore('(').replace(Regex("([a-z])([A-Z])"), "$1_$2").lowercase()
     }
 }

@@ -35,4 +35,9 @@ data class ActionSettings(
      * shows the visited towns on its fly map). False (the default): everything is shown and routed, as before.
      */
     val hideDestinations: Boolean = false,
+    /**
+     * Answers may use Pokédex knowledge (the species' data: who can learn a TM on sale). False below the Pokédex
+     * knowledge level: only what the game shows.
+     */
+    val pokedex: Boolean = true,
 )

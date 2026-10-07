@@ -13,7 +13,9 @@ import dev.kotlinds.pokemonclient.state.Screen
 /**
  * Recipes of the Pokémon storage system: walk to the nearest PC, boot it, open the storage, run one or several
  * operations (deposit, withdraw, move to another box, swap a party Pokémon with a stored one) without switching the
- * PC off in between, then switch it off. Pokémon are found by their ids, never by name.
+ * PC off in between, staying on the box screen while the operations keep its mode (several deposits in a row), then
+ * switch it off. A chain's `deposit` / `withdraw` / `pc` steps in a row are one session ([ActionChains.coalesce]).
+ * Pokémon are found by their ids, never by name.
  *
  * The PC's two menus are multichoices whose entries are always in the same order, whatever the language: storage
  * first in the top menu (SOMEONE'S / BILL'S PC), then DEPOSIT, WITHDRAW, MOVE, MOVE ITEMS, SEE YA! in the storage
@@ -94,12 +96,14 @@ internal object PcPlans {
         var failure: ActionError? = null
         for (op in ops) {
             val before = context.state()
+            // Each operation starts from where the previous one left the PC: the same box screen when it works in the
+            // same mode (several deposits, withdrawals or moves in a row), else the storage menu.
             val step = when (op) {
                 is PcOperation.Deposit -> runDeposit(context, op)
                 is PcOperation.Withdraw -> runWithdraw(context, op)
                 is PcOperation.Move -> runMove(context, op)
                 is PcOperation.Swap -> runSwap(context, op)
-            }.andThen { backToStorageMenu(context) }
+            }.andThen { afterOperation(context) }
             if (step is Step.Failed) {
                 failure = step.error
                 break
@@ -112,11 +116,16 @@ internal object PcPlans {
                 }
             }
         }
+        // Out of the box screen the checked way (its two questions told apart), then the PC switched off. Its failure
+        // (a question it doesn't know, a Pokémon still carried) is told: the PC may still be open.
+        val left = backToStorageMenu(context) as? Step.Failed
         PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
+        val leaving = left?.let { "; then leaving the box failed: ${it.error.code} ${it.error.message}" } ?: ""
         return when {
-            failure == null -> ActionOutcome.Done(report.joinToString("; "))
+            failure == null && left != null && report.isEmpty() -> ActionOutcome.Failed(left.error)
+            failure == null -> ActionOutcome.Done(report.joinToString("; ") + leaving)
             report.isEmpty() -> ActionOutcome.Failed(failure)
-            else -> ActionOutcome.Done(report.joinToString("; ") + "; stopped: ${failure.code} ${failure.message}")
+            else -> ActionOutcome.Done(report.joinToString("; ") + "; stopped: ${failure.code} ${failure.message}" + leaving)
         }
     }
 
@@ -216,16 +225,16 @@ internal object PcPlans {
 
     // endregion
 
-    // region Operations (each starts and ends on the storage menu)
+    // region Operations (each starts on the box screen of its mode, [enterMode], and ends on a box screen, [afterOperation])
 
     private fun runDeposit(context: PlanContext, op: PcOperation.Deposit): Step<GameState> =
-        openMode(context, PcMode.DEPOSIT).andThen {
+        enterMode(context, PcMode.DEPOSIT).andThen {
             context.navigator.choose(Screen.PcBox::class, "the Pokémon to deposit") { it.id == op.mon.toString() }
         }.andThen {
             context.navigator.choose(Screen.ContextMenu::class, "DEPOSIT") { it.id == "option:deposit" }
         }.andThen { picker ->
             // "Deposit in which box?": the box asked for, or the first box with room (full boxes aren't selectable).
-            val boxes = picker.screen as? Screen.ListMenu ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the box picker", picker.screen.toString()))
+            val boxes = picker.screen as? Screen.ListMenu ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the box picker", picker.screen))
             val box = boxes.entries.firstOrNull { if (op.box != null) it.id == "box:${op.box}" else it.id.startsWith("box:") && it.selectable }
                 ?: return@andThen Step.Failed(ActionError.Unavailable(UnavailableReason.PARTY_FULL, "Every box is full"))
             context.navigator.select(Screen.ListMenu::class, box.label) { it.id == box.id }.andThen {
@@ -234,7 +243,7 @@ internal object PcPlans {
         }
 
     private fun runWithdraw(context: PlanContext, op: PcOperation.Withdraw): Step<GameState> =
-        openMode(context, PcMode.WITHDRAW).andThen { showBoxWith(context, op.mon) }.andThen {
+        enterMode(context, PcMode.WITHDRAW).andThen { showBoxWith(context, op.mon) }.andThen {
             context.navigator.choose(Screen.PcBox::class, "the Pokémon to withdraw") { it.id == op.mon.toString() }
         }.andThen {
             context.navigator.choose(Screen.ContextMenu::class, "WITHDRAW") { it.id == "option:withdraw" }
@@ -260,20 +269,20 @@ internal object PcPlans {
         }.andThen { swapped ->
             val box = swapped.screen as? Screen.PcBox ?: return@andThen Step.Done(swapped)
             if (box.holding == null) return@andThen Step.Done(swapped)
-            if (box.holding != op.partyMon || slot == null) return@andThen Step.Failed(ActionError.UnexpectedScreen("the swap done", swapped.screen.toString()))
+            if (box.holding != op.partyMon || slot == null) return@andThen Step.Failed(ActionError.UnexpectedScreen("the swap done", swapped.screen))
             context.navigator.choose(Screen.PcBox::class, "the box slot") { it.id == "slot:$slot" || it.id == op.boxMon.toString() }
         }
     }
 
     /** In MOVE POKéMON: shows the box holding [mon] and picks it up (through MOVE in the menu when one opens). */
     private fun pickUp(context: PlanContext, mon: MonId): Step<GameState> =
-        openMode(context, PcMode.MOVE).andThen { showBoxWith(context, mon) }.andThen {
+        enterMode(context, PcMode.MOVE).andThen { showBoxWith(context, mon) }.andThen {
             context.navigator.choose(Screen.PcBox::class, "the Pokémon to move") { it.id == mon.toString() }
         }.andThen { state ->
             if (state.screen is Screen.ContextMenu) context.navigator.choose(Screen.ContextMenu::class, "MOVE") { it.id == "option:move" } else Step.Done(state)
         }.andThen { state ->
             if ((state.screen as? Screen.PcBox)?.holding == mon) Step.Done(state)
-            else Step.Failed(ActionError.UnexpectedScreen("the cursor carrying $mon", state.screen.toString()))
+            else Step.Failed(ActionError.UnexpectedScreen("the cursor carrying $mon", state.screen))
         }
 
     /**
@@ -285,9 +294,9 @@ internal object PcPlans {
         var expected: Int? = null
         repeat(BOXES * 2) {
             val state = context.navigator.settle()
-            val screen = state.screen as? Screen.PcBox ?: return Step.Failed(ActionError.UnexpectedScreen("the box tabs", state.screen.toString()))
+            val screen = state.screen as? Screen.PcBox ?: return Step.Failed(ActionError.UnexpectedScreen("the box tabs", state.screen))
             val current = (screen.cursor as? Cursor.At)?.let { screen.entries.getOrNull(it.index) }?.id?.takeIf { it.startsWith("box:") }?.removePrefix("box:")?.toIntOrNull()
-                ?: return Step.Failed(ActionError.UnexpectedScreen("the cursor on a box tab", screen.toString()))
+                ?: return Step.Failed(ActionError.UnexpectedScreen("the cursor on a box tab", screen))
             if (current == box) return Step.Done(state)
             if (expected != null && current != expected) corrections++
             if (corrections > MAX_CORRECTIONS) return Step.Failed(ActionError.VerificationFailed("box ${box + 1}", "box ${box + 1}", "box ${current + 1}", corrections))
@@ -313,6 +322,31 @@ internal object PcPlans {
             context.navigator.choose(Screen.ListMenu::class, "the storage system") { it.id == "option:$TOP_STORAGE" }
         }.andThen { pcMenu(context) }
     }
+
+    /**
+     * The box screen in [mode] for the next operation: the one on screen when the previous operation left it there
+     * (same mode, nothing carried: several deposits in a row stay on it, like a player would), else back to the
+     * storage menu ([backToStorageMenu]) and that mode opened. Leaving and reopening the box costs its animations each
+     * time (NOTES: a deposit then a withdrawal took 30 s).
+     */
+    private fun enterMode(context: PlanContext, mode: PcMode): Step<GameState> {
+        val now = context.navigator.settle()
+        val box = now.screen as? Screen.PcBox
+        if (box != null && box.mode == mode && box.holding == null) return Step.Done(now)
+        if ((now.screen as? Screen.ListMenu)?.kind == MenuKind.MULTICHOICE) return openMode(context, mode)
+        return backToStorageMenu(context).andThen { openMode(context, mode) }
+    }
+
+    /**
+     * After an operation: its messages read ("X was deposited..."), until the box screen waits again (or the storage
+     * menu, when the game left the box by itself). The next operation decides whether to stay there ([enterMode]).
+     */
+    private fun afterOperation(context: PlanContext): Step<GameState> =
+        context.navigator.advanceUntil(PC_WAITS) { state ->
+            val screen = state.screen
+            (screen is Screen.PcBox && screen.awaiting == dev.kotlinds.pokemonclient.state.Awaiting.INPUT) ||
+                (screen as? Screen.ListMenu)?.kind == MenuKind.MULTICHOICE
+        }
 
     /** From the storage menu, opens the box in [mode]. */
     private fun openMode(context: PlanContext, mode: PcMode): Step<GameState> {
@@ -345,7 +379,7 @@ internal object PcPlans {
             when (val screen = state.screen) {
                 is Screen.ListMenu -> if (screen.kind == MenuKind.MULTICHOICE) return Step.Done(state) else context.scope.tap(Button.B)
                 is Screen.YesNo -> {
-                    if (screen.entries.any { it.dangerous }) return Step.Failed(ActionError.UnexpectedScreen("the box", screen.toString()))
+                    if (screen.entries.any { it.dangerous }) return Step.Failed(ActionError.UnexpectedScreen("the box", screen))
                     val answer = if (answerYes) "option:yes" else "option:no"
                     val answered = context.navigator.choose(Screen.YesNo::class, answer) { it.id == answer }
                     if (answered is Step.Failed) return answered
@@ -353,7 +387,7 @@ internal object PcPlans {
                     return@repeat
                 }
                 is Screen.PcBox -> {
-                    if (screen.holding != null) return Step.Failed(ActionError.UnexpectedScreen("empty hands", "the cursor still carries ${screen.holding}"))
+                    if (screen.holding != null) return Step.Failed(ActionError.UnexpectedScreen("empty hands (the cursor still carries ${screen.holding})", screen))
                     // Back on the box right after a NO: that question was "Exit the Box?", answer YES next time.
                     if (answeredNo) answerYes = true
                     context.scope.tap(Button.B)
@@ -372,7 +406,7 @@ internal object PcPlans {
         val monId = mon.toString()
         repeat(BOXES) {
             val state = context.navigator.settle()
-            val box = state.screen as? Screen.PcBox ?: return Step.Failed(ActionError.UnexpectedScreen("a PC box", state.screen.toString()))
+            val box = state.screen as? Screen.PcBox ?: return Step.Failed(ActionError.UnexpectedScreen("a PC box", state.screen))
             if (box.entries.any { it.id == monId }) return Step.Done(state)
             // The stored box is known from the save data: go the shorter way round.
             val target = state.storage?.find(mon)?.box
