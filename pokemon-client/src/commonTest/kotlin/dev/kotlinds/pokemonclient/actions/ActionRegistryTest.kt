@@ -78,6 +78,51 @@ class ActionRegistryTest {
         assertTrue(registry.available(battleState(Screen.Battle(Awaiting.ANIMATION)), ActionMode.ASSISTED).none { it.name == "attack" })
     }
 
+    // region Per-game recipes
+
+    /** A recipe of `wait` that only says it ran (a game whose own recipe replaces the common one). */
+    private val ownWait = RecipeOverride.of<GameAction.Wait> { _, _ -> ActionOutcome.Done("the game's own wait") }
+
+    @Test
+    fun aGamesOwnRecipeReplacesTheCommonOneForThatGameOnly() {
+        val overriding = FakeGame(Screen.Overworld(null, Awaiting.INPUT)).apply { actionOverrides = listOf(ownWait) }
+        val done = assertIs<ActionOutcome.Done>(ActionRegistry.of(overriding).execute(GameAction.Wait(frames = 10), overriding.scope(), overriding))
+        assertEquals("the game's own wait", done.detail)
+        assertEquals(0L, overriding.console.frame, "the common recipe would have waited 10 frames")
+        // The same action in a game without overrides (and without a game): the common recipe.
+        for (registry in listOf(ActionRegistry.of(FakeGame(Screen.Overworld(null, Awaiting.INPUT))), ActionRegistry.of())) {
+            val plain = FakeGame(Screen.Overworld(null, Awaiting.INPUT))
+            val common = assertIs<ActionOutcome.Done>(registry.execute(GameAction.Wait(frames = 10), plain.scope(), plain))
+            assertTrue(common.detail != "the game's own wait")
+            assertTrue(plain.console.frame >= 10L, "frame ${plain.console.frame}")
+        }
+        // What agents see is the common contract whatever the recipe.
+        for (mode in ActionMode.entries) assertEquals(ActionRegistry.of().jsonSchema(mode), ActionRegistry.of(overriding).jsonSchema(mode))
+    }
+
+    @Test
+    fun twoRecipesForOneActionAreRefused() {
+        val game = FakeGame(Screen.Overworld(null, Awaiting.INPUT)).apply { actionOverrides = listOf(ownWait, ownWait) }
+        kotlin.test.assertFailsWith<IllegalArgumentException> { ActionRegistry.of(game) }
+    }
+
+    /**
+     * A recipe for a type that isn't a common action (every concrete action type is one: here the sealed parent
+     * itself) is refused when the registry is built: an override never adds an action agents can't see.
+     */
+    @Test
+    fun aRecipeForATypeThatIsNotACommonActionIsRefused() {
+        val stray = RecipeOverride(GameAction::class, ActionPlan { _, _ -> ActionOutcome.Done("never listed") })
+        val game = FakeGame(Screen.Overworld(null, Awaiting.INPUT)).apply { actionOverrides = listOf(stray) }
+        val refused = kotlin.test.assertFailsWith<IllegalArgumentException> { ActionRegistry.of(game) }
+        assertTrue("GameAction" in refused.message.orEmpty(), refused.message)
+        // Alongside a valid one, all the same.
+        game.actionOverrides = listOf(ownWait, stray)
+        kotlin.test.assertFailsWith<IllegalArgumentException> { ActionRegistry.of(game) }
+    }
+
+    // endregion
+
     // region executeAndSettle: every host's step (the app's sessions, the MCP, the bench)
 
     /** A fake game busy (animating) until frame [readyAt], then waiting for input. */

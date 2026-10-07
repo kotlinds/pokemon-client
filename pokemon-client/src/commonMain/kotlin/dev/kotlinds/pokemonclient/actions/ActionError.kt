@@ -225,7 +225,14 @@ enum class UnavailableReason {
      * there. The error names what is on it or next to it and the target id that walks next to it (`go_to person:0`).
      */
     TARGET_IS_OBSTACLE,
+    /** The price is more than the player has of the shop's currency (money, athlete points...: the shop's `currency`). */
     NOT_ENOUGH_MONEY,
+
+    /**
+     * This counter sells seals or decorations, not items (the shop's `goods`): `buy` only buys items, and doesn't buy
+     * these yet.
+     */
+    GOODS_NOT_ITEMS,
 
     /** The game refused it: "It won't have any effect". */
     NO_EFFECT,

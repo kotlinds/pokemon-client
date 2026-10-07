@@ -137,6 +137,8 @@ internal object PartyBagPlans {
      * battle recipe ([BattleItemPlans.useItem]) is used instead.
      */
     val useItem = ActionPlan<GameAction.UseItem> { action, context ->
+        // The battle half of this same recipe, not another action: called directly (going through the registry would
+        // come back here). A game overriding `use_item` replaces both halves.
         if (context.state().battle != null) return@ActionPlan BattleItemPlans.useItem.run(action, context)
         val done = mutableListOf<String>()
         for ((index, use) in action.uses.withIndex()) {
@@ -250,7 +252,7 @@ internal object PartyBagPlans {
                 val yes = context.navigator.choose(Screen.YesNo::class, "YES (forget a move)") { it.id == "option:yes" }
                 if (yes is Step.Failed) return@andThen yes
             }
-            when (val forgot = BattlePlans.learnMove.run(GameAction.LearnMove(forget), context)) {
+            when (val forgot = context.run(GameAction.LearnMove(forget))) {
                 is ActionOutcome.Failed -> Step.Failed(forgot.error)
                 is ActionOutcome.Done -> Step.Done(context.state())
             }

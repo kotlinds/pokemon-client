@@ -36,9 +36,12 @@ data class UnavailableAction(val name: String, val reason: UnavailableReason, va
  * mode) gets its JSON schema, the list of what is possible now, and executes through here. Execution always
  * checks availability first, then runs the recipe, and turns interruptions into typed errors.
  *
+ * Built only by [ActionRegistry.of] (the constructor is private): a registry is always the common actions with one
+ * game's own recipes applied, never a hand-made list that could skip them.
+ *
  * @param definitions the common recipes ([CommonActions.definitions]) with the game's own overrides applied.
  */
-class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
+class ActionRegistry private constructor(private val definitions: List<ActionDefinition<*>>) {
 
     private val byName = definitions.associateBy { it.spec.name }
 
@@ -107,7 +110,7 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
     fun execute(action: GameAction, scope: ActionScope, game: PokemonGame, settings: ActionSettings = ActionSettings()): ActionOutcome {
         val def = definitions.firstOrNull { it.type.isInstance(action) }
             ?: return ActionOutcome.Failed(ActionError.Unsupported(action.key))
-        val context = PlanContext(scope, game, settings = settings)
+        val context = PlanContext(scope, game, settings = settings, registry = this)
         when (val availability = availabilityOnceSettled(def.spec, context)) {
             is Availability.Unavailable -> {
                 // Fly refused here: name the nearest place where it works (computed only when asked, it routes).
@@ -126,6 +129,18 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
         } catch (error: ActionException) {
             ActionOutcome.Failed(error.error)
         }
+    }
+
+    /**
+     * The recipe this registry plays for [action]'s type: the game's own one when it overrides it, else the common
+     * one. What [PlanContext.run] goes through when a recipe carries out another action as one of its steps (talking
+     * to the nurse or the clerk, typing a nickname, using a Repel...), so a game's override is played there too.
+     */
+    internal fun recipeFor(action: GameAction): ActionPlan<GameAction>? {
+        val def = definitions.firstOrNull { it.type.isInstance(action) } ?: return null
+        // The definition of the action's own type: its plan takes this action.
+        @Suppress("UNCHECKED_CAST")
+        return def.plan as ActionPlan<GameAction>
     }
 
     /**
@@ -227,13 +242,21 @@ class ActionRegistry(private val definitions: List<ActionDefinition<*>>) {
          */
         fun settleBetweenSteps(scope: ActionScope, game: PokemonGame): GameState = Navigator(scope, game).settle(maxFrames = STEP_FRAMES)
 
-        /** The common actions, with [overrides] replacing the recipe of some action types for one game. */
-        fun of(overrides: Map<KClass<out GameAction>, ActionPlan<out GameAction>> = emptyMap()): ActionRegistry =
-            ActionRegistry(CommonActions.definitions.map { def ->
-                @Suppress("UNCHECKED_CAST")
-                val override = overrides[def.type] as ActionPlan<GameAction>?
-                if (override == null) def else ActionDefinition(def.type as KClass<GameAction>, def.spec as ActionSpec<GameAction>, override)
-            })
+        /**
+         * The registry of [game]: the common actions ([CommonActions.definitions]), with the game's own recipes
+         * ([PokemonGame.actionOverrides]) in place of the common ones for the action types it overrides. The one
+         * factory of every host (the app's sessions and MCP server, the bench, [dev.kotlinds.pokemonclient.view.AgentView]):
+         * a registry built for a game always plays that game's recipes. Without a game (tests of the common recipes),
+         * the common recipes alone.
+         */
+        fun of(game: PokemonGame? = null): ActionRegistry {
+            val overrides = game?.actionOverrides.orEmpty()
+            val byType = overrides.associateBy { it.type }
+            require(byType.size == overrides.size) { "${game?.name} gives two recipes for the same action type" }
+            val common = CommonActions.definitions.map { it.type }.toSet()
+            require(common.containsAll(byType.keys)) { "${game?.name} overrides actions that don't exist: ${(byType.keys - common).map { it.simpleName }}" }
+            return ActionRegistry(CommonActions.definitions.map { def -> byType[def.type]?.replacing(def) ?: def })
+        }
     }
 }
 

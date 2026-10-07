@@ -76,6 +76,14 @@ interface PokemonGame {
      */
     val pcFacing: dev.kotlinds.pokemonclient.Direction? get() = null
 
+    /**
+     * This game's own recipes, each replacing the common recipe of one action type for this game only
+     * ([dev.kotlinds.pokemonclient.actions.RecipeOverride]; the action's spec, what agents see, stays the common one).
+     * Applied by [dev.kotlinds.pokemonclient.actions.ActionRegistry.of], the registry every host builds for a game.
+     * Empty by default: the common recipes work for the game.
+     */
+    val actionOverrides: List<dev.kotlinds.pokemonclient.actions.RecipeOverride<*>> get() = emptyList()
+
     /** The item id of the bicycle (a key item ridden from the field), or null when this game has none. */
     val bicycleItem: Int? get() = null
 

@@ -32,6 +32,7 @@ contract, and don't put generic things in `games/gen4/`.
 | `data` | `GameData` from the ROM: species, moves, items, type chart, machines, text | for `lookup` and effectiveness |
 | `scriptVariable(memory, id)`, `scriptFlag(memory, id)` | read a script variable / an event flag (active triggers, puzzles, quiet triggers). Gen 4: the save's `VarsFlags` (`Gen4SaveData` with the game's `Gen4SaveLayout`) | for triggers |
 | `mapName(id)` | the one `MapName` of a map (the place shown in game + the map's own name; `map:<id>` when unknown), shown by the state and the map view, matched by `go_to` and `fly` | for movement actions |
+| `actionOverrides` | the game's own recipes (`RecipeOverride.of<GameAction.X> { action, context -> ... }`), each replacing the common recipe of one action type for this game only; the action's spec (name, parameters, availability, description) stays the common one, so agents see the same contract. Empty by default. Every host builds its registry with `ActionRegistry.of(game)` (the app's sessions and MCP server, the bench, `AgentView`), so an override is always played, also when another recipe carries out that action as one of its steps (`context.run(action)`: `heal` and `buy` talk through `interact`); two recipes for one type, or a type that isn't a common action, are refused when the registry is built | only when the game's screens make a common recipe impossible |
 | `fieldMoveRule(kind)` | the move and badge of each field move, Fly included (Gen 4: give `fieldMoveBadges`, a map from each move the game has to the badge it needs, `null` for none: Teleport, Dig...; a move missing from the map is one the game doesn't have). A game whose party and party menu aren't decoded yet says so (`Gen4Game.partyRead = false`): every move is `FieldMoveAccess.NotSupported`, `fly` and `use_field_move` are listed unavailable (`NOT_SUPPORTED_BY_GAME`), routes don't use Surf, Cut... | for field moves and `fly` |
 
 `GameState` fields a game fills when it can read them (null / empty means unknown, never "none"):
@@ -135,7 +136,8 @@ Never compare values that depend on the time of day (the RTC follows the host cl
    optional field at the end of a type when the model really lacks something.
 7. **Story table** (optional, walkthrough knowledge): ordered steps with typed conditions on flags / vars / badges.
 8. **Verify the shared recipes** on the new game with the bench (`act:{...}`): heal, buy, PC, battle actions, fly,
-   fish, teach, go_to... A recipe only needs a per-game override when the game's screens really differ.
+   fish, teach, go_to... A recipe only needs a per-game override (`actionOverrides`) when the game's screens really
+   differ; prefer making the common recipe read what differs from the state (a typed field of the screen) first.
 
 ## What Platinum doesn't read yet
 

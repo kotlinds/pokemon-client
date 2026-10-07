@@ -4,6 +4,7 @@ import dev.kotlinds.pokemonclient.data.GrowthRate
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -109,6 +110,23 @@ class HgssServicesRomTest {
         // The Indigo Plateau clerk (scr_seq_T10R0101_004): special mart 13.
         assertEquals(listOf(2, 77, 25, 24, 23, 28, 27), HgssMarts.catalog(MAP_LEAGUE_ENTRANCE, 5, badges = 8))
         assertEquals(listOf(4, 17, 18, 22), HgssMarts.normal(0))
+    }
+
+    /**
+     * What a shop sells ([HgssMarts.shopItem]: a clerk's catalog and the shop list on screen alike) is the ROM's item
+     * data: the name in the ROM's language and the item data's price, never the text the list shows.
+     */
+    @Test
+    fun shopItemsComeFromTheRomsItemData() {
+        rom()
+        val data = HgssWorldRom.requireData()
+        val indigo = assertNotNull(HgssMarts.catalog(MAP_LEAGUE_ENTRANCE, 5, badges = 8)).map(HgssMarts::shopItem)
+        for (sold in indigo) {
+            val info = assertNotNull(data.item(sold.item.id))
+            assertEquals(info.name, sold.item.name)
+            assertEquals(info.price, sold.price)
+        }
+        assertEquals(listOf("Ultra Ball" to 1200, "Full Restore" to 3000), indigo.filter { it.item.id.value in setOf(2, 23) }.map { it.item.name to it.price })
     }
 
     @Test

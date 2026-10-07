@@ -116,6 +116,21 @@ class ViewsTest {
         assertTrue(state.isNotEmpty())
     }
 
+    /** A shop says what its prices are paid with and how much of it the player has; what isn't a Poké Mart says so. */
+    @Test
+    fun aShopGivesItsBalanceAndCurrency() {
+        val entries = listOf(Entry("item:17", "Potion ₽300"), Entry("option:cancel", "CANCEL"))
+        val mart = StateView.screen(Screen.Shop(3000, emptyList(), entries, Cursor.At(0), Topology.vertical(2)))
+        assertEquals(3000, mart["balance"]!!.jsonPrimitive.content.toInt())
+        assertEquals("money", mart["currency"]!!.jsonPrimitive.content)
+        assertTrue("goods" !in mart && "one_of_each" !in mart && "money" !in mart)
+        val dome = StateView.screen(Screen.Shop(2500, emptyList(), entries, Cursor.At(0), Topology.vertical(2), currency = dev.kotlinds.pokemonclient.state.ShopCurrency.ATHLETE_POINTS, oneOfEach = true))
+        assertEquals("athlete_points", dome["currency"]!!.jsonPrimitive.content)
+        assertTrue("one_of_each" in dome)
+        val seals = StateView.screen(Screen.Shop(3000, emptyList(), entries, Cursor.At(0), Topology.vertical(2), goods = dev.kotlinds.pokemonclient.state.ShopGoods.SEALS))
+        assertEquals("seals", seals["goods"]!!.jsonPrimitive.content)
+    }
+
     @Test
     fun theRepelCounterIsShownWhileARepelWorks() {
         fun view(steps: Int?) = StateView.state(GameState(0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null, field.copy(repelSteps = steps)))

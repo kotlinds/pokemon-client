@@ -16,6 +16,8 @@ import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.PcMode
 import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.ShopCurrency
+import dev.kotlinds.pokemonclient.state.ShopGoods
 import dev.kotlinds.pokemonclient.state.Topology
 import dev.kotlinds.pokemonclient.games.hgss.HgssAddresses as A
 import dev.kotlinds.pokemonclient.games.hgss.HgssKeyboardPcShopAddresses as K
@@ -493,8 +495,13 @@ internal object HgssMart {
     }
 
     /**
-     * Every item of the list, page by page (6 per page; the last page is padded with empty, non-selectable slots
+     * Every line of the list, page by page (6 per page; the last page is padded with empty, non-selectable slots
      * because the cursor keeps its slot when the page turns), then CANCEL. Entry index = `pageOffset + slot`.
+     *
+     * What the list sells and how it is paid follow the mart's type (`MartData.martType`, [Kind]): items for money
+     * (Poké Marts: prices from the item data, `ov03_02258120`), items for athlete points with the shop's own prices
+     * (the Pokéathlon Dome, `MartData.priceOverrides`; one of each, sold out once bought), or seals / decorations
+     * (not items: `seal:<id>` / `decoration:<id>`).
      */
     private fun grid(mem: HgssMemory, mart: Long, money: Long): Screen.Shop {
         val count = mem.u8(mart + K.MART_COUNT)
@@ -502,25 +509,81 @@ internal object HgssMart {
         val pageOffset = mem.u8(mart + K.MART_PAGE_OFFSET)
         val pages = ((count + K.MART_PAGE_SIZE - 1) / K.MART_PAGE_SIZE).coerceAtLeast(1)
         val slots = pages * K.MART_PAGE_SIZE
-        val entries = (0 until slots).map { i ->
-            val item = if (i < count && itemsPtr != null) mem.u16(itemsPtr + 2L * i) else 0
-            if (item == 0) {
-                Entry("slot:$i", "-", selectable = false)
-            } else {
-                val price = HgssItemPrices.price(item)
-                Entry("item:$item", HgssData.itemName(item) + (price?.let { " ₽$it" } ?: ""), selectable = price == null || price <= money)
+        val kind = Kind.of(mem.u8(mart + K.MART_TYPE))
+        val pokeathlon = mem.ptr(mart + K.MART_POKEATHLON_SAVE)
+        // The balance the game checks and takes from (ov03_022577F4, MartData_SubCurrency).
+        val balance = when (kind.currency) {
+            ShopCurrency.ATHLETE_POINTS -> pokeathlon?.let { mem.s32(it + K.POKEATHLON_ATHLETE_POINTS).toLong() } ?: 0L
+            else -> money
+        }
+        val ids = (0 until slots).map { i -> if (i < count && itemsPtr != null) mem.u16(itemsPtr + 2L * i) else 0 }
+        // What is sold, from the game's data (ids in RAM, names from the ROM, prices where the game takes them); labels only show it.
+        val items = if (kind.goods != ShopGoods.ITEMS) emptyList() else ids.withIndex().filter { it.value != 0 }.map { (i, item) ->
+            val base = HgssMarts.shopItem(item)
+            if (kind.currency != ShopCurrency.ATHLETE_POINTS) base
+            else base.copy(price = shopPrice(mem, mart, item, count), soldOut = pokeathlon != null && boughtOut(mem, pokeathlon, kind, i, item))
+        }
+        val entries = ids.mapIndexed { i, id ->
+            when {
+                id == 0 -> Entry("slot:$i", "-", selectable = false)
+                kind.goods == ShopGoods.SEALS -> Entry("seal:$id", "seal $id ${kind.currency.format(K.MART_FIXED_PRICE.toLong())}", selectable = K.MART_FIXED_PRICE <= balance)
+                kind.goods == ShopGoods.DECORATIONS -> Entry("decoration:$id", "decoration $id ${kind.currency.format(K.MART_FIXED_PRICE.toLong())}", selectable = K.MART_FIXED_PRICE <= balance)
+                else -> {
+                    val sold = items.first { it.item.id.value == id }
+                    val label = sold.item.name + (sold.price?.let { " " + kind.currency.format(it.toLong()) } ?: "") + (if (sold.soldOut) " (sold out)" else "")
+                    Entry("item:$id", label, selectable = !sold.soldOut && (sold.price == null || sold.price <= balance))
+                }
             }
         } + Entry("option:cancel", "CANCEL")
         val cancel = slots
         val raw = mem.s32(mart + K.MART_CURSOR)
         val cursor = if (raw == K.MART_CURSOR_CANCEL) cancel else pageOffset + raw
         return Screen.Shop(
-            money = money,
+            balance = balance,
+            items = items,
             entries = entries,
             cursor = if (cursor in entries.indices) Cursor.At(cursor) else Cursor.Hidden,
             topology = precomputedTopology(entries.size) { from, button -> move(from, button, cancel, pageOffset, count) },
             cancel = CancelBehavior.CLOSES,
+            currency = kind.currency,
+            goods = kind.goods,
+            oneOfEach = kind.oneOfEach,
         )
+    }
+
+    /** A mart type (`enum MartTypes`, include/overlay_03.h:23) as the common model says it. */
+    private enum class Kind(val type: Int, val goods: ShopGoods, val currency: ShopCurrency, val oneOfEach: Boolean) {
+        NORMAL(K.MART_TYPE_NORMAL, ShopGoods.ITEMS, ShopCurrency.MONEY, false),
+        DECORATION(K.MART_TYPE_DECORATION, ShopGoods.DECORATIONS, ShopCurrency.MONEY, false),
+        SEAL(K.MART_TYPE_SEAL, ShopGoods.SEALS, ShopCurrency.MONEY, false),
+        // No quantity for either (ov03_02257874 goes straight to the confirmation, shop_menu.c:752).
+        POKEATHLON_DAILY(K.MART_TYPE_POKEATHLON_DAILY, ShopGoods.ITEMS, ShopCurrency.ATHLETE_POINTS, true),
+        POKEATHLON_DATA_CARDS(K.MART_TYPE_POKEATHLON_DATA_CARDS, ShopGoods.ITEMS, ShopCurrency.ATHLETE_POINTS, true),
+        ;
+
+        companion object {
+            /** An unknown value reads as a Poké Mart (the game treats every other type like one but for the price). */
+            fun of(type: Int): Kind = entries.firstOrNull { it.type == type } ?: NORMAL
+        }
+    }
+
+    /**
+     * The price of [item] in a Pokéathlon Dome mart: its line of the shop's own list (`MartData.priceOverrides`,
+     * `{u16 item, u16 cost}` per line, [count] lines; ov03_022580F8), null when not found.
+     */
+    private fun shopPrice(mem: HgssMemory, mart: Long, item: Int, count: Int): Int? {
+        val prices = mem.ptr(mart + K.MART_PRICE_OVERRIDES, align = 2) ?: return null
+        return (0 until count).firstOrNull { mem.u16(prices + 4L * it) == item }?.let { mem.u16(prices + 4L * it + 2) }
+    }
+
+    /**
+     * True when line [index] ([item]) of a Pokéathlon Dome mart was already bought: the daily shop's bit of the line,
+     * the Data Card's bit of the card (ov03_02257814: the game answers "sold out" for them).
+     */
+    private fun boughtOut(mem: HgssMemory, pokeathlon: Long, kind: Kind, index: Int, item: Int): Boolean = when (kind) {
+        Kind.POKEATHLON_DAILY -> (mem.u16(pokeathlon + K.POKEATHLON_DAILY_BOUGHT) shr index) and 1 == 1
+        Kind.POKEATHLON_DATA_CARDS -> (item - K.ITEM_DATA_CARD_01) in 0 until 27 && (mem.u32(pokeathlon + K.POKEATHLON_DATA_CARDS_BOUGHT) shr (item - K.ITEM_DATA_CARD_01)) and 1L == 1L
+        else -> false
     }
 
     /**
@@ -557,7 +620,8 @@ internal object HgssMart {
         val item = mem.u16(mart + K.MART_ITEM)
         val quantity = mem.s16(mart + K.MART_QUANTITY)
         val total = mem.s32(mart + K.MART_COST).toLong() * quantity
-        return HgssYesNoPrompt.screen(mem, prompt, "${HgssData.itemName(item)} ×$quantity: ₽$total, OK?")
+        val currency = Kind.of(mem.u8(mart + K.MART_TYPE)).currency
+        return HgssYesNoPrompt.screen(mem, prompt, "${HgssData.itemName(item)} ×$quantity: ${currency.format(total)}, OK?")
     }
 }
 

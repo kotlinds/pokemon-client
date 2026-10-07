@@ -114,7 +114,7 @@ internal object PushPlans {
             val standAt = if (index == 0) start else route.edges[index - 1].to
             if (field.x != standAt.x || field.y != standAt.y) {
                 // Walk only: no other boulder moved on the way (the plan keeps them where they are).
-                val walker = PlanContext(context.scope, context.game, context.navigator, context.settings.copy(solvePuzzles = false))
+                val walker = context.with(context.settings.copy(solvePuzzles = false))
                 val walked = MovePlans.walkTo(walker, MovePlans.Target("${standAt.x},${standAt.y}", standAt.x, standAt.y), MoveOptions())
                 if (walked !is MovePlans.Walk.Arrived || walked.through != null) return with(MovePlans) { walked.toOutcome(context) { "" } }.withDone(done)
                 if (walked.field.x != standAt.x || walked.field.y != standAt.y || walked.field.mapId != field.mapId) return@repeat

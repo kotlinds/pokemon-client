@@ -48,18 +48,20 @@ internal object BattlePlans {
      * that is over isn't a capture (Raikou broke free, then fled).
      */
     val throwBall = ActionPlan<GameAction.ThrowBall> { action, context ->
-        var ballId = ""
         val before = context.state()
+        // The ball by its id or its name in the game's data (the bag of the state, like `sell`), never by the label
+        // the pocket shows (the game may run in another language): refused before opening anything.
+        val balls = before.bag.orEmpty().firstOrNull { it.name == BALLS_BAG_POCKET }?.items.orEmpty()
+        val stack = balls.firstOrNull { matchesRef(action.ball.raw, "item", it.item.id.value, it.item.name) }
+            ?: return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("ball", action.ball.raw, balls.map { "item:${it.item.id.value} (${it.item.name} x${it.quantity})" }))
+        val ballId = "item:${stack.item.id.value}"
         val reached = context.navigator.choose(Screen.BattleCommand::class, "BAG") { it.id == "option:bag" }.andThen {
             context.navigator.choose(Screen.Bag::class, "POKé BALLS") { it.id == BALLS_POCKET }
         }.andThen { state ->
             val bag = state.screen as? Screen.Bag ?: return@andThen Step.Failed(ActionError.UnexpectedScreen("the balls pocket", state.screen))
-            val ball = bag.entries.firstOrNull { e ->
-                val id = e.id.removePrefix("item:").toIntOrNull() ?: return@firstOrNull false
-                e.id.startsWith("item:") && matchesRef(action.ball.raw, "item", id, e.label.substringBeforeLast(" x"))
-            } ?: return@andThen Step.Failed(ActionError.NotOnScreen(action.ball.raw, "the balls pocket", bag.entries.filter { it.id.startsWith("item:") }.map { it.label }))
-            ballId = ball.id
-            context.navigator.choose(Screen.Bag::class, ball.label) { it.id == ball.id }
+            val ball = bag.entries.firstOrNull { it.id == ballId }
+                ?: return@andThen Step.Failed(ActionError.NotOnScreen("$ballId (${stack.item.name})", "the balls pocket", balls.map { "item:${it.item.id.value} (${it.item.name})" }))
+            context.navigator.choose(Screen.Bag::class, stack.item.name) { it.id == ball.id }
         }.andThen {
             // USE is confirmed here, not by the navigator: its settling would let the whole throw play unseen.
             when (val use = context.navigator.select(Screen.ContextMenu::class, "USE") { it.id == "option:use" }) {
@@ -127,7 +129,7 @@ internal object BattlePlans {
         return context.navigator.choose(Screen.YesNo::class, "YES (nickname)") { it.id == "option:yes" }.andThen {
             context.navigator.advanceUntil(NICKNAME_WAITS) { it.screen is Screen.Keyboard }
         }.andThen {
-            when (val typed = TextPlans.enterText.run(GameAction.EnterText(nickname), context)) {
+            when (val typed = context.run(GameAction.EnterText(nickname))) {
                 is ActionOutcome.Done -> Step.Done(context.state())
                 is ActionOutcome.Failed -> Step.Failed(typed.error)
             }
@@ -252,6 +254,9 @@ internal object BattlePlans {
     }
 
     private const val BALLS_POCKET = "pocket:poke_balls"
+
+    /** The balls pocket of the state's bag ([dev.kotlinds.pokemonclient.state.BagPocket.name], what `throw_ball` lists). */
+    private const val BALLS_BAG_POCKET = "balls"
     /** The throw, the shakes, "Gotcha!" and the Pokédex entry up to the nickname question (~1600 frames seen). */
     private const val THROW_FRAMES = 2400
     private const val AFTER_CATCH_WAITS = 40

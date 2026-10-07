@@ -4,10 +4,7 @@ import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.FieldObjectKind
 import dev.kotlinds.pokemonclient.state.FieldTrainer
 import dev.kotlinds.pokemonclient.state.GameState
-import dev.kotlinds.pokemonclient.state.ItemId
-import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.PersonRole
-import dev.kotlinds.pokemonclient.state.ShopItem
 
 /**
  * Adds to a mapped [GameState] what services need and the main reader doesn't give: the PC boxes and the OPTIONS
@@ -91,7 +88,7 @@ internal class HgssServices {
         if (o.role == PersonRole.NURSE && info.scriptId >= FIRST_STD_SCRIPT) return o.copy(role = null)
         if (o.role == PersonRole.CLERK) {
             val catalog = HgssMarts.catalog(zone, info.scriptId, badges) ?: return o
-            return o.copy(catalog = catalog.map { ShopItem(Named(ItemId(it), HgssData.itemName(it)), HgssItemPrices.price(it)) })
+            return o.copy(catalog = catalog.map(HgssMarts::shopItem))
         }
         val trainerId = HgssTrainers.trainerOf(zone, info.id, info.scriptId) ?: return o
         val (trainerClass, name) = HgssTrainers.names(trainerId) ?: return o

@@ -426,16 +426,19 @@ class BattleActionPlansTest {
      * A throw: BAG → POKé BALLS → Poké Ball → USE; the ball lands [landing] frames after A: [shakes] (null: not read)
      * and [outcome] are set, and the battle goes on to [after] (null battle: it ended).
      */
-    private fun throwUi(shakes: Int?, outcome: BattleOutcome?, after: Screen, battleAfter: Boolean): Ui {
+    private fun throwUi(
+        shakes: Int?, outcome: BattleOutcome?, after: Screen, battleAfter: Boolean,
+        balls: List<BagItem> = listOf(BagItem(Named(ItemId(4), "Poké Ball"), 5)),
+        pocket: Screen.Bag = battleBag("POKé BALLS", listOf("item:4")),
+    ): Ui {
         var current: BattleState? = battle()
-        val balls = BagPocket("balls", listOf(BagItem(Named(ItemId(4), "Poké Ball"), 5)))
-        val ui = Ui({ current }, listOf(mon(1)), listOf(balls), command)
+        val ui = Ui({ current }, listOf(mon(1)), listOf(BagPocket("balls", balls)), command)
         var thrownAt: Long? = null
         ui.onA = { screen, id ->
             when {
                 screen is Screen.BattleCommand && id == "option:bag" -> bagMenu
-                screen is Screen.Bag && id == "pocket:poke_balls" -> battleBag("POKé BALLS", listOf("item:4"))
-                screen is Screen.Bag && id == "item:4" -> Screen.ContextMenu(null, listOf(Entry("option:use", "USE"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
+                screen is Screen.Bag && id == "pocket:poke_balls" -> pocket
+                screen is Screen.Bag && id != null && id.startsWith("item:") -> { thrown = id; Screen.ContextMenu(null, listOf(Entry("option:use", "USE"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2)) }
                 screen is Screen.ContextMenu && id == "option:use" -> { thrownAt = ui.game.console.frame; Screen.Battle(Awaiting.ANIMATION) }
                 screen is Screen.YesNo -> { current = null; Screen.Overworld(null, Awaiting.INPUT) }
                 else -> screen
@@ -451,6 +454,35 @@ class BattleActionPlansTest {
             }
         }
         return ui
+    }
+
+    /** The ball chosen in the pocket by the last throw ([throwUi]). */
+    private var thrown: String? = null
+
+    /**
+     * The game in French: the pocket shows "SUPER BALL     ×3" (another name, another layout than "Great Ball x3"):
+     * the ball is found by its id or by the game's own name in the bag's data, never in the label; a ball the bag
+     * doesn't have is refused before anything is pressed, with the bag's balls by id and name.
+     */
+    @Test
+    fun theBallIsChosenByTheBagsDataNotByItsLabel() {
+        val balls = listOf(BagItem(Named(ItemId(4), "POKé BALL"), 5), BagItem(Named(ItemId(3), "SUPER BALL"), 3))
+        val pocket = Screen.Bag(
+            "POKé BALLS", listOf("SOINS", "STATUT", "POKé BALLS", "COMBAT"), 0, 1, true,
+            listOf(Entry("item:4", "POKé BALL       ×5"), Entry("item:3", "SUPER BALL      ×3"), Entry("option:cancel", "RETOUR")), Cursor.At(0), Topology.vertical(3),
+        )
+        for (asked in listOf("item:3", "super ball")) {
+            thrown = null
+            val ui = throwUi(1, null, command, battleAfter = true, balls = balls, pocket = pocket)
+            val done = BattlePlans.throwBall.run(GameAction.ThrowBall(ItemRef(asked)), ui.game.context()).let { assertIs<ActionOutcome.Done>(it, it.toString()) }
+            assertEquals("item:3: broke free after 1 shake", done.detail, asked)
+            assertEquals("item:3", thrown, asked)
+        }
+        // The English name isn't this game's: refused at once, listing the bag's balls from the data.
+        val ui = throwUi(1, null, command, battleAfter = true, balls = balls, pocket = pocket)
+        val failed = assertIs<ActionOutcome.Failed>(BattlePlans.throwBall.run(GameAction.ThrowBall(ItemRef("Great Ball")), ui.game.context()))
+        assertEquals(listOf("item:4 (POKé BALL x5)", "item:3 (SUPER BALL x3)"), assertIs<ActionError.InvalidParameter>(failed.error).allowed)
+        assertTrue(ui.game.presses.isEmpty())
     }
 
     @Test

@@ -314,7 +314,7 @@ internal object PcPlans {
 
     /** Walks to the PC, boots it and opens the storage menu. */
     private fun openStorage(context: PlanContext): Step<GameState> {
-        when (val booted = MovePlans.interact.run(GameAction.Interact(MovePlans.PC), context)) {
+        when (val booted = context.run(GameAction.Interact(MovePlans.PC))) {
             is ActionOutcome.Failed -> return Step.Failed(booted.error)
             is ActionOutcome.Done -> Unit
         }

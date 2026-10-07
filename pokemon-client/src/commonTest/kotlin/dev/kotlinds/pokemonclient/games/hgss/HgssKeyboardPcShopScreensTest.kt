@@ -8,6 +8,8 @@ import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.PcMode
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.ShopCurrency
+import dev.kotlinds.pokemonclient.state.ShopGoods
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -328,7 +330,7 @@ class HgssKeyboardPcShopScreensTest {
     @Test
     fun shopGridListsEveryPageWithPrices() {
         val shop = screen<Screen.Shop>("shop_grid")
-        assertEquals(72178L, shop.money)
+        assertEquals(72178L, shop.balance)
         assertEquals(25, shop.entries.size) // 19 items on 4 pages of 6, then CANCEL
         assertEquals(listOf("item:4", "item:3", "item:2", "item:17", "item:26", "item:25", "item:24"), shop.ids().take(7))
         assertTrue(shop.entries[0].label.endsWith("₽200"))
@@ -337,7 +339,105 @@ class HgssKeyboardPcShopScreensTest {
         assertTrue(shop.entries.subList(19, 24).none { it.selectable }) // padding of the last page
         assertEquals("option:cancel", shop.entries[24].id)
         assertEquals(0, shop.cursorIndex())
+        // What is sold, typed from the game's data (ids from RAM, prices from the item data), in the list's order.
+        assertEquals(shop.ids().filter { it.startsWith("item:") }, shop.items.map { "item:${it.item.id.value}" })
+        assertEquals(listOf(200, 600, 1200, 300), shop.items.take(4).map { it.price })
+        assertEquals(shop.items.map { HgssMarts.shopItem(it.item.id.value) }, shop.items)
     }
+
+    @Test
+    fun aPokeMartSellsItemsForMoneyAskingTheQuantity() {
+        val shop = screen<Screen.Shop>("shop_grid")
+        assertEquals(ShopCurrency.MONEY, shop.currency)
+        assertEquals(ShopGoods.ITEMS, shop.goods)
+        assertFalse(shop.oneOfEach)
+        assertTrue(shop.items.none { it.soldOut })
+    }
+
+    // region Other mart types: no capture (no save reaches the Pokéathlon Dome or the seal counter yet). The real Poké
+    // Mart capture is turned into them as the decompilation lays MartData out (include/overlay_03.h:44): its type,
+    // its list and the Pokéathlon save written in free RAM (simulated memory, decomp-backed, not verified live).
+
+    /** The `MartData` of the captured Poké Mart (the env of the running field task). */
+    private fun martData(mem: HgssMemory): Long {
+        val om = assertNotNull(mem.ptr(version.mainAppState + HgssAddresses.MAIN_APP_OVERLAY_MANAGER))
+        val fs = assertNotNull(mem.ptr(om + dev.kotlinds.pokemonclient.games.gen4.Gen4Structs.OM_DATA) ?: mem.ptr(version.fieldSystemPtr))
+        val task = assertNotNull(mem.ptr(fs + HgssAddresses.FS_TASKMAN))
+        return assertNotNull(mem.ptr(task + dev.kotlinds.pokemonclient.games.gen4.Gen4Structs.FIELD_TASK_ENV))
+    }
+
+    /**
+     * The captured mart as a mart of [type] selling [lines] (`{id, cost}`: the list `MartData.unk268`, and for the
+     * Pokéathlon types `MartData.priceOverrides`), with [athletePoints] and the Pokéathlon bought flags [daily] /
+     * [dataCards] in a `PokeathlonSave` (`MartData.pokeathlonSave`).
+     */
+    private fun mart(type: Int, lines: List<Pair<Int, Int>>, athletePoints: Int = 0, daily: Int = 0, dataCards: Long = 0): Screen.Shop {
+        val base = HgssFixtures.load("shop_grid")
+        val ram = dev.kotlinds.pokemonclient.PatchedMemory(base)
+        val mart = martData(HgssMemory(base, version))
+        val list = 0x023E0000L
+        val prices = 0x023E1000L
+        val save = 0x023E2000L
+        ram.u8(mart + HgssKeyboardPcShopAddresses.MART_TYPE, type)
+        ram.u8(mart + HgssKeyboardPcShopAddresses.MART_COUNT, lines.size)
+        ram.u8(mart + HgssKeyboardPcShopAddresses.MART_PAGE_OFFSET, 0)
+        ram.u32(mart + HgssKeyboardPcShopAddresses.MART_ITEMS, list)
+        ram.u32(mart + HgssKeyboardPcShopAddresses.MART_PRICE_OVERRIDES, if (type >= 3) prices else 0L)
+        ram.u32(mart + HgssKeyboardPcShopAddresses.MART_POKEATHLON_SAVE, save)
+        lines.forEachIndexed { i, (id, cost) ->
+            ram.u16(list + 2L * i, id)
+            ram.u16(prices + 4L * i, id)
+            ram.u16(prices + 4L * i + 2, cost)
+        }
+        ram.u16(prices + 4L * lines.size, 0xFFFF)
+        ram.u32(save + HgssKeyboardPcShopAddresses.POKEATHLON_ATHLETE_POINTS, athletePoints.toLong())
+        ram.u32(save + HgssKeyboardPcShopAddresses.POKEATHLON_DATA_CARDS_BOUGHT, dataCards)
+        ram.u16(save + HgssKeyboardPcShopAddresses.POKEATHLON_DAILY_BOUGHT, daily)
+        val state = assertNotNull(HgssReader(ram, version).read())
+        return assertIs(HgssKeyboardPcShopScreens.decode(HgssMemory(ram, version), state))
+    }
+
+    @Test
+    fun thePokeathlonDailyShopTakesAthletePointsAtItsOwnPricesOneOfEach() {
+        // Monday's list without the National Dex (scrcmd_mart.c `_020FBCD6`): line 1 already bought today.
+        val shop = mart(3, listOf(485 to 200, 487 to 200, 488 to 200, 33 to 100, 81 to 3000, 50 to 2000), athletePoints = 2500, daily = 0b10)
+        assertEquals(ShopCurrency.ATHLETE_POINTS, shop.currency)
+        assertEquals(2500L, shop.balance, "the athlete points, not the money (72178)")
+        assertEquals(ShopGoods.ITEMS, shop.goods)
+        assertTrue(shop.oneOfEach)
+        // The shop's own prices (Moomoo Milk 100, not the item data's), the names from the ROM's data.
+        assertEquals(listOf(200, 200, 200, 100, 3000, 2000), shop.items.map { it.price })
+        assertEquals(listOf(485, 487, 488, 33, 81, 50), shop.items.map { it.item.id.value })
+        assertEquals(listOf(false, true, false, false, false, false), shop.items.map { it.soldOut })
+        // Sold out and too dear: shown, not selectable.
+        assertEquals(listOf(true, false, true, true, false, true), shop.entries.take(6).map { it.selectable })
+    }
+
+    @Test
+    fun thePokeathlonDataCardsAreBoughtOnce() {
+        // `_020FBCBA`: Data Card 01 already bought (bit 0 of unk_B78).
+        val shop = mart(4, listOf(505 to 500, 506 to 500, 507 to 1000, 508 to 1000, 509 to 500, 510 to 500), athletePoints = 800, dataCards = 0b1)
+        assertEquals(ShopCurrency.ATHLETE_POINTS, shop.currency)
+        assertEquals(800L, shop.balance)
+        assertTrue(shop.oneOfEach)
+        assertEquals(listOf(500, 500, 1000, 1000, 500, 500), shop.items.map { it.price })
+        assertEquals(listOf(true, false, false, false, false, false), shop.items.map { it.soldOut })
+        assertEquals(listOf(false, true, false, false, true, true), shop.entries.take(6).map { it.selectable })
+    }
+
+    @Test
+    fun aSealMartListsSealsNotItems() {
+        // `_020FBB94` (ScrCmd_SealMart): seal ids, not item ids.
+        val shop = mart(2, listOf(1 to 0, 7 to 0, 13 to 0))
+        assertEquals(ShopGoods.SEALS, shop.goods)
+        assertEquals(ShopCurrency.MONEY, shop.currency)
+        assertEquals(72178L, shop.balance)
+        assertTrue(shop.items.isEmpty())
+        assertEquals(listOf("seal:1", "seal:7", "seal:13"), shop.ids().take(3))
+        assertTrue(shop.ids().none { it.startsWith("item:") })
+    }
+
+    // endregion
 
     @Test
     fun shopTopologyTurnsPagesFromTheOuterColumns() {

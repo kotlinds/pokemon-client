@@ -109,7 +109,7 @@ class ServicesActionsTest {
         )
         val inMart = available(state(field = field(objects = listOf(clerk))))
         assertEquals(listOf("item:23", "item:28"), inMart.getValue("buy").choices.getValue("item").map { it.value })
-        val shop = Screen.Shop(5000, listOf(Entry("item:2", "Ultra Ball ₽1200"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
+        val shop = Screen.Shop(5000, listOf(ShopItem(Named(ItemId(2), "Ultra Ball"), 1200)), listOf(Entry("item:2", "Ultra Ball ₽1200"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
         assertEquals(listOf("item:2"), available(state(screen = shop)).getValue("buy").choices.getValue("item").map { it.value })
         // The clerk's BUY / SELL / SEE YA! menu, facing the clerk across the counter.
         val clerkMenu = Screen.ListMenu(dev.kotlinds.pokemonclient.state.MenuKind.MULTICHOICE, (0..2).map { Entry("option:$it", "") }, Cursor.At(0), Topology.vertical(3))

@@ -96,7 +96,12 @@ object HgssKeyboardPcShopAddresses {
 
     // region Poké Mart: MartData (include/overlay_03.h:44), env of Task_Mart
 
+    /** `PokeathlonSave *` (the athlete points and the Pokéathlon shops' bought flags). */
+    const val MART_POKEATHLON_SAVE = 0x254L
+    /** `u16 *`: the ids of the list (items; seal / decoration ids in those marts). */
     const val MART_ITEMS = 0x268L
+    /** `const struct MartItem *`: `{u16 item, u16 cost}` per line, the prices of the Pokéathlon Dome's marts (types 3 / 4). */
+    const val MART_PRICE_OVERRIDES = 0x26CL
     const val MART_COUNT = 0x270L
     const val MART_PAGE_OFFSET = 0x271L
     const val MART_STATE = 0x272L
@@ -106,6 +111,8 @@ object HgssKeyboardPcShopAddresses {
     const val MART_STRING = 0x274L
     /** u8 id of the top-screen message printer (`sTextPrinterTasks` index). */
     const val MART_PRINTER_ID = 0x280L
+    /** `enum MartTypes` (include/overlay_03.h:23): what the list sells and what it is paid with. */
+    const val MART_TYPE = 0x283L
     const val MART_ITEM = 0x284L
     const val MART_QUANTITY = 0x286L
     const val MART_MAX_QUANTITY = 0x288L
@@ -123,6 +130,38 @@ object HgssKeyboardPcShopAddresses {
     const val MART_PAGE_SIZE = 6
     const val MART_CURSOR_CANCEL = 8
     const val MART_BUY = 0
+
+    /** `MART_TYPE_NORMAL`: items for money, prices from the item data. */
+    const val MART_TYPE_NORMAL = 0
+    /** `MART_TYPE_1` (decorations, a Sinnoh leftover unused in HGSS, scrcmd_mart.c:175): ₽100 each (ov03_02258120). */
+    const val MART_TYPE_DECORATION = 1
+    /** `MART_TYPE_SEAL`: Ball Capsule seals (ScrCmd_SealMart), ₽100 each (ov03_02258120), into the seal case. */
+    const val MART_TYPE_SEAL = 2
+    /**
+     * `MART_TYPE_3`: the Pokéathlon Dome's daily shop (ScrCmd_771): apricorns and items for athlete points, one of each
+     * line a day (bit `index` of `PokeathlonSave.unk_B7C` once bought, shop_menu.c:723-725, 957-959).
+     */
+    const val MART_TYPE_POKEATHLON_DAILY = 3
+    /**
+     * `MART_TYPE_4`: the Pokéathlon Dome's Data Cards (ScrCmd_772) for athlete points, each bought once (bit
+     * `item - ITEM_DATA_CARD_01` of `PokeathlonSave.unk_B78`, shop_menu.c:727, 960-961; never added to the bag).
+     */
+    const val MART_TYPE_POKEATHLON_DATA_CARDS = 4
+    /** What the decoration and seal marts charge for anything (ov03_02258120's default). */
+    const val MART_FIXED_PRICE = 100
+    /** `ITEM_DATA_CARD_01`: bit 0 of the Data Cards' bought flags. */
+    const val ITEM_DATA_CARD_01 = 505
+
+    // region PokeathlonSave (include/pokeathlon/pokeathlon_save.h)
+
+    /** `int athletePoints` (capped at 99999): what the Pokéathlon shops charge (ov03_022577F4, MartData_SubCurrency). */
+    const val POKEATHLON_ATHLETE_POINTS = 0xB74L
+    /** `u32 unk_B78`: Data Cards bought, bit `item - ITEM_DATA_CARD_01`. */
+    const val POKEATHLON_DATA_CARDS_BOUGHT = 0xB78L
+    /** `u16 unk_B7C`: lines of today's daily shop bought, bit = the line's index in the list. */
+    const val POKEATHLON_DAILY_BOUGHT = 0xB7CL
+
+    // endregion
 
     /** Bottom-screen app 2 (overlay 31) work: `+0x170 YesNoPrompt *` of the "OK?" question (asm/overlay_31.s:2193). */
     const val OV31_YES_NO = 0x170L

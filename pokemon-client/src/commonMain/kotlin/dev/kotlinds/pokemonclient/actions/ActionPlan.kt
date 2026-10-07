@@ -22,9 +22,28 @@ class PlanContext(
     val navigator: Navigator = Navigator(scope, game),
     /** What the application allows the recipes to do by themselves ([ActionSettings]). */
     val settings: ActionSettings = ActionSettings(),
+    /**
+     * The actions of [game] (the registry running this recipe, [ActionRegistry.execute]): what [run] plays when a
+     * recipe carries out another action as one of its steps. By default the registry of [game] ([ActionRegistry.of]).
+     */
+    val registry: ActionRegistry = ActionRegistry.of(game),
 ) {
     /** The current state (decoded from this frame). */
     fun state(): GameState = navigator.state()
+
+    /**
+     * Carries out [action] as a step of the current recipe (talking to the nurse for `heal`, to the clerk for `buy`,
+     * typing a nickname for `throw_ball`...): with the recipe [registry] plays for its type, so a game's own recipe
+     * ([PokemonGame.actionOverrides]) is played there too, never the common one behind its back. No availability
+     * check (the calling recipe has checked its own screen): the step's recipe checks its screens like any recipe.
+     */
+    fun run(action: GameAction): ActionOutcome {
+        val recipe = registry.recipeFor(action) ?: return ActionOutcome.Failed(ActionError.Unsupported(action.key))
+        return recipe.run(action, this)
+    }
+
+    /** The same context with other [settings] (a step run with some freedom taken away, e.g. no puzzle solving). */
+    fun with(settings: ActionSettings): PlanContext = PlanContext(scope, game, navigator, settings, registry)
 }
 
 /** The result of an action: done (with an optional detail), or a typed error; plus the state after it. */

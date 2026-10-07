@@ -81,5 +81,41 @@ data class FieldTrainer(
     val fullName: String get() = listOf(trainerClass, name).filter { it.isNotBlank() }.joinToString(" ")
 }
 
-/** One item a shop sells, with its price (null when unknown). */
-data class ShopItem(val item: Named<ItemId>, val price: Int?)
+/**
+ * One item a shop sells, with its [price] in the shop's currency ([dev.kotlinds.pokemonclient.state.Screen.Shop.currency];
+ * money for a clerk's catalog), null when unknown. [soldOut]: shown but no longer for sale (a Pokéathlon Dome line
+ * already bought today, a Data Card already bought).
+ */
+data class ShopItem(val item: Named<ItemId>, val price: Int?, val soldOut: Boolean = false)
+
+/** What a shop's prices are paid with: the balance it checks and takes from. */
+enum class ShopCurrency {
+    /** The player's money (₽): Poké Marts, department stores, the seal and decoration counters. */
+    MONEY,
+
+    /** Athlete points, earned at the Pokéathlon (HeartGold / SoulSilver): the Pokéathlon Dome's shops. */
+    ATHLETE_POINTS,
+
+    /** Battle Points, earned at the Battle Tower / Frontier: their exchange counters (Platinum's frontier mart; not decoded yet). */
+    BATTLE_POINTS,
+    ;
+
+    /** [amount] of this currency as messages say it ("₽1200", "1200 athlete points", "48 BP"). */
+    fun format(amount: Long): String = when (this) {
+        MONEY -> "₽$amount"
+        ATHLETE_POINTS -> "$amount athlete points"
+        BATTLE_POINTS -> "$amount BP"
+    }
+}
+
+/** What a shop's list sells. */
+enum class ShopGoods {
+    /** Items (entries `item:<id>`, typed in [dev.kotlinds.pokemonclient.state.Screen.Shop.items]): what `buy` buys. */
+    ITEMS,
+
+    /** Ball Capsule seals (entries `seal:<id>`): not items, none in `items`; `buy` doesn't buy them (yet). */
+    SEALS,
+
+    /** Decorations / Underground goods (entries `decoration:<id>`): not items, none in `items`; `buy` doesn't buy them. */
+    DECORATIONS,
+}

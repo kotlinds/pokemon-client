@@ -65,6 +65,64 @@ class ServicesRecipesTest {
         assertTrue(ui.party.all { it.hp == it.maxHp })
     }
 
+    /**
+     * A game's own `interact` ([PokemonGame.actionOverrides]) is played by the recipes that talk to someone as one of
+     * their steps (`heal` to the nurse, `buy` to the clerk: [PlanContext.run]), not only when the agent calls
+     * `interact` itself; without an override, the common one (the other heal and buy tests).
+     */
+    @Test
+    fun aGamesOwnInteractIsPlayedByHealAndBuy() {
+        val talked = mutableListOf<String>()
+        val ownInteract = RecipeOverride.of<GameAction.Interact> { action, context ->
+            talked += action.target
+            val before = context.state().screen
+            context.scope.tap(Button.A)
+            context.navigator.awaitChange(before)
+            ActionOutcome.Done("the game's own interact")
+        }
+        // heal: the nurse (the same scripted counter as above).
+        val nurse = FieldObject("person:0", "nurse", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.NURSE)
+        val center = ScriptedUi(OVERWORLD, party = listOf(mon(1, hp = 5)), world = world(3, 3))
+        center.field = field(1, 1, Direction.NORTH, listOf(nurse))
+        center.onA = { screen, id ->
+            when {
+                screen is Screen.Overworld -> dialogue("Welcome to the Pokémon Center.", TextSource.FIELD)
+                screen is Screen.Dialogue && screen.text.startsWith("Welcome") -> yesNo("Would you like to rest your Pokémon?")
+                screen is Screen.YesNo && id == "option:yes" -> {
+                    center.party = center.party.map { it.copy(hp = it.maxHp) }
+                    dialogue("We've restored your Pokémon to full health.", TextSource.FIELD)
+                }
+                screen is Screen.Dialogue -> OVERWORLD
+                else -> screen
+            }
+        }
+        center.game.actionOverrides = listOf(ownInteract)
+        assertEquals("party healed", assertIs<ActionOutcome.Done>(FieldPlans.heal.run(GameAction.Heal, center.context())).detail)
+        assertEquals(listOf("person:0"), talked)
+        // buy: a clerk whose catalog isn't known (talked to, the list read on screen).
+        val clerk = FieldObject("person:4", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK)
+        val list = Screen.Shop(3000, listOf(shopItem(17, "Potion", 300)), listOf(Entry("item:17", "Potion ₽300"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
+        val mart = ScriptedUi(OVERWORLD, party = listOf(mon(1)), world = world(3, 3))
+        mart.field = field(1, 1, Direction.NORTH, listOf(clerk))
+        mart.onA = { screen, id ->
+            when {
+                screen is Screen.Overworld -> Screen.ListMenu(MenuKind.MULTICHOICE, (0..2).map { Entry("option:$it", "") }, Cursor.At(0), Topology.vertical(3))
+                screen is Screen.ListMenu && id == "option:0" -> list
+                else -> screen
+            }
+        }
+        mart.game.actionOverrides = listOf(ownInteract)
+        // Through the registry of the game, like every host.
+        val registry = ActionRegistry.of(mart.game)
+        assertIs<ActionOutcome.Done>(registry.execute(GameAction.Buy(emptyList()), mart.game.scope(), mart.game))
+        assertEquals(listOf("person:0", "person:4"), talked)
+        // The same counter in a game without override: the common interact, never the other game's.
+        center.party = listOf(mon(1, hp = 5))
+        center.game.actionOverrides = emptyList()
+        assertEquals("party healed", assertIs<ActionOutcome.Done>(FieldPlans.heal.run(GameAction.Heal, center.context())).detail)
+        assertEquals(listOf("person:0", "person:4"), talked)
+    }
+
     @Test
     fun healWithoutANurseIsRefusedAtOnce() {
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1, hp = 5)), world = world(3, 3))
@@ -80,7 +138,7 @@ class ServicesRecipesTest {
 
     /** The shop list (Ultra Ball ₽1200); a quantity screen moved by UP / DOWN (±1) and RIGHT / LEFT (±10). */
     private fun shopUi(money: Long): ScriptedUi {
-        val list = Screen.Shop(money, listOf(Entry("item:2", "Ultra Ball ₽1200"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
+        val list = Screen.Shop(money, listOf(shopItem(2, "Ultra Ball", 1200)), listOf(Entry("item:2", "Ultra Ball ₽1200"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
         val ui = ScriptedUi(list, party = listOf(mon(1)), bag = listOf(BagPocket("balls", listOf(item(2, "Ultra Ball", 1)))))
         ui.money = money
         var quantity = 0
@@ -105,11 +163,120 @@ class ServicesRecipesTest {
                     ui.bag = listOf(BagPocket("balls", listOf(item(2, "Ultra Ball", 1 + quantity))))
                     dialogue("Here you are! Thank you!", TextSource.FIELD)
                 }
-                screen is Screen.Dialogue -> list.copy(money = ui.money)
+                screen is Screen.Dialogue -> list.copy(balance = ui.money)
                 else -> screen
             }
         }
         return ui
+    }
+
+    private fun shopItem(id: Int, name: String, price: Int?) =
+        dev.kotlinds.pokemonclient.state.ShopItem(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.ItemId(id), name), price)
+
+    /**
+     * The game in French: the list's labels ("HYPER BALL   1 200 ₽") are only shown; what is sold, its id and its
+     * price come from [Screen.Shop.items] (the game's data). The list, the choice by id and by the game's own name,
+     * and the money check all use them.
+     */
+    @Test
+    fun aShopListInAnotherLanguageGivesTheIdsAndPricesOfTheGamesData() {
+        val list = Screen.Shop(
+            2000, listOf(shopItem(2, "HYPER BALL", 1200), shopItem(17, "POTION", 300)),
+            listOf(Entry("item:2", "HYPER BALL   1 200 ₽"), Entry("item:17", "POTION   300 ₽"), Entry("option:cancel", "ANNULER")), Cursor.At(0), Topology.vertical(3),
+        )
+        fun shop() = ScriptedUi(list, party = listOf(mon(1))).also { it.money = 2000 }
+        val ui = shop()
+        val listed = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        assertEquals("nothing bought; sold here: item:2 (HYPER BALL, ₽1200), item:17 (POTION, ₽300)", listed.detail)
+        val choices = ActionRegistry.of().available(ui.game.state(list), ActionMode.ASSISTED).single { it.name == "buy" }.choices.getValue("item")
+        assertEquals(listOf("item:2" to "HYPER BALL ₽1200", "item:17" to "POTION ₽300"), choices.map { it.value to it.label })
+        // The price of the data, not of the label: 2 × 1200 > 2000, refused by id and by the game's name alike.
+        for (asked in listOf("item:2", "hyper ball")) {
+            val at = shop()
+            val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef(asked), 2))), at.context()), asked)
+            assertEquals(UnavailableReason.NOT_ENOUGH_MONEY, assertIs<ActionError.Unavailable>(failed.error).reason, asked)
+            assertTrue(Button.A !in at.game.presses, asked)
+        }
+        // The English name isn't this game's: refused with the ids and the game's names.
+        val unknown = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("Ultra Ball"), 1))), shop().context()))
+        assertEquals(listOf("item:2 (HYPER BALL, ₽1200)", "item:17 (POTION, ₽300)"), assertIs<ActionError.InvalidParameter>(unknown.error).allowed)
+    }
+
+    /**
+     * The Pokéathlon Dome's daily shop (HeartGold / SoulSilver mart type 3, shop_menu.c): athlete points (2500), its own
+     * prices, no quantity asked (the price question comes at once), one of each line (a Red Apricorn already bought
+     * today), and what is bought may not go to the bag (apricorns go to the Apricorn Box): checked on the line the
+     * game marks sold out and on the points paid.
+     */
+    private fun pokeathlonUi(): ScriptedUi {
+        fun list(points: Long, candyBought: Boolean) = Screen.Shop(
+            points,
+            listOf(shopItem(485, "Red Apricorn", 200).copy(soldOut = true), shopItem(81, "Moon Stone", 3000), shopItem(50, "Rare Candy", 2000).copy(soldOut = candyBought)),
+            listOf(Entry("item:485", "Red Apricorn 200", selectable = false), Entry("item:81", "Moon Stone 3000", selectable = false),
+                Entry("item:50", "Rare Candy 2000", selectable = !candyBought), Entry("option:cancel", "CANCEL")),
+            Cursor.At(0), Topology.vertical(4),
+            currency = dev.kotlinds.pokemonclient.state.ShopCurrency.ATHLETE_POINTS, oneOfEach = true,
+        )
+        val ui = ScriptedUi(list(2500, candyBought = false), party = listOf(mon(1)))
+        ui.money = 72178
+        ui.onA = { screen, id ->
+            when {
+                screen is Screen.Shop && id == "item:50" -> yesNo("Rare Candy? That will be 2000 athlete points. OK?")
+                screen is Screen.YesNo && id == "option:yes" -> dialogue("Here you are! Thank you!", TextSource.FIELD)
+                screen is Screen.Dialogue -> list(500, candyBought = true)
+                else -> screen
+            }
+        }
+        return ui
+    }
+
+    @Test
+    fun aPokeathlonShopIsPaidInAthletePointsOneOfEach() {
+        val ui = pokeathlonUi()
+        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("item:50"), 1))), ui.context()))
+        assertEquals("bought 1 Rare Candy (2000 athlete points), 500 athlete points left", done.detail)
+        assertTrue(ui.game.presses.none { it == Button.UP || it == Button.RIGHT }, "no quantity to set")
+        assertEquals(72178, ui.money, "the money isn't touched")
+    }
+
+    @Test
+    fun aPokeathlonShopRefusesWhatIsSoldOutTooDearOrMoreThanOne() {
+        val listed = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), pokeathlonUi().context()))
+        assertEquals(
+            "nothing bought; sold here: item:485 (Red Apricorn, 200 athlete points, sold out), item:81 (Moon Stone, 3000 athlete points), item:50 (Rare Candy, 2000 athlete points)",
+            listed.detail,
+        )
+        val ui = pokeathlonUi()
+        val choices = ActionRegistry.of().available(ui.game.state(ui.game.screen), ActionMode.ASSISTED).single { it.name == "buy" }.choices.getValue("item")
+        assertEquals(listOf("item:81" to "Moon Stone 3000 athlete points", "item:50" to "Rare Candy 2000 athlete points"), choices.map { it.value to it.label })
+        // Each refused before anything is chosen (a fresh counter each time: a refusal leaves the list).
+        fun refused(item: String, quantity: Int): ActionError {
+            val at = pokeathlonUi()
+            val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef(item), quantity))), at.context()), item)
+            assertTrue(Button.A !in at.game.presses, item)
+            return failed.error
+        }
+        assertEquals(UnavailableReason.NO_STOCK, assertIs<ActionError.Unavailable>(refused("item:485", 1)).reason)
+        // 3000 points while the player has 2500 (and ₽72178: the money doesn't count here).
+        val dear = assertIs<ActionError.Unavailable>(refused("item:81", 1))
+        assertEquals(UnavailableReason.NOT_ENOUGH_MONEY, dear.reason)
+        assertEquals("1 × Moon Stone cost 3000 athlete points, you have 2500 athlete points", dear.detail)
+        assertEquals(listOf("1"), assertIs<ActionError.InvalidParameter>(refused("item:50", 2)).allowed)
+    }
+
+    /** A seal counter (mart type 2): seals aren't items, `buy` refuses them with a typed error, nothing pressed. */
+    @Test
+    fun aSealCounterIsRefusedByBuy() {
+        val seals = Screen.Shop(
+            3000, emptyList(), listOf(Entry("seal:1", "seal 1"), Entry("seal:7", "seal 7"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(3),
+            goods = dev.kotlinds.pokemonclient.state.ShopGoods.SEALS,
+        )
+        for (action in listOf(GameAction.Buy(emptyList()), GameAction.Buy(listOf(Purchase(ItemRef("item:1"), 1))))) {
+            val ui = ScriptedUi(seals, party = listOf(mon(1)))
+            val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(action, ui.context()), action.toString())
+            assertEquals(UnavailableReason.GOODS_NOT_ITEMS, assertIs<ActionError.Unavailable>(failed.error).reason)
+            assertTrue(Button.A !in ui.game.presses)
+        }
     }
 
     @Test
@@ -227,7 +394,7 @@ class ServicesRecipesTest {
     @Test
     fun buyWithoutAnItemReadsTheShopListWhenTheCatalogIsUnknown() {
         val clerk = FieldObject("person:0", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK)
-        val list = Screen.Shop(3000, listOf(Entry("item:17", "Potion ₽300"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
+        val list = Screen.Shop(3000, listOf(shopItem(17, "Potion", 300)), listOf(Entry("item:17", "Potion ₽300"), Entry("option:cancel", "CANCEL")), Cursor.At(0), Topology.vertical(2))
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), world = world(3, 3))
         ui.field = field(1, 1, Direction.NORTH, listOf(clerk))
         ui.onA = { screen, id ->

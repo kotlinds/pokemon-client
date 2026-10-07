@@ -140,13 +140,28 @@ sealed interface Screen {
         val holding: MonId? = null,
     ) : Selectable
 
-    /** A shop's buy list. */
+    /**
+     * A shop's buy list, as the game runs it:
+     * - [goods]: what the list sells. Items ([ShopGoods.ITEMS]): [items] is what it sells, typed from the game's data
+     *   (the ids of the list in RAM, their names in the ROM's language, their prices where the game takes them: the
+     *   item data, or the shop's own price list), in the list's order, each one the entry `item:<id>`. Seals and
+     *   decorations are not items: their entries are `seal:<id>` / `decoration:<id>` and [items] is empty;
+     * - [currency] and [balance]: what the prices are paid with and how much of it the player has, read where the game
+     *   reads it (the money for a Poké Mart, the athlete points for the Pokéathlon Dome's shops);
+     * - [oneOfEach]: no quantity is asked, each line is bought one at a time and is then sold out
+     *   ([ShopItem.soldOut], e.g. the Pokéathlon Dome's daily shop and its Data Cards).
+     * The entries' labels are for display only (never parsed: the game may run in another language).
+     */
     data class Shop(
-        val money: Long,
+        val balance: Long,
+        val items: List<ShopItem>,
         override val entries: List<Entry>,
         override val cursor: Cursor,
         override val topology: Topology,
         override val cancel: CancelBehavior = CancelBehavior.CLOSES,
+        val currency: ShopCurrency = ShopCurrency.MONEY,
+        val goods: ShopGoods = ShopGoods.ITEMS,
+        val oneOfEach: Boolean = false,
     ) : Selectable
 
     /** The fly map: destinations already visited. */
@@ -308,7 +323,7 @@ enum class Awaiting {
 
 /** One entry of a [Screen.Selectable]. */
 data class Entry(
-    /** Stable typed id of what the entry stands for, e.g. `option:yes`, `move:ember`, `mon:a3f1….0e21…`, `item:potion`. */
+    /** Stable typed id of what the entry stands for, e.g. `option:yes`, `move:52`, `mon:a3f1….0e21…`, `item:17` (game ids, never displayed text). */
     val id: String,
     val label: String,
     /** False for entries the game shows but refuses (fainted Pokémon, empty slot, no PP...). */

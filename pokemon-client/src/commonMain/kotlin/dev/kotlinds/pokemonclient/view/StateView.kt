@@ -84,7 +84,13 @@ object StateView {
                         put("pocket", screen.pocket)
                         put("page", "${screen.page + 1}/${screen.pages}")
                     }
-                    is Screen.Shop -> put("money", screen.money)
+                    is Screen.Shop -> {
+                        // What the prices are paid with and how much of it the player has (money, athlete points...).
+                        put("balance", screen.balance)
+                        put("currency", screen.currency.name.lowercase())
+                        if (screen.goods != dev.kotlinds.pokemonclient.state.ShopGoods.ITEMS) put("goods", screen.goods.name.lowercase())
+                        if (screen.oneOfEach) put("one_of_each", "no quantity: each line is bought one at a time, then sold out")
+                    }
                     is Screen.BattleCommand -> screen.actor?.let { put("choosing", it.wire) }
                     else -> Unit
                 }

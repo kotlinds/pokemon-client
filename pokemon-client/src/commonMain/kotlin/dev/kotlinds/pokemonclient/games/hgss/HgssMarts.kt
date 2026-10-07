@@ -1,6 +1,9 @@
 package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.games.gen4.Gen4RomBytes.u16
+import dev.kotlinds.pokemonclient.state.ItemId
+import dev.kotlinds.pokemonclient.state.Named
+import dev.kotlinds.pokemonclient.state.ShopItem
 
 /**
  * What a shop clerk sells, known before talking to them: the clerk's map script sets `VAR_SPECIAL_x8004` then
@@ -20,6 +23,13 @@ internal object HgssMarts {
             is Mart.Special -> SPECIAL.getOrNull(mart.index)
         }
     }
+
+    /**
+     * Item [itemId] as a shop sells it, from the game's data only: its name in the ROM's language ([HgssData.itemName])
+     * and its price from the item data ([HgssItemPrices]). The one source of a clerk's catalog and of the shop list
+     * on screen ([dev.kotlinds.pokemonclient.state.Screen.Shop.items]): never the text the list displays.
+     */
+    fun shopItem(itemId: Int): ShopItem = ShopItem(Named(ItemId(itemId), HgssData.itemName(itemId)), HgssItemPrices.price(itemId))
 
     /** Which counter a clerk script runs. */
     sealed interface Mart {

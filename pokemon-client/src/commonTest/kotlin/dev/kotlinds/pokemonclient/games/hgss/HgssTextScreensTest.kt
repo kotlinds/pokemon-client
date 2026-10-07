@@ -2,6 +2,7 @@ package dev.kotlinds.pokemonclient.games.hgss
 
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.console.Button
+import dev.kotlinds.pokemonclient.PatchedMemory
 import dev.kotlinds.pokemonclient.games.gen4.Gen4Structs
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.AnimationKind
@@ -103,27 +104,6 @@ class HgssTextScreensTest {
         assertEquals(HgssScriptScreens.UNREADABLE_MESSAGE, screen.hint)
     }
 
-    /** [base] with some bytes written over it (little-endian writers at bus addresses). */
-    private class Patched(private val base: Memory) : Memory {
-        private val bytes = HashMap<Long, Int>()
-        fun u8(addr: Long, value: Int) { bytes[addr] = value and 0xFF }
-        fun u16(addr: Long, value: Int) { u8(addr, value); u8(addr + 1, value shr 8) }
-        fun u32(addr: Long, value: Long) { u16(addr, value.toInt()); u16(addr + 2, (value shr 16).toInt()) }
-        override fun read8(addr: Long) = bytes[addr] ?: base.read8(addr)
-        override fun read16(addr: Long) = read8(addr) or (read8(addr + 1) shl 8)
-        override fun read32(addr: Long) = (read16(addr).toLong() or (read16(addr + 2).toLong() shl 16)) and 0xFFFFFFFFL
-        override fun readBytes(addr: Long, size: Int) = ByteArray(size) { read8(addr + it).toByte() }
-
-        /** A game `String` of [text] at [addr]. */
-        fun string(addr: Long, text: String) {
-            val reverse = dev.kotlinds.pokemonclient.games.gen4.Gen4Charmap.table.entries.filter { it.value.length == 1 }.associate { it.value[0] to it.key }
-            u16(addr + Gen4Structs.STR_MAXSIZE, text.length)
-            u16(addr + Gen4Structs.STR_SIZE, text.length)
-            u32(addr + Gen4Structs.STR_MAGIC, Gen4Structs.STRING_MAGIC)
-            text.forEachIndexed { i, c -> u16(addr + Gen4Structs.STR_DATA + 2L * i, reverse.getValue(c)) }
-        }
-    }
-
     /**
      * A top-screen multichoice (`ScrCmd_064`..`067`, the script waiting in its menu wait): the options are its
      * FieldMenu's Strings by position, the cursor its ListMenu2D's, B picks the last one. No capture has one: the nurse's
@@ -138,7 +118,7 @@ class HgssTextScreensTest {
             task.env?.takeIf { mem.u32(it + Gen4Structs.SM_MAGIC) == Gen4Structs.SCRIPT_MANAGER_MAGIC }
         })
         val waiting = mem.waitingScriptContexts(env, version.scriptContexts, HgssTextAddresses.FN_SCR_WAIT_STD).first()
-        val ram = Patched(base)
+        val ram = PatchedMemory(base)
         ram.u32(waiting + Gen4Structs.SC_NATIVE, version.fnScrMenuWait1 or 1)
         val menu = 0x023E0000L
         val list = 0x023E1000L

@@ -517,7 +517,8 @@ object CommonActions {
         description = "Buy items at this Poké Mart in one visit to the counter (walks to the clerk who sells them, when a floor has " +
             "several; also works from the clerk's menu or the shop list): one `item` + `quantity`, or a list `items` of {item, quantity}. " +
             "Without any item nothing is bought and the answer's `detail` lists what each clerk sells (item id, name, price; it may talk " +
-            "to a clerk to read the list).",
+            "to a clerk to read the list). Prices are in the shop's currency (money; athlete points at the Pokéathlon Dome, where each line " +
+            "is bought one at a time, quantity 1).",
         parameters = listOf(
             Parameter("item", ParameterType.STRING, "The item: its id (item:4) or its name.", required = false),
             Parameter("quantity", ParameterType.INTEGER, "How many, 1 to 99 (default 1).", required = false),
@@ -531,11 +532,12 @@ object CommonActions {
             if (ShopPlans.stage(state) == null) return@spec Availability.Hidden
             // Clerk by clerk (never one list mixing two counters): an item sold by several says by whom.
             val stock = ShopPlans.stock(state)
-            val sellers = stock.flatMap { s -> s.items.map { it to s.clerk } }.groupBy({ it.first.item.id }, { it })
+            // A line sold out is shown by the list but can't be bought: not offered.
+            val sellers = stock.flatMap { s -> s.items.filter { !it.soldOut }.map { Triple(it, s.clerk, s.currency) } }.groupBy({ it.first.item.id }, { it })
             Availability.Available(if (sellers.isEmpty()) emptyMap() else mapOf("item" to sellers.values.map { lines ->
-                val item = lines.first().first
+                val (item, _, currency) = lines.first()
                 val by = lines.mapNotNull { it.second?.id }.takeIf { stock.size > 1 && it.isNotEmpty() }?.joinToString(prefix = " (", postfix = ")") ?: ""
-                Choice("item:${item.item.id.value}", item.item.name + (item.price?.let { p -> " ₽$p" } ?: "") + by)
+                Choice("item:${item.item.id.value}", item.item.name + (item.price?.let { p -> " " + currency.format(p.toLong()) } ?: "") + by)
             }))
         },
         parse = { json -> GameAction.Buy(purchases(json)) },

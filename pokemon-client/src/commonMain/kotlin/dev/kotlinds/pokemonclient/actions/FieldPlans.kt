@@ -66,7 +66,7 @@ internal object FieldPlans {
     val heal = ActionPlan<GameAction.Heal> { _, context ->
         val nurse = context.state().field?.objects?.firstOrNull { it.role == PersonRole.NURSE }
             ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no nurse here", "go to a Pokémon Center"))
-        when (val talk = MovePlans.interact.run(GameAction.Interact(nurse.id), context)) {
+        when (val talk = context.run(GameAction.Interact(nurse.id))) {
             is ActionOutcome.Failed -> return@ActionPlan talk
             is ActionOutcome.Done -> Unit
         }

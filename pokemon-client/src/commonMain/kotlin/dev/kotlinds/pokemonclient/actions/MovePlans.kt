@@ -764,7 +764,7 @@ internal object MovePlans {
      */
     private fun reapplyRepel(context: PlanContext, at: String): AfterNotice {
         val repel = repelInBag(context) ?: return AfterNotice.Stop("$at; no Repel left in the bag$REPEL_STOP_TAIL", InterruptionCause.REPEL_ENDED)
-        val used = PartyBagPlans.useItem.run(GameAction.UseItem(ItemRef("item:${repel.item.id.value}")), context)
+        val used = context.run(GameAction.UseItem(ItemRef("item:${repel.item.id.value}")))
         if (used is ActionOutcome.Failed) return AfterNotice.Failed(used.error)
         if (context.navigator.settle().field?.repelSteps == 0) {
             return AfterNotice.Failed(ActionError.Timeout("used ${repel.item.name}, but no Repel is at work: call get_state"))

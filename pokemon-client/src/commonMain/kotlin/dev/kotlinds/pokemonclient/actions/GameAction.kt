@@ -13,7 +13,7 @@ import dev.kotlinds.pokemonclient.state.normalizeName
  * that changes between calls.
  *
  * The wire form is a JSON object with a `type` (see [ActionRegistry]); [key] is a canonical one-line form, e.g.
- * `attack(move:ember→foe_left)`.
+ * `attack(move:52→foe_left)`.
  */
 sealed interface GameAction {
     val key: String

@@ -7,6 +7,8 @@ import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.ShopCurrency
+import dev.kotlinds.pokemonclient.state.ShopGoods
 import dev.kotlinds.pokemonclient.state.ShopItem
 import dev.kotlinds.pokemonclient.state.kind
 
@@ -31,9 +33,10 @@ internal object ShopPlans {
 
     /**
      * What one clerk sells ([clerk] null: the counter the player is at, its list on screen or the clerk faced), as
-     * the game decides it ([FieldObject.catalog]: the clerk's own mart script and the badges, read before talking).
+     * the game decides it ([FieldObject.catalog]: the clerk's own mart script and the badges, read before talking),
+     * with the [currency] its prices are in (money for a catalog; the list on screen says).
      */
-    data class Stock(val clerk: FieldObject?, val items: List<ShopItem>)
+    data class Stock(val clerk: FieldObject?, val items: List<ShopItem>, val currency: ShopCurrency = ShopCurrency.MONEY)
 
     /**
      * What can be bought here, clerk by clerk: the list on screen when the shop is open, the clerk faced (their menu
@@ -41,15 +44,9 @@ internal object ShopPlans {
      * two: each sells its own list, never mixed).
      */
     fun stock(state: GameState): List<Stock> {
-        (state.screen as? Screen.Shop)?.let { shop -> return listOf(Stock(null, shopList(shop))) }
+        (state.screen as? Screen.Shop)?.let { shop -> return listOf(Stock(null, shop.items, shop.currency)) }
         if (stage(state) != Stage.OVERWORLD) return listOfNotNull(clerkFaced(state)?.catalog?.let { Stock(null, it) })
         return clerks(state).mapNotNull { c -> c.catalog?.let { Stock(c, it) } }
-    }
-
-    /** The items of the shop list on screen. */
-    private fun shopList(shop: Screen.Shop): List<ShopItem> = shop.entries.filter { it.id.startsWith("item:") }.map { e ->
-        val id = e.id.removePrefix("item:").toInt()
-        ShopItem(dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.ItemId(id), e.label.substringBefore(" ₽")), e.label.substringAfter(" ₽", "").toIntOrNull())
     }
 
     /** True when [items] has the item [ref] names (`item:<id>` or its name). */
@@ -90,8 +87,14 @@ internal object ShopPlans {
         }
         val bought = mutableListOf<String>()
         var failure: ActionError? = null
+        // What the shop's prices are paid with, and how much of it is left (read on the list: athlete points aren't
+        // in the player's state).
+        var currency = ShopCurrency.MONEY
+        var left: Long? = null
         for (purchase in action.purchases) {
             val before = context.state()
+            val shop = before.screen as? Screen.Shop
+            shop?.let { currency = it.currency }
             var itemId = 0
             val step = buyOne(context, purchase) { itemId = it }
             if (step is Step.Failed) {
@@ -99,17 +102,30 @@ internal object ShopPlans {
                 break
             }
             val after = context.state()
+            val afterShop = after.screen as? Screen.Shop
+            val paid = (balance(before) ?: 0) - (balance(after) ?: 0)
+            left = balance(after)
+            if (shop?.oneOfEach == true) {
+                // One of each, and not always into the bag (apricorns go to the Apricorn Box, Data Cards nowhere):
+                // the game marks the line sold out when the purchase is made (shop_menu.c:955-961).
+                val line = afterShop?.items?.firstOrNull { it.item.id.value == itemId }
+                if (line?.soldOut != true) {
+                    failure = ActionError.Timeout("item:$itemId wasn't marked as bought by the shop")
+                    break
+                }
+                bought += "1 ${line.item.name} (${currency.format(paid)})"
+                continue
+            }
             val gained = count(after, itemId) - count(before, itemId)
-            val paid = (before.player?.money ?: 0) - (after.player?.money ?: 0)
             if (gained < purchase.quantity) {
                 failure = ActionError.Timeout("the bag got $gained ${purchase.item.raw} instead of ${purchase.quantity}")
                 break
             }
-            bought += "$gained ${itemName(after, itemId)} (₽$paid)" + bonus(before, after, itemId).joinToString("") { " + bonus: $it" }
+            bought += "$gained ${itemName(after, itemId)} (${currency.format(paid)})" + bonus(before, after, itemId).joinToString("") { " + bonus: $it" }
         }
         PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
-        val money = context.state().player?.money
-        val summary = "bought ${bought.joinToString()}" + (money?.let { ", ₽$it left" } ?: "")
+        val remaining = if (currency == ShopCurrency.MONEY) context.state().player?.money else left
+        val summary = "bought ${bought.joinToString()}" + (remaining?.let { ", ${currency.format(it)} left" } ?: "")
         when {
             failure == null -> ActionOutcome.Done(summary)
             bought.isEmpty() -> ActionOutcome.Failed(failure)
@@ -125,6 +141,7 @@ internal object ShopPlans {
      */
     private fun listCatalog(context: PlanContext, start: GameState): ActionOutcome {
         val atCounter = stage(start) != Stage.OVERWORLD
+        (start.screen as? Screen.Shop)?.takeIf { it.goods != ShopGoods.ITEMS }?.let { return ActionOutcome.Failed(notItems(it)) }
         val known = stock(start).filter { it.items.isNotEmpty() }
         val unknown = if (atCounter) emptyList() else clerks(start).filter { it.catalog == null }
         val canLearn = partyCanLearn(context, start)
@@ -132,10 +149,11 @@ internal object ShopPlans {
         val read = mutableListOf<Stock>()
         for (clerk in if (atCounter) listOf(null) else unknown) {
             val opened = openShop(context, clerk)
-            val sold = ((opened as? Step.Done)?.value?.screen as? Screen.Shop)?.let(::shopList)
+            val shop = (opened as? Step.Done)?.value?.screen as? Screen.Shop
             PartyBagPlans.closeToOverworld(context, maxPresses = CLOSE_PRESSES)
             if (opened is Step.Failed) return ActionOutcome.Failed(opened.error)
-            if (!sold.isNullOrEmpty()) read += Stock(clerk, sold)
+            if (shop != null && shop.goods != ShopGoods.ITEMS) return ActionOutcome.Failed(notItems(shop))
+            if (shop != null && shop.items.isNotEmpty()) read += Stock(clerk, shop.items, shop.currency)
         }
         val all = known + read
         return if (all.isEmpty()) ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_STOCK, "The shop list shows nothing to buy"))
@@ -158,13 +176,14 @@ internal object ShopPlans {
      * A TM says who of the party can learn it when [canLearn] tells ("item:340 (TM13, ₽3000, party can learn: ...)").
      */
     internal fun describeStocks(stocks: List<Stock>, canLearn: (dev.kotlinds.pokemonclient.state.ItemId) -> List<String>? = { null }): String {
-        fun items(sold: List<ShopItem>) = sold.joinToString {
-            "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""}" +
+        fun items(stock: Stock) = stock.items.joinToString {
+            "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", " + stock.currency.format(p.toLong()) } ?: ""}" +
+                (if (it.soldOut) ", sold out" else "") +
                 (canLearn(it.item.id)?.let { who -> ", party can learn: ${who.joinToString()}" } ?: "") + ")"
         }
         val single = stocks.singleOrNull()
-        return if (single != null) "nothing bought; sold here: " + items(single.items)
-        else "nothing bought; " + stocks.joinToString("; ") { "${it.clerk?.id ?: "this clerk"} sells: " + items(it.items) }
+        return if (single != null) "nothing bought; sold here: " + items(single)
+        else "nothing bought; " + stocks.joinToString("; ") { "${it.clerk?.id ?: "this clerk"} sells: " + items(it) }
     }
 
     /**
@@ -229,7 +248,7 @@ internal object ShopPlans {
         if (state.screen is Screen.Bag) return Step.Done(state)
         if (stage(state) == Stage.OVERWORLD) {
             val clerk = clerk(state) ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no shop clerk here", "go to a Poké Mart"))
-            when (val talk = MovePlans.interact.run(GameAction.Interact(clerk.id), context)) {
+            when (val talk = context.run(GameAction.Interact(clerk.id))) {
                 is ActionOutcome.Failed -> return Step.Failed(talk.error)
                 is ActionOutcome.Done -> Unit
             }
@@ -264,7 +283,7 @@ internal object ShopPlans {
         }
         if (stage(state) == Stage.OVERWORLD) {
             val clerk = chosen ?: clerk(state) ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no shop clerk here", "go to a Poké Mart"))
-            when (val talk = MovePlans.interact.run(GameAction.Interact(clerk.id), context)) {
+            when (val talk = context.run(GameAction.Interact(clerk.id))) {
                 is ActionOutcome.Failed -> return Step.Failed(talk.error)
                 is ActionOutcome.Done -> Unit
             }
@@ -283,27 +302,47 @@ internal object ShopPlans {
     private fun buyOne(context: PlanContext, purchase: Purchase, onItem: (Int) -> Unit): Step<GameState> {
         val state = context.navigator.settle()
         val shop = state.screen as? Screen.Shop ?: return Step.Failed(ActionError.UnexpectedScreen("the shop list", state.screen))
-        val entry = shop.entries.firstOrNull { it.id.startsWith("item:") && matchesRef(purchase.item.raw, "item", it.id.removePrefix("item:").toInt(), it.label.substringBefore(" ₽")) }
-            ?: return Step.Failed(ActionError.InvalidParameter("item", purchase.item.raw, shop.entries.filter { it.id.startsWith("item:") }.map { "${it.id} (${it.label})" }))
-        val price = entry.label.substringAfter(" ₽", "").toIntOrNull()
-        if (!entry.selectable || (price != null && price.toLong() * purchase.quantity > shop.money)) {
+        if (shop.goods != ShopGoods.ITEMS) return Step.Failed(notItems(shop))
+        // The item by its id or its name in the game's data ([Screen.Shop.items]), never by the label shown.
+        val sold = shop.items.firstOrNull { matchesRef(purchase.item.raw, "item", it.item.id.value, it.item.name) }
+        val entry = sold?.let { s -> shop.entries.firstOrNull { it.id == "item:${s.item.id.value}" } }
+            ?: return Step.Failed(ActionError.InvalidParameter("item", purchase.item.raw, shop.items.map { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", " + shop.currency.format(p.toLong()) } ?: ""})" }))
+        if (sold.soldOut) return Step.Failed(ActionError.Unavailable(UnavailableReason.NO_STOCK, "${sold.item.name} is sold out"))
+        // One of each: no quantity is asked (one line = one).
+        if (shop.oneOfEach && purchase.quantity != 1) return Step.Failed(ActionError.InvalidParameter("quantity", purchase.quantity.toString(), listOf("1")))
+        val price = sold.price
+        if (!entry.selectable || (price != null && price.toLong() * purchase.quantity > shop.balance)) {
             return Step.Failed(ActionError.Unavailable(UnavailableReason.NOT_ENOUGH_MONEY,
-                "${purchase.quantity} × ${entry.label} cost ₽${(price ?: 0).toLong() * purchase.quantity}, you have ₽${shop.money}"))
+                "${purchase.quantity} × ${sold.item.name} cost ${shop.currency.format((price ?: 0).toLong() * purchase.quantity)}, you have ${shop.currency.format(shop.balance)}"))
         }
-        onItem(entry.id.removePrefix("item:").toInt())
-        return context.navigator.choose(Screen.Shop::class, entry.label) { it.id == entry.id }.andThen {
-            setQuantity(context, purchase.quantity)
-        }.andThen { quantity ->
-            // The quantity was just read back: A confirms it.
-            context.scope.tap(Button.A)
-            context.navigator.awaitChange(quantity.screen)
-            context.navigator.advanceUntil(SHOP_WAITS) { it.screen is Screen.YesNo || it.screen is Screen.Shop }
-        }.andThen { asked ->
-            if (asked.screen is Screen.YesNo) context.navigator.choose(Screen.YesNo::class, "YES (buy)") { it.id == "option:yes" } else Step.Done(asked)
+        onItem(sold.item.id.value)
+        val chosen = context.navigator.choose(Screen.Shop::class, entry.label) { it.id == entry.id }
+        val asked = if (shop.oneOfEach) {
+            // Straight to the confirmation (shop_menu.c:752): the price question, YES.
+            chosen.andThen { context.navigator.advanceUntil(SHOP_WAITS) { it.screen is Screen.YesNo || it.screen is Screen.Shop } }
+        } else {
+            chosen.andThen {
+                setQuantity(context, purchase.quantity)
+            }.andThen { quantity ->
+                // The quantity was just read back: A confirms it.
+                context.scope.tap(Button.A)
+                context.navigator.awaitChange(quantity.screen)
+                context.navigator.advanceUntil(SHOP_WAITS) { it.screen is Screen.YesNo || it.screen is Screen.Shop }
+            }
+        }
+        return asked.andThen { question ->
+            if (question.screen is Screen.YesNo) context.navigator.choose(Screen.YesNo::class, "YES (buy)") { it.id == "option:yes" } else Step.Done(question)
         }.andThen {
             context.navigator.advanceUntil(SHOP_WAITS) { it.screen is Screen.Shop }
         }
     }
+
+    /** The refusal of a list that sells seals or decorations ([ShopGoods]): `buy` only buys items. */
+    private fun notItems(shop: Screen.Shop): ActionError = ActionError.Unavailable(UnavailableReason.GOODS_NOT_ITEMS,
+        "This counter sells ${shop.goods.name.lowercase()}, not items: buy only buys items", "press B to leave the list")
+
+    /** How much the player has of what the shop on screen charges (its balance), else the money; null when unknown. */
+    private fun balance(state: GameState): Long? = (state.screen as? Screen.Shop)?.balance ?: state.player?.money
 
     /**
      * Brings the quantity shown to [quantity]: RIGHT / LEFT (±10) while far from it, then UP / DOWN (±1), reading the

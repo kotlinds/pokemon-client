@@ -53,6 +53,9 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
     /** The bicycle's item id (none by default). */
     override var bicycleItem: Int? = null
 
+    /** The game's own recipes ([PokemonGame.actionOverrides]): none by default. */
+    override var actionOverrides: List<RecipeOverride<*>> = emptyList()
+
     /** The game's data, when a test needs some (see [StubGameData]). */
     override var data: GameData? = null
     /** The game's field move rules (none by default); [hgssFieldMoves] for the real HeartGold / SoulSilver table. */
