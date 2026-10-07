@@ -9,6 +9,8 @@ import kotlinx.serialization.json.booleanOrNull
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.state.BattleKind
+import dev.kotlinds.pokemonclient.state.BattleStyle
+import dev.kotlinds.pokemonclient.state.TextSpeed
 import dev.kotlinds.pokemonclient.state.BattlerRef
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
@@ -230,7 +232,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             when {
-                state.battle != null -> if (BattleItemPlans.canUse(state)) Availability.Available(itemChoices(state, inBattle = true)) else Availability.Hidden
+                state.battle != null -> if (ActionConditions.canUseItemInBattle(state)) Availability.Available(itemChoices(state, inBattle = true)) else Availability.Hidden
                 PartyBagPlans.inField(state) -> Availability.Available(itemChoices(state, inBattle = false))
                 else -> Availability.Hidden
             }
@@ -319,7 +321,7 @@ object CommonActions {
             "ignores input for a moment after it appears: pressing then does nothing).",
         parameters = emptyList(),
         modes = assisted,
-        availability = { state -> if (SystemPlans.beforeTheGame(state)) Availability.Available() else Availability.Hidden },
+        availability = { state -> if (ActionConditions.beforeTheGame(state)) Availability.Available() else Availability.Hidden },
         parse = { GameAction.ContinueGame },
     ))
 
@@ -331,7 +333,7 @@ object CommonActions {
             "of the credits with what can be done there.",
         parameters = emptyList(),
         modes = assisted,
-        availability = { state -> if (HallOfFamePlans.offered(state)) Availability.Available() else Availability.Hidden },
+        availability = { state -> if (ActionConditions.hallOfFameOffered(state)) Availability.Available() else Availability.Hidden },
         parse = { GameAction.WatchHallOfFame },
     ))
 
@@ -564,7 +566,7 @@ object CommonActions {
         parameters = listOf(Parameter("pokemon", ParameterType.STRING, "The Pokémon's id (mon:…).")),
         modes = assisted,
         availability = { state ->
-            if (state.battle == null || !BattlePlans.canSwitch(state)) return@spec Availability.Hidden
+            if (state.battle == null || !ActionConditions.canSwitch(state)) return@spec Availability.Hidden
             // A voluntary switch (command menu) is refused while the active Pokémon is trapped (Mean Look, Spider Web,
             // a binding move, Ingrain); a replacement after a K.O. never is.
             val actorRef = (state.screen as? Screen.BattleCommand)?.actor ?: state.battle.actor ?: BattlerRef.PLAYER_LEFT
@@ -606,7 +608,7 @@ object CommonActions {
         parameters = listOf(Parameter("forget", ParameterType.STRING, "The move to forget (id or name); omit to keep the old moves.", required = false)),
         modes = assisted,
         availability = { state ->
-            if (!BattlePlans.isLearnPrompt(state)) return@spec Availability.Hidden
+            if (!ActionConditions.isLearnPrompt(state)) return@spec Availability.Hidden
             // On the list itself, the moves the game lets go of (not HMs, not the new one).
             val list = state.screen as? Screen.MoveSelect
             val choices = list?.entries?.filter { it.selectable && it.id.startsWith("move:") && it.id != "move:${list.newMove?.id?.value}" }
@@ -770,7 +772,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             locked(state, StartMenuFeature.OPTIONS)?.let { return@spec it }
-            if (!PartyBagPlans.inField(state) && !OptionsPlans.isOptionsScreen(state)) return@spec Availability.Hidden
+            if (!PartyBagPlans.inField(state) && !ActionConditions.isOptionsScreen(state)) return@spec Availability.Hidden
             val now = state.options
             Availability.Available(now?.let {
                 mapOf(
@@ -785,9 +787,9 @@ object CommonActions {
                 if (it !in allowed) throw ActionException(ActionError.InvalidParameter(key, it, allowed))
             }
             GameAction.SetOptions(
-                textSpeed = value("text_speed", listOf("slow", "mid", "fast"))?.let(OptionsPlans::textSpeed),
+                textSpeed = value("text_speed", listOf("slow", "mid", "fast"))?.let(::textSpeed),
                 battleScene = value("battle_scene", listOf("on", "off"))?.let { it == "on" },
-                battleStyle = value("battle_style", listOf("shift", "set"))?.let(OptionsPlans::battleStyle),
+                battleStyle = value("battle_style", listOf("shift", "set"))?.let(::battleStyle),
             )
         },
     ))
@@ -798,6 +800,10 @@ object CommonActions {
             MoreActions.definitions + PuzzleActions.definitions + PokegearActions.definitions
 
     // region Helpers
+
+    /** The wire values of the options (`set_options`), by type. */
+    private fun textSpeed(raw: String): TextSpeed? = TextSpeed.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
+    private fun battleStyle(raw: String): BattleStyle? = BattleStyle.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
 
     /** Walking around but the start menu has no [feature] yet: say so instead of failing on the menu. */
     private fun locked(state: GameState, feature: StartMenuFeature): Availability.Unavailable? {

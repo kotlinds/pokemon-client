@@ -134,12 +134,12 @@ internal object PartyBagPlans {
      * asks for one → the move for a PP restoring item ("Restore which move?"), then A through the effect's message (it
      * would otherwise close on its own after a few seconds) and on to the next item, the bag still open. Each use is
      * checked on the item's quantity (consumed = it worked; "It won't have any effect" keeps it). In battle, the
-     * battle recipe ([BattleItemPlans.useItem]) is used instead.
+     * battle half ([BattleRecipes.useItemInBattle]) is played instead.
      */
     val useItem = ActionPlan<GameAction.UseItem> { action, context ->
-        // The battle half of this same recipe, not another action: called directly (going through the registry would
-        // come back here). A game overriding `use_item` replaces both halves.
-        if (context.state().battle != null) return@ActionPlan BattleItemPlans.useItem.run(action, context)
+        // The battle half of this same recipe, not another action: the game's own step (a game may override it alone);
+        // a game overriding `use_item` replaces both halves.
+        if (context.state().battle != null) return@ActionPlan context.recipes.useItemInBattle(action, context)
         val done = mutableListOf<String>()
         for ((index, use) in action.uses.withIndex()) {
             when (val outcome = useOneItem(use, context)) {
@@ -488,7 +488,7 @@ internal object PartyBagPlans {
             when (state.screen) {
                 is Screen.Overworld -> return
                 // A question about learning a move (Rare Candy...) is the agent's to answer: B would give the move up.
-                is Screen.YesNo, is Screen.MoveSelect -> if (state.battle == null && BattlePlans.isLearnPrompt(state)) return else context.scope.tap(Button.B)
+                is Screen.YesNo, is Screen.MoveSelect -> if (state.battle == null && ActionConditions.isLearnPrompt(state)) return else context.scope.tap(Button.B)
                 is Screen.Dialogue, is Screen.PressToContinue -> context.scope.tap(Button.A)
                 // The Pokégear has no B: its Close button is touched.
                 is Screen.Viewer -> state.screen.exit.touch?.let { context.scope.touch(it) } ?: context.scope.tap(state.screen.exit.button ?: Button.B)

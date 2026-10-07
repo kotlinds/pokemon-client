@@ -61,7 +61,7 @@ class EnterTextRecipeTest {
     fun mixedCaseAndSymbolsSwitchPagesAndEveryKeyIsReadBack() {
         val keyboard = Keyboard(pages, buffer = "POLIWAG")
         val ui = ui(keyboard)
-        val done = assertIs<ActionOutcome.Done>(TextPlans.enterText.run(GameAction.EnterText("Po-li 2!?♀"), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.enterText(GameAction.EnterText("Po-li 2!?♀"), ui.context()))
         assertEquals("typed Po-li 2!?♀", done.detail)
         assertEquals("Po-li 2!?♀", keyboard.done)
         // The default name was erased first: seven B presses.
@@ -72,7 +72,7 @@ class EnterTextRecipeTest {
     fun aTextLongerThanTheKeyboardAllowsIsRefusedBeforeAnyPress() {
         val keyboard = Keyboard(pages, buffer = "POLIWAG")
         val ui = ui(keyboard)
-        val failed = assertIs<ActionOutcome.Failed>(TextPlans.enterText.run(GameAction.EnterText("ABCDEFGHIJK"), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.enterText(GameAction.EnterText("ABCDEFGHIJK"), ui.context()))
         val error = assertIs<ActionError.InvalidParameter>(failed.error)
         assertEquals(listOf("at most 10 characters"), error.allowed)
         assertTrue(ui.game.presses.isEmpty())
@@ -83,7 +83,7 @@ class EnterTextRecipeTest {
     fun aCharacterTheKeyboardDoesntHaveIsATypedError() {
         val keyboard = Keyboard(pages, buffer = "")
         val ui = ui(keyboard)
-        val failed = assertIs<ActionOutcome.Failed>(TextPlans.enterText.run(GameAction.EnterText("A#"), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.enterText(GameAction.EnterText("A#"), ui.context()))
         assertIs<ActionError.NotOnScreen>(failed.error)
         assertEquals(null, keyboard.done)
     }
@@ -92,7 +92,7 @@ class EnterTextRecipeTest {
     fun anEmptyTextErasesAndConfirmsSoTheGameKeepsItsDefaultName() {
         val keyboard = Keyboard(pages, buffer = "POLIWAG")
         val ui = ui(keyboard)
-        assertIs<ActionOutcome.Done>(TextPlans.enterText.run(GameAction.EnterText(""), ui.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.enterText(GameAction.EnterText(""), ui.context()))
         assertEquals("", keyboard.done)
         assertEquals(7, ui.game.presses.count { it == Button.B })
     }

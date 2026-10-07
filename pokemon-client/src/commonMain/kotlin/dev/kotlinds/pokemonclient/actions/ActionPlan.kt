@@ -5,7 +5,7 @@ import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.state.GameState
 
 /**
- * The recipe of one action as a value, the way the families of recipes (`BasicPlans`, `ShopPlans`...) still hold
+ * The recipe of one action as a value, the way the families of recipes (`PartyBagPlans`, `ShopPlans`...) still hold
  * theirs until they move into [Recipes]: each is played from its action's method there ([RecipeBase.perform]
  * dispatches to it), so an action is always carried out with the game's own recipes
  * ([dev.kotlinds.pokemonclient.PokemonGame.recipes]).

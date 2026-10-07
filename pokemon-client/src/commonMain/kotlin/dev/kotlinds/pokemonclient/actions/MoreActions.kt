@@ -1,15 +1,12 @@
 package dev.kotlinds.pokemonclient.actions
 
-import dev.kotlinds.pokemonclient.console.InputFrame
 import dev.kotlinds.pokemonclient.console.TouchPoint
-import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.StartMenuFeature
-import dev.kotlinds.pokemonclient.state.sameAs
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -114,47 +111,9 @@ object MoreActions {
     /** The definitions, in the order they are listed to agents. */
     val definitions: List<ActionDefinition<*>> get() = listOf(sell, release, openMenu, drag)
 
-    // region Plans
-
-    /** Holds the stylus from [GameAction.Drag.from] to [GameAction.Drag.to], one small move per frame, then lifts it. */
-    internal val dragPlan: ActionPlan<GameAction.Drag> = ActionPlan { action, context ->
-        val before = context.state().screen
-        val (from, to, frames) = action
-        for (i in 0..frames) {
-            val point = TouchPoint(from.x + (to.x - from.x) * i / frames, from.y + (to.y - from.y) * i / frames)
-            context.scope.step(1, InputFrame(touch = point))
-        }
-        context.scope.step(DRAG_HOLD_FRAMES, InputFrame(touch = to))
-        context.scope.step(DRAG_RELEASE_FRAMES)
-        context.navigator.awaitChange(before, maxFrames = DRAG_REACTION_FRAMES)
-        val after = context.navigator.settle(maxFrames = DRAG_REACTION_FRAMES).screen
-        ActionOutcome.Done(
-            when {
-                !after.sameAs(before) -> if (after.kind == before.kind) "the screen changed (still ${after.kind})" else "now: ${after.kind}"
-                after is Screen.Unknown -> "dragged; this screen isn't decoded: a screenshot shows what moved"
-                else -> "the screen didn't change"
-            },
-        )
-    }
-
-    /** Opens the start menu (X) and picks the entry; checks something else is on screen after. */
-    internal val openMenuPlan: ActionPlan<GameAction.OpenMenu> = ActionPlan { action, context ->
-        PartyBagPlans.openStartMenuEntry(context, action.entry).then { state ->
-            val screen = state.screen
-            if ((screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU) {
-                ActionOutcome.Failed(ActionError.UnexpectedScreen("${action.entry} opened", screen))
-            } else ActionOutcome.Done("now: ${screen.kind}")
-        }
-    }
-
-    // endregion
-
     // region Helpers
 
     private const val DEFAULT_DRAG_FRAMES = 30
-    private const val DRAG_HOLD_FRAMES = 4
-    private const val DRAG_RELEASE_FRAMES = 4
-    private const val DRAG_REACTION_FRAMES = 120
 
     private fun <A : GameAction> spec(
         name: String,

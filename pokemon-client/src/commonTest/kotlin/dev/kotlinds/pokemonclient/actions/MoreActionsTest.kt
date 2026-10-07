@@ -68,7 +68,7 @@ class MoreActionsTest {
         val game = FakeGame(Screen.Dialogue(TextSource.FIELD, null, "Hi", Awaiting.INPUT))
         game.onFrame = { frame, screen -> if (frame == 40L) Screen.Overworld(awaiting = Awaiting.INPUT) else screen }
         val scope = game.scope()
-        val outcome = BasicPlans.wait.run(GameAction.Wait(untilChange = true), PlanContext(scope, game))
+        val outcome = Recipes.COMMON.wait(GameAction.Wait(untilChange = true), PlanContext(scope, game))
         assertEquals(ActionOutcome.Done(), outcome)
         assertTrue(scope.framesUsed < 60, "stopped right after the change, not after the whole wait (${scope.framesUsed})")
     }
@@ -76,7 +76,7 @@ class MoreActionsTest {
     @Test
     fun waitUntilChangeSaysWhenNothingChanged() {
         val game = FakeGame(Screen.Unknown("alph_puzzle", Awaiting.INPUT))
-        val outcome = assertIs<ActionOutcome.Done>(BasicPlans.wait.run(GameAction.Wait(30, untilChange = true), game.context()))
+        val outcome = assertIs<ActionOutcome.Done>(Recipes.COMMON.wait(GameAction.Wait(30, untilChange = true), game.context()))
         assertTrue(outcome.detail!!.startsWith("nothing changed"))
     }
 

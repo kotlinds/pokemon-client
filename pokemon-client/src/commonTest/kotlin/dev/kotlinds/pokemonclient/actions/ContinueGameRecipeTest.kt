@@ -79,7 +79,7 @@ class ContinueGameRecipeTest {
         val press = ui.game.onPress
         ui.game.onPress = { button, screen -> pressedAt += ui.frame; press(button, screen) }
 
-        val outcome = SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context())
+        val outcome = Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context())
 
         val done = assertIs<ActionOutcome.Done>(outcome)
         assertEquals("continued the saved game, at map 1 8,13", done.detail)
@@ -90,14 +90,14 @@ class ContinueGameRecipeTest {
     @Test
     fun theMainMenuReachedByTouchIsHandledLikeTheOther() {
         val ui = game(titleReady, viaTouch = true)
-        assertIs<ActionOutcome.Done>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
         assertTrue(ui.field != null)
     }
 
     @Test
     fun anIgnoredInputIsFollowedByTheNextOneTheScreenTakes() {
         val ui = game(titleReady, title = { it == Button.START })
-        assertIs<ActionOutcome.Done>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
         assertEquals(listOf(Button.A, Button.START, Button.A), ui.game.presses)
     }
 
@@ -105,14 +105,14 @@ class ContinueGameRecipeTest {
     fun aTouchIsTriedWhenTheButtonsAreIgnored() {
         val ui = game(titleReady, title = { false })
         ui.game.onTouch = { _, screen -> if (screen == titleReady) mainMenu(Cursor.Hidden) else screen }
-        assertIs<ActionOutcome.Done>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
         assertEquals(listOf(TouchPoint(128, 96)), ui.game.touches)
     }
 
     @Test
     fun aTitleScreenThatIgnoresEveryInputEndsInAnExplicitError() {
         val ui = game(titleReady, title = { false })
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
         val error = assertIs<ActionError.InputIgnored>(outcome.error)
         assertEquals("intro:title_screen", error.screen)
         assertEquals(listOf("press a", "press start", "touch 128,96", "press a"), error.tried)
@@ -123,7 +123,7 @@ class ContinueGameRecipeTest {
     fun aCommunicationErrorOnTheMainMenuIsReported() {
         val ui = ScriptedUi(Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION))
         ui.game.onFrame = { frame, screen -> if (frame >= 10) Screen.PressToContinue(ContinueReason.COMMUNICATION_ERROR) else screen }
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
         assertEquals(ActionError.CommunicationError, outcome.error)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -132,7 +132,7 @@ class ContinueGameRecipeTest {
     fun withoutASaveTheNewGameIntroIsReported() {
         val ui = ScriptedUi(loading)
         ui.game.onFrame = { frame, screen -> if (frame >= 10) Screen.Dialogue(TextSource.INTRO, null, "Hello there!", Awaiting.INPUT) else screen }
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
         assertEquals(ActionError.NoSavedGame, outcome.error)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -157,7 +157,7 @@ class ContinueGameRecipeTest {
     @Test
     fun refusedOutsideTheIntro() {
         val ui = ScriptedUi(OVERWORLD).also { it.field = field(1, 1, Direction.NORTH) }
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
         assertIs<ActionError.UnexpectedScreen>(outcome.error)
     }
 }

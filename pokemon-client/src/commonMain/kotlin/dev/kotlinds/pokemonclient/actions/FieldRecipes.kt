@@ -1,29 +1,34 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.state.BattleStyle
 import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.Screen
-import dev.kotlinds.pokemonclient.state.TextSpeed
+import dev.kotlinds.pokemonclient.state.kind
 
 /**
- * Recipe of the OPTIONS screen: start menu → OPTIONS, then for each setting asked for, the row (UP / DOWN) and the
- * value (RIGHT, wrapping), each press read back from the screen's entry ids (`setting:<row>:<value>`, never the shown
- * text); finally CONFIRM on the last row and A, which leaves saving them. The result is checked on the options read
- * from the save data.
+ * The recipes of the field's menus: `set_options` and `open_menu`. A family of the chain of [RecipeBase], above
+ * [BattleRecipes]. The other field recipes (`fly`, `fish`, `use_field_move`, `save_game`, `tune_radio`) still play
+ * their family's value from [Recipes] until they move here.
  */
-internal object OptionsPlans {
+abstract class FieldRecipes internal constructor() : BattleRecipes() {
 
-    val setOptions = ActionPlan<GameAction.SetOptions> { action, context ->
+    /**
+     * The OPTIONS screen: start menu → OPTIONS, then for each setting asked for, the row (UP / DOWN) and the value
+     * (RIGHT, wrapping), each press read back from the screen's entry ids (`setting:<row>:<value>`, never the shown
+     * text); finally CONFIRM on the last row and A, which leaves saving them. The result is checked on the options read
+     * from the save data.
+     */
+    override fun setOptions(action: GameAction.SetOptions, context: PlanContext): ActionOutcome {
         val wanted = buildList {
             action.textSpeed?.let { add("text_speed" to it.name.lowercase()) }
             action.battleScene?.let { add("battle_scene" to if (it) "on" else "off") }
             action.battleStyle?.let { add("battle_style" to it.name.lowercase()) }
         }
-        if (wanted.isEmpty()) return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("options", "none", listOf("text_speed", "battle_scene", "battle_style")))
+        if (wanted.isEmpty()) return ActionOutcome.Failed(ActionError.InvalidParameter("options", "none", listOf("text_speed", "battle_scene", "battle_style")))
         var step = PartyBagPlans.openStartMenuEntry(context, "option:options").andThen {
-            context.navigator.advanceUntil(OPTIONS_WAITS) { isOptionsScreen(it) }
+            context.navigator.advanceUntil(OPTIONS_WAITS) { ActionConditions.isOptionsScreen(it) }
         }
         for ((row, value) in wanted + (EXIT_ROW to CONFIRM)) {
             step = step.andThen { setRow(context, row, value) }
@@ -31,10 +36,10 @@ internal object OptionsPlans {
         step = step.andThen {
             context.navigator.confirm("CONFIRM", target = { it.id == "setting:$EXIT_ROW:$CONFIRM" })
         }.andThen {
-            context.navigator.advanceUntil(OPTIONS_WAITS) { !isOptionsScreen(it) && (it.screen is Screen.Overworld || it.screen is Screen.ListMenu) }
+            context.navigator.advanceUntil(OPTIONS_WAITS) { !ActionConditions.isOptionsScreen(it) && (it.screen is Screen.Overworld || it.screen is Screen.ListMenu) }
         }
         PartyBagPlans.closeToOverworld(context)
-        step.then {
+        return step.then {
             val options = context.state().options
             val ok = options == null || (
                 (action.textSpeed == null || options.textSpeed == action.textSpeed) &&
@@ -45,8 +50,6 @@ internal object OptionsPlans {
             else ActionOutcome.Done(options?.let { "text speed ${it.textSpeed.name.lowercase()}, battle scene ${if (it.battleScene) "on" else "off"}, battle style ${it.battleStyle.name.lowercase()}" } ?: "options set")
         }
     }
-
-    fun isOptionsScreen(state: GameState) = (state.screen as? Screen.ListMenu)?.entries?.firstOrNull()?.id?.startsWith("setting:") == true
 
     /** Brings the cursor on [row], then its value to [value] (RIGHT for the next value, LEFT for CONFIRM), re-reading after every press. */
     private fun setRow(context: PlanContext, row: String, value: String): Step<GameState> =
@@ -65,13 +68,20 @@ internal object OptionsPlans {
             Step.Failed(ActionError.Timeout("$row never became $value"))
         }
 
-    private const val EXIT_ROW = "exit"
-    private const val CONFIRM = "confirm"
-    private const val OPTIONS_WAITS = 40
-    private const val MAX_VALUE_PRESSES = 6
-    private const val VALUE_FRAMES = 20
+    /** Opens the start menu (X) and picks the entry; checks something else is on screen after. */
+    override fun openMenu(action: GameAction.OpenMenu, context: PlanContext): ActionOutcome =
+        PartyBagPlans.openStartMenuEntry(context, action.entry).then { state ->
+            val screen = state.screen
+            if ((screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU) {
+                ActionOutcome.Failed(ActionError.UnexpectedScreen("${action.entry} opened", screen))
+            } else ActionOutcome.Done("now: ${screen.kind}")
+        }
 
-    /** Wire values of the options, by type. */
-    fun textSpeed(raw: String): TextSpeed? = TextSpeed.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
-    fun battleStyle(raw: String): BattleStyle? = BattleStyle.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
+    private companion object {
+        const val EXIT_ROW = "exit"
+        const val CONFIRM = "confirm"
+        const val OPTIONS_WAITS = 40
+        const val MAX_VALUE_PRESSES = 6
+        const val VALUE_FRAMES = 20
+    }
 }

@@ -14,9 +14,9 @@ package dev.kotlinds.pokemonclient.actions
  * - [perform] is an exhaustive `when` over the sealed [GameAction], without `else`: a new action type doesn't
  *   compile until every game has a recipe for it;
  * - a recipe that carries out another action as one of its steps (talking to the nurse for `heal`, typing a
- *   nickname for `throw_ball`...) goes through the same object ([PlanContext.run] → [PlanContext.recipes], the
- *   game's recipes → [perform], a virtual call), so the game's own recipe is played there too, never the common one
- *   behind its back. This is also why the families of recipes are a chain of classes and never delegate (`by`): in
+ *   nickname for `throw_ball`...) goes through the same object: it calls that action's method (`enterText(...)`, a
+ *   virtual call), or, from a family still held as values, [PlanContext.run] → [PlanContext.recipes] (the game's
+ *   recipes) → [perform]; so the game's own recipe is played there too, never the common one behind its back. This is also why the families of recipes are a chain of classes and never delegate (`by`): in
  *   a delegate, `this` is the delegate, and its nested calls would skip the game's overrides.
  *
  * Every member is `internal`: the recipes run only through [ActionRegistry.execute] (availability checked first) or
