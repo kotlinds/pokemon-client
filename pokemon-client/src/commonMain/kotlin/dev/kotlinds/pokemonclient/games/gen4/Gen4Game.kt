@@ -3,7 +3,7 @@ package dev.kotlinds.pokemonclient.games.gen4
 import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.runtime.InputProbe
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
-import dev.kotlinds.pokemonclient.world.FieldMoveRule
+import dev.kotlinds.pokemonclient.world.FieldMoveSupport
 import dev.kotlinds.pokemonclient.world.FieldMoves
 import dev.kotlinds.pokemonclient.state.GameState
 
@@ -23,7 +23,8 @@ abstract class Gen4Game(gSystem: Long) : PokemonGame {
     /** Which badge allows which field move in this game (the moves and the check are the engine's: [Gen4FieldMoves]). */
     protected abstract val fieldMoveBadges: Map<FieldMoveKind, Gen4FieldMoves.Badge?>
 
-    override fun fieldMoveRule(move: FieldMoveKind): FieldMoveRule? = Gen4FieldMoves.rule(move, fieldMoveBadges)
+    /** The rule of [move] from [fieldMoveBadges]; a move missing from them is one this game doesn't have. */
+    override fun fieldMoveRule(move: FieldMoveKind): FieldMoveSupport = Gen4FieldMoves.rule(move, fieldMoveBadges)
 
     /**
      * Whether this game's party is read and its party menu decoded (where field moves are used from): when not, every

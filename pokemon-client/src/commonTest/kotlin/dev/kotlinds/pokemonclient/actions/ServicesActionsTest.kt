@@ -75,12 +75,17 @@ class ServicesActionsTest {
         assertEquals(UnavailableReason.NO_POKEMON_KNOWS_MOVE, unavailable(state(party = listOf(mon(2))))["fly"]?.reason)
     }
 
-    /** A7: Fly follows the game's rule like every field move; a game without one never lists it. */
+    /**
+     * A7: Fly follows the game's rule like every field move; a game without one never lists it: whether it doesn't
+     * declare its rules (unknown: hidden) or doesn't have Fly (not in the game).
+     */
     @Test
     fun flyIsHiddenInAGameWithoutAFlyRule() {
-        val noRule = withFieldMoves(state(), rules = { null })
-        assertFalse("fly" in available(noRule))
-        assertFalse("fly" in unavailable(noRule))
+        for (support in listOf(dev.kotlinds.pokemonclient.world.FieldMoveSupport.Unknown, dev.kotlinds.pokemonclient.world.FieldMoveSupport.NotInGame)) {
+            val noRule = withFieldMoves(state(), rules = { support })
+            assertFalse("fly" in available(noRule), "$support")
+            assertFalse("fly" in unavailable(noRule), "$support")
+        }
     }
 
     @Test

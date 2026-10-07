@@ -39,8 +39,12 @@ sealed interface ActionOutcome {
     data class Failed(val error: ActionError) : ActionOutcome
 }
 
-/** Turns a navigation [Step] failure into an outcome, or runs [then] with its value. */
-internal inline fun <T> Step<T>.then(then: (T) -> ActionOutcome): ActionOutcome = when (this) {
+/**
+ * Ends a chain of steps in an action's outcome: [then] runs with the value of a [Step.Done]; a [Step.Failed] becomes
+ * [ActionOutcome.Failed] with its error ([then] never runs). How a recipe (a game's own included) turns its steps into
+ * what the action answers: `openParty(context).then { ActionOutcome.Done() }`.
+ */
+inline fun <T> Step<T>.then(then: (T) -> ActionOutcome): ActionOutcome = when (this) {
     is Step.Done -> then(value)
     is Step.Failed -> ActionOutcome.Failed(error)
 }

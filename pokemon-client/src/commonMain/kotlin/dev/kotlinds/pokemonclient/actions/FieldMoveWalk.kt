@@ -187,6 +187,7 @@ internal object FieldMoveWalk {
             is FieldMoveAccess.Usable -> pushAction(failure, field)?.let { "$it (${access.monName} knows Strength)" }
                 ?: "use ${failure.move.label()} there by hand (${access.monName} knows it)"
             FieldMoveAccess.NotSupported -> "using ${failure.move.label()} isn't supported in this game yet"
+            FieldMoveAccess.NotInGame -> "this game has no ${failure.move.label()}"
             FieldMoveAccess.Unknown, null -> "it needs ${failure.move.label()}"
         }
         return "$what$where: $missing"

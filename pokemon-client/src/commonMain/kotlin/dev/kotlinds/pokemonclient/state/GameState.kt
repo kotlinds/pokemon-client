@@ -49,7 +49,7 @@ data class GameState(
      * The field moves of the game ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]) as the party and the badges
      * allow them now ([dev.kotlinds.pokemonclient.world.FieldMoves.access]): what the action list needs (Fly) without
      * the game at hand, and what the walks use. Every game fills it in its `state()` (every kind present, those it
-     * doesn't have as `Unknown`). Null: not read, a state built without its game (tests): the actions then read it
+     * doesn't have as `NotInGame`, all `Unknown` when it doesn't declare its field moves). Null: not read, a state built without its game (tests): the actions then read it
      * with the game's rules ([dev.kotlinds.pokemonclient.world.FieldMoves.of]) rather than taking "no field move",
      * which would silently hide Fly and drop Surf from the routes.
      */

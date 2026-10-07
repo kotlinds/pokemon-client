@@ -51,10 +51,14 @@ interface PokemonGame {
     val inputProbe: InputProbe
 
     /**
-     * What field move [move] needs outside battle in this game (the move, the badge), or null when the game doesn't
-     * have it. Routes use the field moves whose rule the party meets (Surf, Waterfall, Cut...).
+     * What field move [move] needs outside battle in this game (its [dev.kotlinds.pokemonclient.world.FieldMoveRule]:
+     * the move, the badge), [dev.kotlinds.pokemonclient.world.FieldMoveSupport.NotInGame] when the game doesn't have it
+     * (its actions don't exist in the game), or [dev.kotlinds.pokemonclient.world.FieldMoveSupport.Unknown] (the
+     * default) when the game doesn't declare its field moves. Routes use the field moves whose rule the party meets
+     * (Surf, Waterfall, Cut...).
      */
-    fun fieldMoveRule(move: dev.kotlinds.pokemonclient.world.FieldMoveKind): dev.kotlinds.pokemonclient.world.FieldMoveRule? = null
+    fun fieldMoveRule(move: dev.kotlinds.pokemonclient.world.FieldMoveKind): dev.kotlinds.pokemonclient.world.FieldMoveSupport =
+        dev.kotlinds.pokemonclient.world.FieldMoveSupport.Unknown
 
     /**
      * Where to touch the bottom screen in the field to use the registered item of [slot] (0 = the first one, also on

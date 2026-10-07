@@ -55,8 +55,12 @@ abstract class MoveRecipes internal constructor() : BagPartyRecipes() {
     protected open fun findEncounterAvailability(state: GameState): Availability =
         if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden
 
-    /** `push`: walking freely on a map with Strength boulders (their holes said, Ice Path B1F). */
+    /**
+     * `push`: walking freely on a map with Strength boulders (their holes said, Ice Path B1F). A game without Strength
+     * ([FieldMoveAccess.NotInGame]) doesn't have the action: [Availability.NotInThisGame].
+     */
     protected open fun pushAvailability(state: GameState): Availability {
+        if (state.fieldMoves?.get(FieldMoveKind.STRENGTH) == FieldMoveAccess.NotInGame) return Availability.NotInThisGame("This game has no Strength")
         if (!ActionConditions.canWalk(state, hasWorld = true)) return Availability.Hidden
         val field = state.field ?: return Availability.Hidden
         val holes = field.puzzle?.boulderHoles.orEmpty().filter { !it.fallen }.associateBy { it.boulder }
@@ -418,13 +422,18 @@ abstract class MoveRecipes internal constructor() : BagPartyRecipes() {
                 "the tile to push it from, can't be reached without moving other boulders: try another direction or another boulder first")
     }
 
-    /** The typed reason Strength can't be used, or null when it can. */
+    /**
+     * The typed reason Strength can't be used, or null when it can: one reason per case, its message saying the same
+     * (the game has no Strength, or doesn't declare its rule: the game's side, NOT_SUPPORTED_BY_GAME; never "no
+     * Pokémon knows it", which only the party can say).
+     */
     private fun strengthMissing(access: FieldMoveAccess?): ActionError? = when (access) {
         is FieldMoveAccess.Usable -> null
         is FieldMoveAccess.NoBadge -> ActionError.Unavailable(UnavailableReason.NEEDS_BADGE, "Strength needs the ${access.badge} Badge")
         FieldMoveAccess.NoPokemon -> ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon of the party knows Strength")
         FieldMoveAccess.NotSupported -> ActionError.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "using Strength isn't supported in this game yet")
-        FieldMoveAccess.Unknown, null -> ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "Strength can't be used in this game")
+        FieldMoveAccess.NotInGame -> ActionError.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "This game has no Strength")
+        FieldMoveAccess.Unknown, null -> ActionError.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "using Strength isn't supported in this game yet (its field move rules aren't known)")
     }
 
     private fun interrupted(state: GameState, done: List<String>) = ActionOutcome.Failed(ActionError.Interrupted(

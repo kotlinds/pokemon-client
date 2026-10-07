@@ -268,14 +268,25 @@ class Navigator(
 /** How many unexpected cursor moves the navigator tolerates before giving up (the "3 tries" rule). */
 data class RetryPolicy(val maxCorrections: Int = 3)
 
-/** The outcome of a navigation step. */
+/**
+ * The outcome of a navigation step (a shared step of the recipes, a [Navigator] move): [Done] with its value (the
+ * state reached, the entry chosen...), or [Failed] with the typed reason. Steps compose with [andThen], and end in an
+ * action's outcome with [then].
+ */
 sealed interface Step<out T> {
+    /** The step was carried out: [value] is what it led to. */
     data class Done<T>(val value: T) : Step<T>
+
+    /** The step couldn't be carried out: [error] says why (nothing after it runs). */
     data class Failed(val error: ActionError) : Step<Nothing>
 }
 
-/** Chains a navigation step into another one. */
-internal inline fun <T, R> Step<T>.andThen(next: (T) -> Step<R>): Step<R> = when (this) {
+/**
+ * Chains a navigation step into another one: [next] runs with this step's value when it is [Step.Done]; a
+ * [Step.Failed] is returned as it is ([next] never runs). How a recipe (a game's own included) builds a sequence of
+ * steps, each one checked before the next: `openParty(context).andThen { party -> choose(...) }`.
+ */
+inline fun <T, R> Step<T>.andThen(next: (T) -> Step<R>): Step<R> = when (this) {
     is Step.Done -> next(value)
     is Step.Failed -> this
 }

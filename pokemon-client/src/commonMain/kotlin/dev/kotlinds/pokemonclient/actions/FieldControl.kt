@@ -22,8 +22,14 @@ import kotlin.math.abs
  * says which warp was taken and where the player is now. Holding on across a warp is what took the shuffled warps
  * twice (the "invisible double warp": arrived in front of another warp taken the same way, the held direction took it
  * back at once, and the walk saw the same map and tile as before).
+ *
+ * Public API: a game written in its own project uses these rules in its overrides (a movement step of its own, an
+ * availability saying "walking freely": [inControl]), so its recipes wait, face and stop exactly like the common ones.
+ * The warp watch itself ([warpMark], [awaitOutcome]) stays internal to the walking engine: it reads the warps the
+ * [Navigator] noted from every state it decoded (its internal [WarpWatch]), engine state a recipe never handles; a
+ * game's step that moves the player goes through the common movement recipes ([RecipeBase.perform]) for that.
  */
-internal object FieldControl {
+object FieldControl {
 
     /**
      * True when the player walks freely on the overworld and the game waits for input: no battle, no message, no
@@ -135,7 +141,7 @@ internal object FieldControl {
         (state.screen as? Screen.Animation)?.kind == dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION
 
     /** The mark to take before a movement ([WarpWatch.mark]), the player's place read first (the last one known). */
-    fun warpMark(context: PlanContext): Int {
+    internal fun warpMark(context: PlanContext): Int {
         context.state()
         return context.navigator.warps.mark()
     }
@@ -148,7 +154,7 @@ internal object FieldControl {
      * "nothing happened") is what pressed on into a second warp. The warp taken, with where the player stands once
      * the game gives the control back; null when there was none (or a battle, a message, a menu came first).
      */
-    fun awaitOutcome(context: PlanContext, mark: Int): WarpWatch.Warped? {
+    internal fun awaitOutcome(context: PlanContext, mark: Int): WarpWatch.Warped? {
         val warps = context.navigator.warps
         // Already standing still with the control for long enough (the move's own wait saw it): no warp is starting.
         if (warps.since(mark) == null && warps.calmFrames >= STILL_FRAMES) return null
@@ -308,7 +314,7 @@ internal object FieldControl {
     const val CONSECUTIVE_FRAMES = 2L
 
     /** Longest wait for a warp to start and end once the player stopped on it (a ladder's climb, a fade, the arrival). */
-    const val WARP_FRAMES = 300
+    internal const val WARP_FRAMES = 300
 
     /** Longest wait for the player to stand still after a move (a step takes 8 frames running, 16 walking). */
     const val SETTLE_FRAMES = 64

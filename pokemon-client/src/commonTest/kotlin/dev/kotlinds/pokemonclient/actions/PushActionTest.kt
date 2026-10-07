@@ -33,7 +33,7 @@ import kotlin.test.assertTrue
 class PushActionTest {
 
     /** '.' floor, '#' wall. */
-    private class BoulderRoom(rows: List<String>, x: Int, y: Int, val boulders: MutableMap<String, Pair<Int, Int>>, val strength: Boolean = true) : GridGame(x, y) {
+    private class BoulderRoom(rows: List<String>, x: Int, y: Int, val boulders: MutableMap<String, Pair<Int, Int>>, val strength: FieldMoveAccess = FieldMoveAccess.Usable(0, "MACHAMP")) : GridGame(x, y) {
         val area: Area = run {
             val width = rows.maxOf { it.length }
             Area(1, "room", 0, 0, width, rows.size, Array(width * rows.size) { i ->
@@ -55,7 +55,7 @@ class PushActionTest {
             val ny = y + direction.dy
             val boulder = boulders.entries.firstOrNull { it.value == nx to ny }
             if (boulder != null) {
-                if (strength && free(nx + direction.dx, ny + direction.dy)) boulders[boulder.key] = nx + direction.dx to ny + direction.dy
+                if (strength is FieldMoveAccess.Usable && free(nx + direction.dx, ny + direction.dy)) boulders[boulder.key] = nx + direction.dx to ny + direction.dy
                 return
             }
             if (free(nx, ny)) moveTo(nx, ny)
@@ -65,7 +65,7 @@ class PushActionTest {
             val objects = boulders.map { (id, at) -> FieldObject(id, "boulder", FieldObjectKind.OBSTACLE, at.first, at.second, null, obstacle = ObstacleKind.BOULDER) }
             val field = FieldState(1, mapName(1), x, y, 0, facing, MovementMode.WALK, moving = false, objects = objects)
             return GameState(0, Screen.Overworld(null, Awaiting.INPUT), null, emptyList(), null, null, field,
-                fieldMoves = mapOf(FieldMoveKind.STRENGTH to if (strength) FieldMoveAccess.Usable(0, "MACHAMP") else FieldMoveAccess.NoPokemon))
+                fieldMoves = mapOf(FieldMoveKind.STRENGTH to strength))
         }
     }
 
@@ -99,10 +99,49 @@ class PushActionTest {
 
     @Test
     fun withoutStrengthNothingMoves() {
-        val game = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)), strength = false)
+        val game = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)), strength = FieldMoveAccess.NoPokemon)
         val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Push("person:1", Direction.NORTH), game.context()))
-        assertEquals(UnavailableReason.NO_POKEMON_KNOWS_MOVE, assertIs<ActionError.Unavailable>(failed.error).reason)
+        val error = assertIs<ActionError.Unavailable>(failed.error)
+        assertEquals(UnavailableReason.NO_POKEMON_KNOWS_MOVE to "No Pokémon of the party knows Strength", error.reason to error.detail)
         assertEquals(1 to 1, game.x to game.y)
+    }
+
+    /**
+     * Strength missing on the game's side says so with the game's reason, its message saying the same: never "no
+     * Pokémon knows it" (the reason used to be NO_POKEMON_KNOWS_MOVE with "Strength can't be used in this game").
+     */
+    @Test
+    fun strengthMissingOnTheGamesSideIsTheGamesReason() {
+        val cases = mapOf(
+            FieldMoveAccess.NotInGame to "This game has no Strength",
+            FieldMoveAccess.Unknown to "using Strength isn't supported in this game yet (its field move rules aren't known)",
+            FieldMoveAccess.NotSupported to "using Strength isn't supported in this game yet",
+        )
+        for ((access, detail) in cases) {
+            val game = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)), strength = access)
+            val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Push("person:1", Direction.NORTH), game.context())).error)
+            assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME to detail, error.reason to error.detail, "$access")
+            assertEquals(1 to 1, game.x to game.y, "nothing pressed for $access")
+        }
+        // The party's side keeps its reason: a badge missing.
+        val badge = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)), strength = FieldMoveAccess.NoBadge("Plain"))
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Push("person:1", Direction.NORTH), badge.context())).error)
+        assertEquals(UnavailableReason.NEEDS_BADGE to "Strength needs the Plain Badge", error.reason to error.detail)
+    }
+
+    /**
+     * A game without Strength doesn't have `push` (never listed, refused as NOT_SUPPORTED_BY_GAME on any screen); a
+     * game whose rule is only unknown keeps the common rule (listed where boulders are).
+     */
+    @Test
+    fun pushIsNotInAGameWithoutStrength() {
+        val without = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)), strength = FieldMoveAccess.NotInGame)
+        assertEquals(Availability.NotInThisGame("This game has no Strength"), PuzzleActions.push.availability(without.recipes, without.context().state()))
+        val refused = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(
+            ActionRegistry.of().execute(GameAction.Push("person:1", Direction.NORTH), without.context().scope, without)).error)
+        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME to "This game has no Strength", refused.reason to refused.detail)
+        val unknown = BoulderRoom(room, 1, 1, mutableMapOf("person:1" to (3 to 2)), strength = FieldMoveAccess.Unknown)
+        assertIs<Availability.Available>(PuzzleActions.push.availability(unknown.recipes, unknown.context().state()))
     }
 
     @Test

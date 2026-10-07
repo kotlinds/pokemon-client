@@ -26,8 +26,13 @@ import dev.kotlinds.pokemonclient.state.PcStorage
  * Helpers, not entry points: when an action can run is decided by one method per action in the game's recipes
  * (`<action>Availability`, e.g. [FieldRecipes.tuneRadioAvailability]), whose common default calls these; both the
  * listing and the execution read that method ([ActionDefinition.availability]), never these helpers directly.
+ *
+ * Public API: a game written in its own project builds its `<action>Availability` overrides (and its recipes' checks)
+ * on the same predicates as the common rules, so "in the field" or "walking freely" mean the same in every game
+ * (`override fun saveGameAvailability(state: GameState) = if (ActionConditions.inField(state)) ... else
+ * Availability.Hidden`). Pure functions of the state: they read it, never press anything nor run a recipe.
  */
-internal object ActionConditions {
+object ActionConditions {
 
     // region Battle
 

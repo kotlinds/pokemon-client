@@ -2,16 +2,20 @@ package dev.kotlinds.pokemonclient.libretro
 
 import dev.kotlinds.pokemonclient.Memory
 import dev.kotlinds.pokemonclient.PokemonGame
+import dev.kotlinds.pokemonclient.actions.ActionConditions
 import dev.kotlinds.pokemonclient.actions.ActionError
 import dev.kotlinds.pokemonclient.actions.ActionMode
 import dev.kotlinds.pokemonclient.actions.ActionOutcome
 import dev.kotlinds.pokemonclient.actions.ActionRegistry
 import dev.kotlinds.pokemonclient.actions.Availability
+import dev.kotlinds.pokemonclient.actions.FieldControl
 import dev.kotlinds.pokemonclient.actions.GameAction
 import dev.kotlinds.pokemonclient.actions.PlanContext
 import dev.kotlinds.pokemonclient.actions.Recipes
 import dev.kotlinds.pokemonclient.actions.Step
 import dev.kotlinds.pokemonclient.actions.UnavailableReason
+import dev.kotlinds.pokemonclient.actions.andThen
+import dev.kotlinds.pokemonclient.actions.then
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.console.ConsolePort
 import dev.kotlinds.pokemonclient.console.Frame
@@ -35,9 +39,12 @@ import kotlin.test.assertTrue
 /**
  * A game written outside the `pokemon-client` module (this test source set is another module: it sees only the
  * library's public API, never its `internal` members), the way someone writes their own game in their own project
- * before contributing it: its own instance of the common [Recipes], overriding a shared step ([Recipes.openParty]) and
- * an availability method ([Recipes.saveGameAvailability]), both `protected open`. The overrides are played by the
- * library's own entry points ([ActionRegistry]: the listing and the execution), never called by the test.
+ * before contributing it: its own instance of the common [Recipes], overriding a shared step ([Recipes.openParty]), a
+ * recipe (`open_menu`) and an availability method ([Recipes.saveGameAvailability]), all `protected open`, written with
+ * the library's public helpers the common recipes use too: [andThen] and [then] to chain checked steps,
+ * [FieldControl] (whether the player walks freely) and [ActionConditions] (whether the player is in the field). The
+ * overrides are played by the library's own entry points ([ActionRegistry]: the listing and the execution), never
+ * called by the test.
  */
 class ExternalGameRecipesTest {
 
@@ -48,10 +55,13 @@ class ExternalGameRecipesTest {
         /** Every party opened through this game's own step. */
         var partiesOpened = 0
 
+        /** The screen the game shows (walking by default). */
+        var screen: Screen = Screen.Overworld(awaiting = Awaiting.INPUT)
+
         override val name = "External"
 
         override fun state(memory: Memory) = GameState(
-            0, Screen.Overworld(awaiting = Awaiting.INPUT), null, listOf(mon(1), mon(2)), null, null, null,
+            0, screen, null, listOf(mon(1), mon(2)), null, null, null,
         )
 
         private var held: Set<Button> = emptySet()
@@ -62,16 +72,35 @@ class ExternalGameRecipesTest {
          * global shared object: an instance of its own.
          */
         override val recipes: Recipes = object : Recipes() {
-            /** This game opens its party with SELECT (a step every party recipe goes through). */
+            /**
+             * This game opens its party with SELECT from the field (a step every party recipe goes through): checked
+             * first ([FieldControl.inControl]), then the press, then what the screen shows ([andThen]).
+             */
             override fun openParty(context: PlanContext): Step<GameState> {
                 partiesOpened++
-                context.scope.tap(Button.SELECT)
-                return Step.Failed(ActionError.UnexpectedScreen("the external game's party", context.state().screen))
+                return walking(context).andThen { _ ->
+                    context.scope.tap(Button.SELECT)
+                    Step.Failed(ActionError.UnexpectedScreen("the external game's party", context.state().screen))
+                }
             }
 
-            /** This game saves only at its save points: never from the field. */
+            /** This game opens its menu with START from the field, whatever the entry asked: its steps end in the outcome ([then]). */
+            override fun openMenu(action: GameAction.OpenMenu, context: PlanContext): ActionOutcome =
+                walking(context).andThen { state ->
+                    context.scope.tap(Button.START)
+                    Step.Done(state)
+                }.then { ActionOutcome.Done("opened ${action.entry} with START") }
+
+            /** This game saves only at its save points: never from the field ([ActionConditions.inField]), hidden elsewhere. */
             override fun saveGameAvailability(state: GameState): Availability =
-                Availability.Unavailable(UnavailableReason.CANNOT_USE_HERE, "this game saves at its save points only", "go to a save point")
+                if (ActionConditions.inField(state)) Availability.Unavailable(UnavailableReason.CANNOT_USE_HERE, "this game saves at its save points only", "go to a save point")
+                else Availability.Hidden
+
+            /** The player walking freely, or the typed reason not to press anything. */
+            private fun walking(context: PlanContext): Step<GameState> {
+                val state = context.state()
+                return if (FieldControl.inControl(state)) Step.Done(state) else Step.Failed(ActionError.UnexpectedScreen("the field", state.screen))
+            }
         }
 
         val console = object : ConsolePort {
@@ -123,10 +152,35 @@ class ExternalGameRecipesTest {
         assertEquals(UnavailableReason.CANNOT_USE_HERE to "this game saves at its save points only", refused.reason to refused.detail)
         assertTrue(game.presses.isEmpty(), "refused before any press")
 
+        // Out of the field (the title screen): the same override says hidden, refused as a wrong screen.
+        val talking = ExternalGame().also { it.screen = Screen.Intro(dev.kotlinds.pokemonclient.state.IntroStage.TITLE_SCREEN, Awaiting.INPUT) }
+        val talkingState = talking.state(talking.scope().memory())
+        assertTrue(registry.unavailable(talkingState, ActionMode.ASSISTED, talking).none { it.name == "save_game" })
+        val wrongScreen = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(GameAction.SaveGame, talking.scope(), talking)).error)
+        assertEquals(UnavailableReason.WRONG_SCREEN, wrongScreen.reason)
+
         // The same game with the common recipes, instantiated as they are: save_game offered in the field.
         val common = object : PokemonGame by game {
             override val recipes = Recipes()
         }
         assertTrue(registry.available(state, ActionMode.ASSISTED, common).any { it.name == "save_game" })
+    }
+
+    /**
+     * A recipe of the game's own, chained with the public [andThen] / [then] and checked with [FieldControl]: run by
+     * the registry from the field (its own START), and stopping before any press off the field.
+     */
+    @Test
+    fun anExternalGamesOwnRecipeChainsItsStepsWithThePublicHelpers() {
+        val game = ExternalGame()
+        val done = assertIs<ActionOutcome.Done>(registry.execute(GameAction.OpenMenu("option:pokemon"), game.scope(), game))
+        assertEquals("opened option:pokemon with START", done.detail)
+        assertEquals(listOf(Button.START), game.presses)
+
+        // Not walking freely (the start menu is open): the step fails, the chain stops, nothing is pressed.
+        val inMenu = ExternalGame().also { it.screen = Screen.ListMenu(dev.kotlinds.pokemonclient.state.MenuKind.START_MENU, emptyList(), dev.kotlinds.pokemonclient.state.Cursor.At(0), dev.kotlinds.pokemonclient.state.Topology.vertical(0)) }
+        val failed = assertIs<ActionError.UnexpectedScreen>(assertIs<ActionOutcome.Failed>(registry.execute(GameAction.OpenMenu("option:pokemon"), inMenu.scope(), inMenu)).error)
+        assertEquals("the field", failed.expected)
+        assertTrue(inMenu.presses.isEmpty(), "stopped before any press")
     }
 }

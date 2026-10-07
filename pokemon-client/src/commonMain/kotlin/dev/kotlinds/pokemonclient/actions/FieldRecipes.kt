@@ -20,6 +20,8 @@ import dev.kotlinds.pokemonclient.state.TextSource
 import dev.kotlinds.pokemonclient.state.ViewerApp
 import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.world.FieldMoveAccess
+import dev.kotlinds.pokemonclient.world.FieldMoveRule
+import dev.kotlinds.pokemonclient.world.FieldMoveSupport
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.FieldMoveUse
 import dev.kotlinds.pokemonclient.world.FieldMoves
@@ -73,11 +75,15 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
         return if (rods.isEmpty()) Availability.Hidden else Availability.Available(mapOf("rod" to rods.map { Choice("item:${it.item.id.value}", it.item.name) }))
     }
 
-    /** `fly`: walking freely, by the game's Fly rule as the state read it ([GameState.fieldMoves]) and the map's flag. */
+    /**
+     * `fly`: walking freely, by the game's Fly rule as the state read it ([GameState.fieldMoves]) and the map's flag.
+     * A game without Fly ([FieldMoveAccess.NotInGame]) doesn't have the action: [Availability.NotInThisGame].
+     */
     protected open fun flyAvailability(state: GameState): Availability {
         // The game's Fly rule (the move, the badge by id: never its shown name, the game may be in French).
-        // Null (a state not read by its game, tests) can't tell: hidden like a game without Fly.
+        // Null (a state not read by its game, tests) or Unknown (a game not declaring its field moves) can't tell: hidden.
         val fly = state.fieldMoves?.get(FieldMoveKind.FLY)
+        if (fly == FieldMoveAccess.NotInGame) return Availability.NotInThisGame("This game has no Fly")
         return when {
             !ActionConditions.canWalk(state, hasWorld = true) || fly == null || fly == FieldMoveAccess.Unknown -> Availability.Hidden
             fly == FieldMoveAccess.NotSupported -> Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "Fly isn't supported in this game yet (its party menu isn't decoded)")
@@ -88,12 +94,19 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
         }
     }
 
-    /** `use_field_move`: in the field, the moves of this action ([FieldMoveUse.ACTION]) the party can use now. */
+    /**
+     * `use_field_move`: in the field, the moves of this action ([FieldMoveUse.ACTION]) the party can use now. A game
+     * without any of these moves ([FieldMoveAccess.NotInGame] for all) doesn't have the action:
+     * [Availability.NotInThisGame].
+     */
     protected open fun useFieldMoveAvailability(state: GameState): Availability {
-        if (!ActionConditions.inField(state)) return Availability.Hidden
         // The game's rules as the state read them (GameState.fieldMoves: the move known, the badge): the moves of
         // this action only (Fly and the moves walks use have their own ways).
         val access = state.fieldMoves.orEmpty().filterKeys { it.use == FieldMoveUse.ACTION }
+        if (access.isNotEmpty() && access.values.all { it == FieldMoveAccess.NotInGame }) {
+            return Availability.NotInThisGame("This game has no field move used from the party menu")
+        }
+        if (!ActionConditions.inField(state)) return Availability.Hidden
         val usable = access.filterValues { it is FieldMoveAccess.Usable }
         return when {
             usable.isNotEmpty() -> Availability.Available(buildMap {
@@ -347,7 +360,7 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
     /** Start menu → POKéMON → a Pokémon that knows Fly → FLY ([openFieldMove]), up to the fly map. */
     private fun openFlyMap(context: PlanContext): Step<GameState> {
         // The game's Fly move (its rule), never a move name.
-        val fly = context.game.fieldMoveRule(FieldMoveKind.FLY)?.move
+        val fly = (context.game.fieldMoveRule(FieldMoveKind.FLY) as? FieldMoveRule)?.move
         val flyers = fly?.let { FieldMoves.knowers(context.state(), it) }.orEmpty().sortedBy { it.fainted }
         return openFieldMove(context, FieldMoveKind.FLY, flyers).andThen { awaitFlyMap(context) }
     }
@@ -389,7 +402,12 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
         val move = action.move
         val label = with(FieldMoveWalk) { move.label() }
         val before = context.navigator.settle()
-        val rule = context.game.fieldMoveRule(move) ?: return ActionOutcome.Failed(ActionError.Unsupported("use_field_move(${move.wire})"))
+        val rule = when (val support = context.game.fieldMoveRule(move)) {
+            is FieldMoveRule -> support
+            // The game doesn't have the move: refused like an action the game doesn't have.
+            FieldMoveSupport.NotInGame -> return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "This game has no $label"))
+            FieldMoveSupport.Unknown -> return ActionOutcome.Failed(ActionError.Unsupported("use_field_move(${move.wire})"))
+        }
         when (val access = FieldMoves.of(before, context.game::fieldMoveRule)[move]) {
             is FieldMoveAccess.NoBadge -> return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NEEDS_BADGE, "$label needs the ${access.badge} Badge"))
             FieldMoveAccess.NoPokemon -> return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows $label"))

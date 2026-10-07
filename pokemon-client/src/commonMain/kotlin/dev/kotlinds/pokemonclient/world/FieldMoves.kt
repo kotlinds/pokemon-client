@@ -4,6 +4,20 @@ import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MoveId
 
 /**
+ * What a game says about one field move ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]): its [FieldMoveRule]
+ * when it has the move, else whether it is known not to have it ([NotInGame]) or doesn't say ([Unknown]). Two
+ * different answers: a move the game doesn't have is an action that doesn't exist in it
+ * ([dev.kotlinds.pokemonclient.actions.Availability.NotInThisGame]), a move whose rule isn't declared is only unknown.
+ */
+sealed interface FieldMoveSupport {
+    /** The game doesn't have this field move (Defog in HeartGold / SoulSilver; Whirlpool, Headbutt in Platinum). */
+    data object NotInGame : FieldMoveSupport
+
+    /** The game doesn't declare its field moves (the default of [dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]): nothing is known. */
+    data object Unknown : FieldMoveSupport
+}
+
+/**
  * What a game asks before a field move can be used outside battle: a Pokémon of the party knowing [move], and the
  * badge [badge] (as [dev.kotlinds.pokemonclient.state.PlayerInfo.badges] lists it) when it needs one. Games give one
  * per move they have ([dev.kotlinds.pokemonclient.PokemonGame.fieldMoveRule]); HGSS checks them in `src/field_move.c`.
@@ -18,7 +32,7 @@ data class FieldMoveRule(
      * one (never the name, which depends on the language). Null: the name is compared (games without badge ids).
      */
     val badgeId: Int? = null,
-) {
+) : FieldMoveSupport {
     /** True when [player] owns the badge (by id when known, else by name), or no badge is needed. */
     fun badgeOwned(player: dev.kotlinds.pokemonclient.state.PlayerInfo): Boolean = when {
         badgeId != null -> badgeId in player.badgeIds
@@ -38,7 +52,10 @@ sealed interface FieldMoveAccess {
     /** A Pokémon knows it, but the badge [badge] isn't owned yet. */
     data class NoBadge(val badge: String) : FieldMoveAccess
 
-    /** The game doesn't have this field move (or its rule isn't known). */
+    /** The game doesn't have this field move ([FieldMoveSupport.NotInGame]): no action using it exists in the game. */
+    data object NotInGame : FieldMoveAccess
+
+    /** The game doesn't say whether it has this field move nor what it needs ([FieldMoveSupport.Unknown]). */
     data object Unknown : FieldMoveAccess
 
     /**
@@ -55,25 +72,29 @@ object FieldMoves {
      * The access to every [FieldMoveKind] in [state], with the game's [rule]s; unless the game reads its party and
      * decodes its party menu ([partyRead] false): then every move it has is [FieldMoveAccess.NotSupported].
      */
-    fun access(state: GameState, rule: (FieldMoveKind) -> FieldMoveRule?): Map<FieldMoveKind, FieldMoveAccess> = access(state, partyRead = true, rule)
+    fun access(state: GameState, rule: (FieldMoveKind) -> FieldMoveSupport): Map<FieldMoveKind, FieldMoveAccess> = access(state, partyRead = true, rule)
 
     /** [access], [partyRead] telling whether the game reads its party (see above). */
-    fun access(state: GameState, partyRead: Boolean, rule: (FieldMoveKind) -> FieldMoveRule?): Map<FieldMoveKind, FieldMoveAccess> =
+    fun access(state: GameState, partyRead: Boolean, rule: (FieldMoveKind) -> FieldMoveSupport): Map<FieldMoveKind, FieldMoveAccess> =
         FieldMoveKind.entries.associateWith { kind ->
             val r = rule(kind)
-            if (!partyRead && r != null) FieldMoveAccess.NotSupported else access(state, r)
+            if (!partyRead && r is FieldMoveRule) FieldMoveAccess.NotSupported else access(state, r)
         }
 
     /**
      * The access of [state]: what its game read ([GameState.fieldMoves], the one source of the action list and the
      * walks); a state built without its game (null, tests) is read now with the game's [rule], the same way.
      */
-    fun of(state: GameState, rule: (FieldMoveKind) -> FieldMoveRule?): Map<FieldMoveKind, FieldMoveAccess> =
+    fun of(state: GameState, rule: (FieldMoveKind) -> FieldMoveSupport): Map<FieldMoveKind, FieldMoveAccess> =
         state.fieldMoves ?: access(state, rule)
 
-    /** The access to one field move with [rule] (null: the game doesn't know it). */
-    fun access(state: GameState, rule: FieldMoveRule?): FieldMoveAccess {
-        rule ?: return FieldMoveAccess.Unknown
+    /** The access to one field move with what its game says of it ([support]: its rule, or why there is none). */
+    fun access(state: GameState, support: FieldMoveSupport): FieldMoveAccess {
+        val rule = when (support) {
+            is FieldMoveRule -> support
+            FieldMoveSupport.NotInGame -> return FieldMoveAccess.NotInGame
+            FieldMoveSupport.Unknown -> return FieldMoveAccess.Unknown
+        }
         // The game takes the first Pokémon knowing the move (GetPartySlotWithMove).
         val mon = knowers(state, rule.move).firstOrNull() ?: return FieldMoveAccess.NoPokemon
         val badge = rule.badge

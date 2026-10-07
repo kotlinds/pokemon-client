@@ -44,6 +44,9 @@ import dev.kotlinds.pokemonclient.state.StartMenuFeature
 import dev.kotlinds.pokemonclient.state.Topology
 import dev.kotlinds.pokemonclient.state.ViewerApp
 import dev.kotlinds.pokemonclient.state.ViewerExit
+import dev.kotlinds.pokemonclient.world.FieldMoveAccess
+import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.FieldMoveSupport
 import kotlin.reflect.KFunction
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -298,6 +301,57 @@ class AvailabilityTest {
         // Without its Radio Card yet: refused, typed (the story gives it).
         val noCard = state(overworld, player = player.copy(pokegearCards = setOf(PokegearCard.MAP))).copy(pokegear = true)
         assertEquals(UnavailableReason.NOT_UNLOCKED_YET, registry.unavailable(noCard, ActionMode.ASSISTED, game(noCard)).single { it.name == "tune_radio" }.reason)
+    }
+
+    /**
+     * A field move the game doesn't have ([FieldMoveSupport.NotInGame]) makes the action using it not exist in the
+     * game ([Availability.NotInThisGame]: listed nowhere, on any screen, refused as NOT_SUPPORTED_BY_GAME before any
+     * press): `fly` without Fly, `use_field_move` without any of its moves, `push` without Strength. A game that
+     * doesn't declare its field moves ([FieldMoveSupport.Unknown]) keeps the behaviour it had: `fly` and
+     * `use_field_move` hidden (refused as a wrong screen), `push` listed where boulders are.
+     */
+    @Test
+    fun aFieldMoveTheGameDoesntHaveMakesItsActionNotExistAndAnUnknownOneKeepsTheCommonRule() {
+        val walking = state(overworld)
+        val inBattle = state(command, field = false, battle = battle(BattleKind.WILD))
+        val noFieldMoves: (FieldMoveKind) -> FieldMoveSupport = { FieldMoveSupport.NotInGame }
+        for (screenState in listOf(walking, inBattle)) {
+            val where = screenState.screen::class.simpleName
+            val game = game(screenState).also { it.fieldMoveRules = noFieldMoves }
+            // The state as the game reads it (its field moves under its rules).
+            val read = game.context().state()
+            val listed = registry.available(read, ActionMode.ASSISTED, game).map { it.name } + registry.unavailable(read, ActionMode.ASSISTED, game).map { it.name }
+            for ((action, detail) in listOf(
+                GameAction.Fly("fly:1") to "This game has no Fly",
+                GameAction.UseFieldMove(FieldMoveKind.TELEPORT) to "This game has no field move used from the party menu",
+                GameAction.Push("person:2", Direction.NORTH) to "This game has no Strength",
+            )) {
+                val name = action.key.substringBefore('(')
+                assertTrue(name !in listed, "$name listed $where")
+                val refused = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(action, game.scope(), game), where).error, where)
+                assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME to detail, refused.reason to refused.detail, "$name $where")
+            }
+            assertTrue(game.presses.isEmpty() && game.touches.isEmpty(), where)
+        }
+
+        // Unknown (FakeGame's default: rules not declared): the behaviour as before the split.
+        val unknown = game(walking)
+        assertEquals(FieldMoveAccess.Unknown, unknown.context().state().fieldMoves?.get(FieldMoveKind.FLY))
+        for (action in listOf(GameAction.Fly("fly:1"), GameAction.UseFieldMove(FieldMoveKind.TELEPORT))) {
+            val refused = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(action, unknown.scope(), unknown)).error)
+            assertEquals(UnavailableReason.WRONG_SCREEN, refused.reason, action.key)
+        }
+        assertIs<Availability.Available>(PuzzleActions.push.availability(unknown.recipes, unknown.context().state()))
+
+        // One move the game doesn't have, asked by `use_field_move` itself (HeartGold's rules: no Defog): the game's
+        // reason (it used to be UNSUPPORTED, "use_field_move(defog) isn't supported for this game yet"); a move
+        // whose rule is only unknown keeps that answer.
+        val hgssLike = game(walking).also { it.fieldMoveRules = hgssFieldMoves }
+        val noDefog = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.UseFieldMove(FieldMoveKind.DEFOG), hgssLike.context())).error)
+        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME to "This game has no Defog", noDefog.reason to noDefog.detail)
+        assertEquals(ActionError.Unsupported("use_field_move(defog)"),
+            assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.UseFieldMove(FieldMoveKind.DEFOG), game(walking).context())).error)
+        assertTrue(hgssLike.presses.isEmpty())
     }
 
     /** The real games: Platinum's state says it has no Pokégear, HeartGold's that it has one (RAM fixtures, no ROM). */
