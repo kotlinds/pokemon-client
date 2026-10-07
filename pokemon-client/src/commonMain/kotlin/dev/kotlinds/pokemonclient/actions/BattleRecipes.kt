@@ -200,7 +200,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
         val before = context.state()
         // The ball by its id or its name in the game's data (the bag of the state, like `sell`), never by the label
         // the pocket shows (the game may run in another language): refused before opening anything.
-        val balls = before.bag.orEmpty().firstOrNull { it.name == BALLS_BAG_POCKET }?.items.orEmpty()
+        val balls = ActionConditions.ballsInBag(before)
         val stack = balls.firstOrNull { matchesRef(action.ball.raw, "item", it.item.id.value, it.item.name) }
             ?: return ActionOutcome.Failed(ActionError.InvalidParameter("ball", action.ball.raw, balls.map { "item:${it.item.id.value} (${it.item.name} x${it.quantity})" }))
         val ballId = "item:${stack.item.id.value}"
@@ -518,9 +518,6 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
         const val RUN_FRAMES = 1800
 
         const val BALLS_POCKET = "pocket:poke_balls"
-
-        /** The balls pocket of the state's bag ([dev.kotlinds.pokemonclient.state.BagPocket.name], what `throw_ball` lists). */
-        const val BALLS_BAG_POCKET = "balls"
 
         /** The throw, the shakes, "Gotcha!" and the Pokédex entry up to the nickname question (~1600 frames seen). */
         const val THROW_FRAMES = 2400

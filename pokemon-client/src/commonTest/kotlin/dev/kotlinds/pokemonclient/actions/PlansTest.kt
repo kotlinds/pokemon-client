@@ -189,7 +189,7 @@ class PlansTest {
             }
         }
         ui.onB = { Screen.Overworld(null, Awaiting.INPUT) }
-        assertIs<ActionOutcome.Done>(FieldPlans.saveGame.run(GameAction.SaveGame, ui.game.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.saveGame(GameAction.SaveGame, ui.game.context()))
         assertEquals(2, asked)
         assertIs<Screen.Overworld>(ui.game.screen)
     }

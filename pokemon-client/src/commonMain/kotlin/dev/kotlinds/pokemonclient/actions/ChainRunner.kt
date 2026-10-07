@@ -285,7 +285,7 @@ class BattleWatch private constructor(
             state.bag.orEmpty().firstOrNull { pocket -> pocket.items.any { matchesRef(item.raw, "item", it.item.id.value, it.item.name) } }?.name
 
         /** Bag pockets whose items only work in a battle. */
-        private val BATTLE_ONLY_POCKETS = setOf("battle_items", "balls")
+        private val BATTLE_ONLY_POCKETS = setOf("battle_items", ActionConditions.BALLS_BAG_POCKET)
 
         private fun name(b: BattlerState) = b.nickname ?: b.species.name
 

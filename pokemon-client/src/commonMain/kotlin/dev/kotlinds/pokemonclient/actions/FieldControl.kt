@@ -28,7 +28,7 @@ internal object FieldControl {
     /**
      * True when the player walks freely on the overworld and the game waits for input: no battle, no message, no
      * menu, no scene. The common condition of the field actions (whether maps are known or not: see
-     * [MovePlans.canWalk]).
+     * [ActionConditions.canWalk]).
      */
     fun inControl(state: GameState): Boolean =
         state.battle == null && state.screen is Screen.Overworld && state.screen.awaiting == Awaiting.INPUT

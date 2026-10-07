@@ -18,7 +18,10 @@ A client written for one game must work with every game with zero game-specific 
 - a game-specific concept is either mapped onto the common one, or added to the common model **for all games**, with
   an explicit "absent / unknown" value for the games that don't have it (yet);
 - game differences live in `games/<game>` (addresses, decoders, data tables), and what the Gen 4 engine shares lives
-  in `games/gen4`.
+  in `games/gen4`;
+- keep as much as possible common: code moves down to a generation (`gen4`, later `gen3`, `gen5`...) or to a game
+  only when a game that really differs is added, not in anticipation. Values that only one generation uses today
+  may stay common until then.
 
 See [docs/adding-a-game.md](docs/adding-a-game.md).
 

@@ -21,11 +21,11 @@ import dev.kotlinds.pokemonclient.state.Screen
  * - [perform] is an exhaustive `when` over the sealed [GameAction], without `else`: a new action type doesn't
  *   compile until every game has a recipe for it;
  * - a recipe that carries out another action as one of its steps (talking to the nurse for `heal`, typing a
- *   nickname for `throw_ball`...) goes through the same object: it calls that action's method (`enterText(...)`, a
- *   virtual call), or, from a family still held as values, [PlanContext.run] → [PlanContext.recipes] (the game's
- *   recipes) → [perform]; so the game's own recipe is played there too, never the common one behind its back. This
- *   is also why the families of recipes are a chain of classes and never delegate (`by`): in a delegate, `this` is
- *   the delegate, and its nested calls would skip the game's overrides;
+ *   nickname for `throw_ball`...) calls that action's method on the same object (`enterText(...)`, a virtual call),
+ *   and the walking engine, which lives beside the chain, calls it on the game's recipes ([PlanContext.recipes]: a
+ *   Repel used again on the way); so the game's own recipe is played there too, never the common one behind its
+ *   back. This is also why the families of recipes are a chain of classes and never delegate (`by`): in a delegate,
+ *   `this` is the delegate, and its nested calls would skip the game's overrides;
  * - the screens many recipes go through (the start menu, the party, the bag, the way back to the field...) are steps
  *   of the chain, `internal open` methods ([openStartMenuEntry], [openParty], [bagItem], [closeToOverworld], and the
  *   families' own), called the same virtual way by the recipes and by the walking engine ([PlanContext.recipes]): a

@@ -18,6 +18,7 @@ import dev.kotlinds.pokemonclient.state.TextSource
 import dev.kotlinds.pokemonclient.state.Topology
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -70,6 +71,31 @@ class ContinueGameRecipeTest {
             }
         }
         return ui
+    }
+
+    /**
+     * An intro screen that goes on takes at least one input, by construction: `continue_game` cycles through them
+     * (`IntroInput.nth`, modulo their number), so an empty [IntroInputs] can't be built (a screen taking no input has
+     * none: [Screen.Intro.goesOnWith] null); one button alone, or a touch alone, is fine.
+     */
+    @Test
+    fun anIntroScreenThatGoesOnTakesAtLeastOneInput() {
+        assertFailsWith<IllegalArgumentException> { IntroInputs(emptySet()) }
+        assertFailsWith<IllegalArgumentException> { IntroInputs(emptySet(), touchAnywhere = false) }
+        assertEquals(setOf(Button.A), IntroInputs(setOf(Button.A)).buttons)
+        assertTrue(IntroInputs(emptySet(), touchAnywhere = true).touchAnywhere)
+    }
+
+    /** A screen passed by a touch alone: `continue_game` touches it (no button to try first). */
+    @Test
+    fun aScreenPassedByATouchAloneIsTouched() {
+        val touchOnly = Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.INPUT, IntroInputs(emptySet(), touchAnywhere = true))
+        val ui = game(touchOnly)
+        val touched = mutableListOf<TouchPoint>()
+        ui.game.onTouch = { point, screen -> touched += point; if (screen == touchOnly) mainMenu(Cursor.At(0)) else screen }
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.continueGame(GameAction.ContinueGame, ui.context()))
+        assertTrue(touched.isNotEmpty(), "the title screen takes only a touch")
+        assertTrue(ui.game.presses.none { it != Button.A }, "only A (CONTINUE) pressed: ${ui.game.presses}")
     }
 
     @Test

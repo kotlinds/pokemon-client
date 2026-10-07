@@ -81,8 +81,8 @@ interface PokemonGame {
      * default; a generation or a game whose screens really differ gives its own subclass, overriding only what
      * differs (`Gen4Game` requires its [dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes]). Only *how* actions are
      * done changes: their specs (names, parameters, availability, descriptions: what agents see) are the common ones,
-     * so the contract is the same for every game. Every action is played through here, also when a recipe carries
-     * out another action as one of its steps ([dev.kotlinds.pokemonclient.actions.PlanContext.run]).
+     * so the contract is the same for every game. Every action is played through here, also when the walking engine
+     * carries out an action as one of its steps ([dev.kotlinds.pokemonclient.actions.PlanContext.recipes]).
      */
     val recipes: dev.kotlinds.pokemonclient.actions.Recipes get() = dev.kotlinds.pokemonclient.actions.Recipes.COMMON
 

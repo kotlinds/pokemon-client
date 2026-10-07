@@ -4,16 +4,6 @@ import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.state.GameState
 
-/**
- * The recipe of one action as a value, the way the families of recipes (`MovePlans`, `FieldPlans`...) still hold
- * theirs until they move into [Recipes]: each is played from its action's method there ([RecipeBase.perform]
- * dispatches to it), so an action is always carried out with the game's own recipes
- * ([dev.kotlinds.pokemonclient.PokemonGame.recipes]).
- */
-fun interface ActionPlan<A : GameAction> {
-    fun run(action: A, context: PlanContext): ActionOutcome
-}
-
 /** What a recipe works with. */
 class PlanContext(
     val scope: ActionScope,
@@ -23,21 +13,15 @@ class PlanContext(
     val settings: ActionSettings = ActionSettings(),
 ) {
     /**
-     * The recipes of [game] ([PokemonGame.recipes]): what [run] plays when a recipe carries out another action as one
-     * of its steps. Always the game's own, never given apart from it, so no context can play another game's recipes.
+     * The recipes of [game] ([PokemonGame.recipes]): what the walking engine ([MovePlans], [WorldTravel],
+     * [FieldMoveWalk]...) calls when it needs an action or a menu step (a Repel used again on the way, the start menu
+     * opened for the bicycle...). Always the game's own, never given apart from it, so no context can play another
+     * game's recipes. Inside the chain of recipes, a recipe calls the others on itself (virtual calls), never here.
      */
     val recipes: Recipes get() = game.recipes
 
     /** The current state (decoded from this frame). */
     fun state(): GameState = navigator.state()
-
-    /**
-     * Carries out [action] as a step of the current recipe (talking to the nurse for `heal`, to the clerk for `buy`,
-     * typing a nickname for `throw_ball`...): with the game's [recipes] ([RecipeBase.perform]), so a game's own recipe
-     * is played there too, never the common one behind its back. No availability check (the calling recipe has
-     * checked its own screen): the step's recipe checks its screens like any recipe.
-     */
-    fun run(action: GameAction): ActionOutcome = recipes.perform(action, this)
 
     /** The same context with other [settings] (a step run with some freedom taken away, e.g. no puzzle solving). */
     fun with(settings: ActionSettings): PlanContext = PlanContext(scope, game, navigator, settings)

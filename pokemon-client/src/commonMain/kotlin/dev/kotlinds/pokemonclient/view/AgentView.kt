@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.view
 
 import dev.kotlinds.pokemonclient.PokemonGame
+import dev.kotlinds.pokemonclient.actions.ActionConditions
 import dev.kotlinds.pokemonclient.actions.ActionMode
 import dev.kotlinds.pokemonclient.actions.ActionRegistry
 import dev.kotlinds.pokemonclient.actions.ActionSettings
@@ -171,7 +172,7 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
             if (party.isNotEmpty()) put("party_effectiveness", JsonArray(party.map { JsonPrimitive(it.line(battle.isDouble)) }))
         }
         battleKnowledge.describe(battle, data).takeIf { it.isNotEmpty() }?.let { put("opponents_known", JsonArray(it.map(::JsonPrimitive))) }
-        val balls = state.bag.orEmpty().firstOrNull { it.name == "balls" }?.items.orEmpty()
+        val balls = ActionConditions.ballsInBag(state)
         CatchChance.estimate(battle, balls, data)?.let { estimate ->
             put("catch", buildJsonObject {
                 put("catch_rate", estimate.catchRate)

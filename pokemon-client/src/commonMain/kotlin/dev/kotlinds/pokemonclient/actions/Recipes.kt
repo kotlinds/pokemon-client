@@ -30,32 +30,11 @@ import dev.kotlinds.pokemonclient.state.sameAs
  * ([dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes], then the game's own). The availability of an action is not a
  * recipe: it is the common contract ([ActionSpec.availability], built on [ActionConditions]), the same for every game.
  *
- * The top of the chain of families ([BasicRecipes], [BattleRecipes], [BagPartyRecipes], [ServiceRecipes],
- * [FieldRecipes]): it holds the recipes of the game as a whole (soft reset, continuing the saved game, the starter, the
- * Hall of Fame). The families not moved into the chain yet still play their existing recipe value (`MovePlans`,
- * `FieldPlans`...) from here.
+ * The top of the chain of families ([BasicRecipes], [BattleRecipes], [BagPartyRecipes], [MoveRecipes],
+ * [ServiceRecipes], [FieldRecipes]): it holds the recipes of the game as a whole (soft reset, continuing the saved
+ * game, the starter, the Hall of Fame).
  */
 open class Recipes internal constructor() : FieldRecipes() {
-
-    // region Moving
-
-    override fun goTo(action: GameAction.GoTo, context: PlanContext) = MovePlans.goTo.run(action, context)
-    override fun interact(action: GameAction.Interact, context: PlanContext) = MovePlans.interact.run(action, context)
-    override fun step(action: GameAction.Step, context: PlanContext) = MovePlans.step.run(action, context)
-    override fun findEncounter(action: GameAction.FindEncounter, context: PlanContext) = MovePlans.findEncounter.run(action, context)
-    override fun push(action: GameAction.Push, context: PlanContext) = PushPlans.push(action, context)
-
-    // endregion
-
-    // region Field: field moves, Pokégear
-
-    override fun fly(action: GameAction.Fly, context: PlanContext) = FieldPlans.fly.run(action, context)
-    override fun fish(action: GameAction.Fish, context: PlanContext) = FieldPlans.fish.run(action, context)
-    override fun useFieldMove(action: GameAction.UseFieldMove, context: PlanContext) = FieldPlans.useFieldMove.run(action, context)
-    override fun saveGame(action: GameAction.SaveGame, context: PlanContext) = FieldPlans.saveGame.run(action, context)
-    override fun tuneRadio(action: TuneRadio, context: PlanContext) = PokegearActions.tunePlan.run(action, context)
-
-    // endregion
 
     // region System: the console and the game as a whole
 

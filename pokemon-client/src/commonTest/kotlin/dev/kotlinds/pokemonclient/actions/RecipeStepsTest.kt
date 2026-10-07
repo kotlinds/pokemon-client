@@ -21,6 +21,7 @@ import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.state.MovementMode
 import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.PartyMon
+import dev.kotlinds.pokemonclient.state.RadioStation
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.ShopItem
 import dev.kotlinds.pokemonclient.state.TextSpeed
@@ -64,16 +65,18 @@ class RecipeStepsTest {
         stopped(recipes.reorderParty(GameAction.ReorderParty(MonId(2, 1), 1), ui.context()))
         stopped(recipes.takeItem(GameAction.TakeItem(MonId(1, 1)), ui.context()))
         stopped(recipes.giveItem(GameAction.GiveItem(MonId(1, 1), ItemRef("Potion")), ui.context()))
-        // A recipe still held as a value (`save_game`) goes through the game's recipes too.
+        // The Pokégear's radio, opened from the field.
+        stopped(recipes.tuneRadio(TuneRadio(RadioStation.POKE_FLUTE), ui.context()))
+        // Through the registry (every host), `save_game` too.
         stopped(ActionRegistry.of().execute(GameAction.SaveGame, ui.game.scope(), ui.game))
-        assertEquals(listOf("option:options", "option:pokedex", "option:pokemon", "option:pokemon", "option:bag", "option:save"), asked)
+        assertEquals(listOf("option:options", "option:pokedex", "option:pokemon", "option:pokemon", "option:bag", "option:pokegear", "option:save"), asked)
         assertTrue(ui.game.presses.isEmpty(), "the game's own start menu pressed nothing: ${ui.game.presses}")
 
         // Another game (the common recipes): the common start menu, X then the entry.
         val other = ScriptedUi(OVERWORLD, party = listOf(mon(1)))
         other.onA = { screen, id -> if (ScriptedUi.isStart(screen) && id == "option:bag") bag("items", emptyList()) else screen }
         assertIs<ActionOutcome.Done>(other.game.recipes.openMenu(GameAction.OpenMenu("option:bag"), other.context()))
-        assertEquals(6, asked.size)
+        assertEquals(7, asked.size)
         assertEquals(Button.X, other.game.presses.first())
     }
 

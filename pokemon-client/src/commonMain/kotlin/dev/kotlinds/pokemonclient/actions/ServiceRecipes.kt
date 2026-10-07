@@ -22,11 +22,11 @@ import dev.kotlinds.pokemonclient.state.ShopItem
 /**
  * The recipes of the services of a town: the Pokémon Center's nurse (`heal`), the PC (`pc`, `deposit`, `withdraw`,
  * `release`) and the Poké Mart (`buy`, `sell`, `set_quantity`). A family of the chain of [RecipeBase], above
- * [BagPartyRecipes]. Whoever serves is talked to with the game's own `interact` (a virtual call: a game's override is
+ * [MoveRecipes]. Whoever serves is talked to with the game's own `interact` (a virtual call: a game's override is
  * played there too); the counters are reached through steps a game may override ([openStorage], [openShop],
  * [openSellBag]). Where each action can start from is the common contract ([ActionConditions]).
  */
-abstract class ServiceRecipes internal constructor() : BagPartyRecipes() {
+abstract class ServiceRecipes internal constructor() : MoveRecipes() {
 
     // region Pokémon Center
 

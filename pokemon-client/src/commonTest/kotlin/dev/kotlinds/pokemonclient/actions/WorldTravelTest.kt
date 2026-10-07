@@ -205,7 +205,7 @@ class WorldTravelTest {
     @Test
     fun aStepStopsAtTheFirstWarpAndSaysWhichOne() {
         val game = doubleWarp()
-        val done = assertIs<ActionOutcome.Done>(MovePlans.step.run(GameAction.Step(Direction.NORTH, 3), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.step(GameAction.Step(Direction.NORTH, 3), game.context()))
         assertEquals(listOf(1, 2), game.zonesVisited)
         assertEquals(Triple(2, 0, 2), Triple(game.zone, game.x, game.y))
         assertEquals("took warp:0 at 0,1 (Floor 1) → Floor 2 (0,2)", done.detail)
@@ -214,7 +214,7 @@ class WorldTravelTest {
     @Test
     fun goToAWarpStopsOnTheFarSideOfIt() {
         val game = doubleWarp()
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), game.context()))
         assertEquals(listOf(1, 2), game.zonesVisited)
         assertEquals("took warp:0 at 0,1 (Floor 1) → Floor 2 (0,2)", done.detail)
     }
@@ -229,7 +229,7 @@ class WorldTravelTest {
             mapOf(1 to floor(1, listOf("...")), 2 to floor(2, listOf("..."), warps = listOf(Warp(2, 0, 2, 0, 1, 0, WarpTrigger.Never)))),
             zone = 1, x = 0, y = 0, unmapped = listOf(Warp(1, 0, 1, 0, 2, 0)),
         )
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(2, 0, null), game.context()))
         assertEquals(Triple(2, 2, 0), Triple(game.zone, game.x, game.y))
         assertEquals(listOf(1, 2), game.zonesVisited)
         assertTrue(done.detail!!.startsWith("stopped on the way: took a warp at 1,0 (Floor 1) → Floor 2 (2,0), which wasn't the destination"), done.detail)
@@ -243,7 +243,7 @@ class WorldTravelTest {
     fun aWarpUnderTheFeetIsTakenBySteppingOffAndBackOn() {
         val game = doubleWarp()
         game.x = 0; game.y = 1
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), game.context()))
         assertEquals(2, game.zone, done.detail)
         assertTrue((0 to 2) in game.visited || (0 to 0) in game.visited, game.visited.toString())
         assertTrue(done.detail!!.startsWith("took warp:0"), done.detail)
@@ -254,7 +254,7 @@ class WorldTravelTest {
     fun aWarpNothingTakesIsRefusedAtOnce() {
         val game = doubleWarp()
         game.x = 0; game.y = 0
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:1"), game.context())).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:1"), game.context())).error)
         assertTrue("can't be taken" in error.detail, error.detail)
         // Not a step taken.
         assertEquals(1, game.visited.size)
@@ -270,10 +270,10 @@ class WorldTravelTest {
         val mat = Warp(1, 0, 1, 1, 2, 0, WarpTrigger.Press(Direction.SOUTH))
         fun game() = FloorsGame(mapOf(1 to floor(1, listOf("...", "#.#", "#.#"), warps = listOf(mat)), 2 to floor(2, listOf("..."), warps = listOf(Warp(2, 0, 0, 0, 1, 0)))), zone = 1, x = 1, y = 2)
         val inside = game()
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(0, 0, null), inside.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(0, 0, null), inside.context()))
         assertEquals(Triple(1, 0, 0), Triple(inside.zone, inside.x, inside.y))
         val out = game()
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), out.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), out.context()))
         assertEquals(2, out.zone, done.detail)
     }
 
@@ -293,7 +293,7 @@ class WorldTravelTest {
     fun aLongGoToReportsTheTilesWalkedOfThePlannedRouteAndTheCurrentMap() {
         val game = dungeon()
         val reports = mutableListOf<dev.kotlinds.pokemonclient.runtime.ActionProgress>()
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context(onProgress = { reports += it })))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context(onProgress = { reports += it })))
         // Planned from the start (nothing walked yet), with a total.
         val first = reports.first()
         assertEquals(0, first.done)
@@ -312,7 +312,7 @@ class WorldTravelTest {
     @Test
     fun goToGoesThroughALadderAndAHoleWhenTheMapAloneHasNoWay() {
         val game = dungeon()
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
         assertEquals(Triple(1, 4, 0), Triple(game.zone, game.x, game.y), done.detail)
         assertEquals(listOf(1, 2, 1), game.zonesVisited)
         assertTrue("warp:0" in done.detail!! && "hole:0" in done.detail!!, done.detail)
@@ -323,21 +323,21 @@ class WorldTravelTest {
         // The map changes 90 frames after the press: longer than a step's wait (the false TIMEOUT of the notes).
         val game = dungeon(transition = 90)
         game.x = 0; game.y = 1
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), game.context()))
         assertEquals(2, game.zone, done.detail)
     }
 
     @Test
     fun goToATileOnAnotherFloorByName() {
         val game = dungeon()
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(3, 0, null, map = "Floor 2"), game.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(3, 0, null, map = "Floor 2"), game.context()))
         assertEquals(Triple(2, 3, 0), Triple(game.zone, game.x, game.y))
     }
 
     @Test
     fun goToAMapByNameStopsOnEnteringIt() {
         val game = dungeon()
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 2"), game.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 2"), game.context()))
         assertEquals(2, game.zone)
     }
 
@@ -350,7 +350,7 @@ class WorldTravelTest {
         val names = { id: Int -> if (id == 2) MapName(2, location = "Célestia", map = "Celestic Town") else MapName(id, map = "Floor $id") }
         for (asked in listOf("Celestia", "célestia", "CELESTIA", "Célestia (Celestic Town)", "Celestic Town", "Celestic", "map:2")) {
             val game = dungeon(names = names)
-            assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, asked), game.context()), asked)
+            assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, asked), game.context()), asked)
             assertEquals(2, game.zone, asked)
         }
     }
@@ -359,14 +359,14 @@ class WorldTravelTest {
     fun exitEastCrossesIntoTheNeighbouringZoneOfASharedArea() {
         val outdoor = floor(1, listOf("......", "..#..."), zones = listOf("111222", "111222"))
         val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 1)
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "exit:east"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "exit:east"), game.context()))
         assertEquals(2, game.zone, done.detail)
         assertEquals(3, game.x)
         // By name too, and an unknown direction lists the exits.
         val back = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 0)
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 2"), back.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 2"), back.context()))
         assertEquals(2, back.zone)
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "exit:north"), FloorsGame(mapOf(1 to outdoor, 2 to outdoor), 1, 0, 0).context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "exit:north"), FloorsGame(mapOf(1 to outdoor, 2 to outdoor), 1, 0, 0).context()))
         assertEquals(listOf("exit:east (Floor 2)"), assertIs<ActionError.InvalidParameter>(failed.error).allowed)
     }
 
@@ -374,7 +374,7 @@ class WorldTravelTest {
     fun frontierWalksNextToTheNearestWayOutAwayFromThePlayer() {
         val game = dungeon()
         game.zone = 2; game.x = 0; game.y = 1
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "frontier"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "frontier"), game.context()))
         // The ladder down is next to the player: the hole's surroundings are the frontier; the walk stops before it.
         assertEquals(2, game.zone, done.detail)
         assertTrue(game.x to game.y in setOf(3 to 1, 4 to 0), "${game.x},${game.y}")
@@ -384,7 +384,7 @@ class WorldTravelTest {
     fun aSceneTriggerIsWalkedOntoWhenItIsTheDestinationAndTheOutcomeSaysSo() {
         val room = floor(1, listOf("....."), triggers = listOf(Trigger(1, 0, 3, 0, 1, 1, 7, 0x4000, 0)))
         val game = FloorsGame(mapOf(1 to room), zone = 1, x = 0, y = 0)
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(3, 0, null), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(3, 0, null), game.context()))
         assertTrue("started a scene" in done.detail!!, done.detail)
         assertTrue(game.scene)
     }
@@ -393,7 +393,7 @@ class WorldTravelTest {
     fun aSceneTriggerInTheOnlyWayIsCrossedAndReported() {
         val corridor = floor(1, listOf("....."), triggers = listOf(Trigger(1, 0, 2, 0, 1, 1, 7, 0x4000, 0)))
         val game = FloorsGame(mapOf(1 to corridor), zone = 1, x = 0, y = 0)
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
         val error = assertIs<ActionError.Interrupted>(failed.error)
         assertTrue("scene trigger at 2,0" in error.performed, error.performed)
     }
@@ -406,7 +406,7 @@ class WorldTravelTest {
     fun aSceneThatPushesBackStopsTheWalkOnceAndSaysItWasTheOnlyWay() {
         val corridor = floor(1, listOf("....."), triggers = listOf(Trigger(1, 0, 2, 0, 1, 1, 7, 0x4000, 0)))
         val game = FloorsGame(mapOf(1 to corridor), zone = 1, x = 0, y = 0, pushBack = true)
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
         val error = assertIs<ActionError.Interrupted>(failed.error)
         assertTrue("wasn't the destination" in error.performed && "trigger:0" in error.performed && "start again" in error.performed, error.performed)
         // The state lists no blocker here: the answer never points to a blocked_by it doesn't carry.
@@ -421,7 +421,7 @@ class WorldTravelTest {
         val corridor = floor(1, listOf("....."), triggers = listOf(Trigger(1, 0, 2, 0, 1, 1, 7, 0x4000, 0)))
         val listed = listOf(Blocker("trigger:0", "A guard sends you back.", scene = SceneTrigger(0, 2..2, 0..0, repeats = true)))
         val game = FloorsGame(mapOf(1 to corridor), zone = 1, x = 0, y = 0, pushBack = true, blockers = listed)
-        val error = assertIs<ActionError.Interrupted>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context())).error)
+        val error = assertIs<ActionError.Interrupted>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context())).error)
         assertTrue("see blocked_by (trigger:0)" in error.performed, error.performed)
         assertEquals(1, game.pushes)
     }
@@ -438,7 +438,7 @@ class WorldTravelTest {
             mapOf(1 to floor(1, listOf(".....", "....."), warps = listOf(Warp(1, 0, 4, 0, 2, 0))), 2 to floor(2, listOf("..."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, WarpTrigger.Never)))),
             zone = 1, x = 0, y = 0, people = mapOf(1 to listOf(barricade)),
         )
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), game.context())).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), game.context())).error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertTrue("blocked_by_person: person:5 (barricade)" in error.message, error.message)
         assertEquals(Triple(1, 0, 0), Triple(game.zone, game.x, game.y), "not a step taken")
@@ -453,7 +453,7 @@ class WorldTravelTest {
             mapOf(1 to floor(1, listOf(".....", "....."), warps = listOf(Warp(1, 0, 4, 0, 2, 0))), 2 to floor(2, listOf("..."), warps = listOf(Warp(2, 0, 0, 0, 1, 0, WarpTrigger.Never)))),
             zone = 1, x = 0, y = 0, people = mapOf(1 to listOf(bystander)),
         )
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), game.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), game.context()))
         assertEquals(listOf(1, 2), game.zonesVisited)
     }
 
@@ -466,11 +466,11 @@ class WorldTravelTest {
     fun aWallTileAsTheDestinationNamesWhoStandsNextToIt() {
         val executive = FieldObject("person:0", "executive", dev.kotlinds.pokemonclient.state.FieldObjectKind.PERSON, 3, 1, Direction.NORTH)
         val game = FloorsGame(mapOf(1 to floor(1, listOf("...#.", "....."))), zone = 1, x = 0, y = 0, people = mapOf(1 to listOf(executive)))
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(3, 0, null), game.context())).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(3, 0, null), game.context())).error)
         assertEquals(UnavailableReason.TARGET_IS_OBSTACLE, error.reason)
         assertTrue("3,0 is a wall" in error.message && "person:0 (executive) at 3,1" in error.message && "go_to person:0" in error.message, error.message)
         // Someone's own tile: named too.
-        val taken = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(3, 1, null), game.context())).error)
+        val taken = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(3, 1, null), game.context())).error)
         assertEquals(UnavailableReason.TARGET_IS_OBSTACLE, taken.reason)
         assertTrue("person:0 (executive) at 3,1 is there" in taken.message, taken.message)
         assertEquals(0 to 0, game.x to game.y)
@@ -480,11 +480,11 @@ class WorldTravelTest {
     @Test
     fun aFreeTileNoWayLeadsToIsStillNotConnected() {
         val game = FloorsGame(mapOf(1 to floor(1, listOf("..#.."))), zone = 1, x = 0, y = 0)
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context())).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context())).error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertTrue("not connected" in error.message, error.message)
         // A free tile that is reached: walked to.
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(1, 0, null), game.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(1, 0, null), game.context()))
         assertEquals(1 to 0, game.x to game.y)
     }
 
@@ -496,7 +496,7 @@ class WorldTravelTest {
     fun coordinatesWrittenInTargetAreRefusedWithXAndY() {
         for (settings in listOf(ActionSettings(), ActionSettings(hideDestinations = true))) {
             val game = FloorsGame(mapOf(1 to floor(1, listOf("....."))), zone = 1, x = 0, y = 0)
-            val error = assertIs<ActionError.InvalidParameter>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "4,0"), game.context(settings))).error)
+            val error = assertIs<ActionError.InvalidParameter>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "4,0"), game.context(settings))).error)
             assertEquals("target", error.parameter)
             assertTrue("x and y (x: 4, y: 0)" in error.message, error.message)
             assertEquals(0 to 0, game.x to game.y)
@@ -507,7 +507,7 @@ class WorldTravelTest {
     fun aPersonInTheOnlyWayIsNamed() {
         val guard = FieldObject("person:8", "guard", dev.kotlinds.pokemonclient.state.FieldObjectKind.PERSON, 2, 0, Direction.SOUTH)
         val game = FloorsGame(mapOf(1 to floor(1, listOf("....."))), zone = 1, x = 0, y = 0, people = mapOf(1 to listOf(guard)))
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), game.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertTrue("person:8" in error.message && "talk to them" in error.message, error.message)
     }
@@ -522,7 +522,7 @@ class WorldTravelTest {
         val outdoor = floor(1, listOf("......", "......"), warps = listOf(Warp(2, 0, 4, 1, 3, 0, WarpTrigger.Press(Direction.SOUTH))), zones = listOf("111222", "111222"))
         val gatehouse = floor(3, listOf("..."), warps = listOf(Warp(3, 0, 1, 0, 2, 0, WarpTrigger.Press(Direction.NORTH))))
         val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor, 3 to gatehouse), zone = 1, x = 0, y = 0)
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 3"), game.context()))
         assertEquals(listOf(1, 2, 3), game.zonesVisited, done.detail)
     }
 
@@ -542,7 +542,7 @@ class WorldTravelTest {
     @Test
     fun aTargetOfThisMapReachedOnlyByALongDetourIsRefusedBeforeMoving() {
         val game = walledFloor()
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:1"), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:1"), game.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertTrue("warp:1 at 5,0" in error.detail && "through 9 warps" in error.detail && "Floor 2" in error.detail && "Floor 9" in error.detail, error.detail)
@@ -559,7 +559,7 @@ class WorldTravelTest {
     @Test
     fun aLoopToATargetOfThisMapIsTakenWhenTheAgentSaysGo() {
         val game = walledFloor()
-        val outcome = MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:1", MoveOptions(onLocalDetour = LocalDetour.GO)), game.context())
+        val outcome = Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:1", MoveOptions(onLocalDetour = LocalDetour.GO)), game.context())
         val done = assertIs<ActionOutcome.Done>(outcome, "$outcome")
         assertEquals((1..9).toList() + listOf(1, 2), game.zonesVisited, done.detail)
     }
@@ -594,7 +594,7 @@ class WorldTravelTest {
     @Test
     fun aFarMapNamedOnPurposeIsStillTaken() {
         val game = walledFloor()
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 9"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 9"), game.context()))
         assertEquals(9, game.zone, done.detail)
         assertEquals((1..9).toList(), game.zonesVisited)
     }
@@ -618,7 +618,7 @@ class WorldTravelTest {
     fun aLongTripArrivesHoweverManyWarpsItTakes() {
         for (count in listOf(13, 25)) {
             val game = floorsInARow(count)
-            val outcome = MovePlans.goTo.run(GameAction.GoTo(2, 0, null, map = "Floor $count"), game.context())
+            val outcome = Recipes.COMMON.goTo(GameAction.GoTo(2, 0, null, map = "Floor $count"), game.context())
             val done = assertIs<ActionOutcome.Done>(outcome, "$count floors: $outcome")
             assertEquals(Triple(count, 2, 0), Triple(game.zone, game.x, game.y), done.detail)
             assertEquals((1..count).toList(), game.zonesVisited)
@@ -665,11 +665,11 @@ class WorldTravelTest {
     fun aTripRemembersWhatItFoundOnAFloorItLeft() {
         val blocker = FieldObject("person:0", "hiker", dev.kotlinds.pokemonclient.state.FieldObjectKind.PERSON, 1, 0, Direction.SOUTH)
         val game = twoHalves(listOf(blocker))
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 3"), game.context()))
         assertEquals(listOf(1, 2, 1, 2, 3), game.zonesVisited, done.detail)
         // Nobody in the way: straight down the left mat and through its door.
         val free = twoHalves(emptyList())
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), free.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 3"), free.context()))
         assertEquals(listOf(1, 2, 3), free.zonesVisited)
     }
 
@@ -691,7 +691,7 @@ class WorldTravelTest {
             zone = 1, x = 1, y = 0, transitionFrames = 10, arrivals = arrivals,
         )
         val looping = game(mapOf((2 to 0) to (1 to 0)))
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), looping.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 3"), looping.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertTrue("takes back warp:0 at 0,0 (Floor 1), already taken on this trip" in error.detail, error.detail)
@@ -700,7 +700,7 @@ class WorldTravelTest {
         assertEquals(listOf(1, 2, 1), looping.zonesVisited)
         // Where the maps say: down the hole, across, through the door.
         val plain = game(emptyMap())
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), plain.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 3"), plain.context()))
         assertEquals(listOf(1, 2, 3), plain.zonesVisited)
     }
 
@@ -741,12 +741,12 @@ class WorldTravelTest {
     @Test
     fun theWalksOwnCostsNeverTurnIntoARefusedDetour() {
         val far = watchedCorridor(corridors = 12, chainWidth = 5)
-        val outcome = MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR"), far.context())
+        val outcome = Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR"), far.context())
         val done = assertIs<ActionOutcome.Done>(outcome, "$outcome")
         assertEquals(listOf(1, GOAL_FLOOR), far.zonesVisited, done.detail)
         assertTrue(WorldTravel.BY_LENGTH in done.detail.orEmpty(), done.detail)
         val near = watchedCorridor(corridors = 1)
-        val around = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", MoveOptions(avoidTrainers = true)), near.context()))
+        val around = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", MoveOptions(avoidTrainers = true)), near.context()))
         assertEquals(listOf(1, 2, 1, GOAL_FLOOR), near.zonesVisited, around.detail)
         assertTrue(WorldTravel.BY_LENGTH !in around.detail.orEmpty(), around.detail)
     }
@@ -759,7 +759,7 @@ class WorldTravelTest {
     @Test
     fun aDetourAroundWhatTheAgentAvoidsIsItsChoice() {
         val far = watchedCorridor(corridors = 12, chainWidth = 5)
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", MoveOptions(avoidTrainers = true)), far.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", MoveOptions(avoidTrainers = true)), far.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertTrue("through 14 warps" in error.detail && "(1 warp(s)), which crosses the sight of 1 trainer(s)" in error.detail, error.detail)
@@ -770,7 +770,7 @@ class WorldTravelTest {
 
         // Opted in: the short way, said so.
         val opted = watchedCorridor(corridors = 12, chainWidth = 5)
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(
             GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", MoveOptions(avoidTrainers = true, onAvoidDetour = AvoidDetour.SHORT_WAY)), opted.context(),
         ))
         assertEquals(listOf(1, GOAL_FLOOR), opted.zonesVisited, done.detail)
@@ -790,12 +790,12 @@ class WorldTravelTest {
     fun aWayAroundUnderTheDetourRatioIsTakenSilently() {
         val avoid = MoveOptions(avoidTrainers = true)
         val half = watchedCorridor(corridors = 1, width = 60, chainWidth = 90)
-        val outcome = MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", avoid), half.context())
+        val outcome = Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", avoid), half.context())
         val done = assertIs<ActionOutcome.Done>(outcome, "$outcome")
         assertEquals(listOf(1, 2, 1, GOAL_FLOOR), half.zonesVisited, done.detail)
         assertTrue(WorldTravel.BY_LENGTH !in done.detail.orEmpty() && WorldTravel.SHORT_WAY !in done.detail.orEmpty(), done.detail)
         val few = watchedCorridor(corridors = 2, chainWidth = 8)
-        val around = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", avoid), few.context()))
+        val around = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor $GOAL_FLOOR", avoid), few.context()))
         assertEquals(listOf(1, 2, 3, 1, GOAL_FLOOR), few.zonesVisited, around.detail)
         assertTrue(WorldTravel.BY_LENGTH !in around.detail.orEmpty() && WorldTravel.SHORT_WAY !in around.detail.orEmpty(), around.detail)
     }
@@ -825,11 +825,11 @@ class WorldTravelTest {
     @Test
     fun peopleOfAnotherMapNeverRefuseAWayBeforeItIsSeen() {
         val free = guardedCorridor(emptyList())
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), free.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 3"), free.context()))
         assertEquals(listOf(1, 2, 3), free.zonesVisited, done.detail)
         val blocker = FieldObject("person:0", "hiker", dev.kotlinds.pokemonclient.state.FieldObjectKind.PERSON, 2, 0, Direction.SOUTH)
         val guarded = guardedCorridor(listOf(blocker))
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 3"), guarded.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 3"), guarded.context()))
         assertEquals(listOf(1, 2), guarded.zonesVisited)
         assertTrue("person:0" in failed.error.toString(), failed.error.toString())
     }
@@ -856,7 +856,7 @@ class WorldTravelTest {
     @Test
     fun aLiftGoingByItselfIsRidden() {
         val game = lift(ElevatorOperator.Shuttle)
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 2"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 2"), game.context()))
         assertEquals(listOf(1, LIFT, 2), game.zonesVisited, done.detail)
     }
 
@@ -867,7 +867,7 @@ class WorldTravelTest {
     @Test
     fun aLiftWhoseFloorIsChosenSaysWhoChoosesIt() {
         val game = lift(ElevatorOperator.Attendant(0), inside = true)
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 2"), game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 2"), game.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertTrue("is a lift" in error.detail, error.detail)
@@ -914,11 +914,11 @@ class HiddenDestinationsTravelTest {
     @Test
     fun anotherMapByNameByIdOrWithATileIsRefusedWithoutMoving() {
         val game = dungeon()
-        val byName = refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 2"), hidden(game)))
-        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "map:2"), hidden(game)))
-        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(3, 0, null, map = "Floor 2"), hidden(game)))
+        val byName = refusedAsHidden(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 2"), hidden(game)))
+        refusedAsHidden(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "map:2"), hidden(game)))
+        refusedAsHidden(Recipes.COMMON.goTo(GameAction.GoTo(3, 0, null, map = "Floor 2"), hidden(game)))
         // A name of no map at all gets the same answer: the refusal never tells whether a map exists.
-        val nowhere = refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "Atlantis"), hidden(game)))
+        val nowhere = refusedAsHidden(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Atlantis"), hidden(game)))
         assertEquals(byName.hint, nowhere.hint)
         assertEquals(listOf(1), game.zonesVisited)
         assertEquals(0 to 0, game.x to game.y)
@@ -929,7 +929,7 @@ class HiddenDestinationsTravelTest {
     @Test
     fun aPlaceOfThisMapReachableOnlyThroughOtherFloorsIsNotRoutedThere() {
         val game = dungeon()
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 0, null), hidden(game))).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(4, 0, null), hidden(game))).error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertEquals(listOf(1), game.zonesVisited)
         assertFalse("Floor 2" in error.message || "warp:0" in error.message || "hole:0" in error.message, error.message)
@@ -939,7 +939,7 @@ class HiddenDestinationsTravelTest {
     @Test
     fun aWarpOfThisMapIsTakenAndTheAnswerOnlyTellsWhereThePlayerStands() {
         val game = dungeon()
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), hidden(game)))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), hidden(game)))
         assertEquals(2, game.zone, done.detail)
         // The answer tells the warp taken and the arrival, which the game shows anyway (discovery), never more.
         assertEquals("took warp:0 at 0,2 (Floor 1) → Floor 2 (0,0)", done.detail)
@@ -948,9 +948,9 @@ class HiddenDestinationsTravelTest {
     @Test
     fun theMapSelfAndItsTilesStayAllowed() {
         val game = dungeon()
-        val here = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Floor 1"), hidden(game))).error)
+        val here = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Floor 1"), hidden(game))).error)
         assertEquals(UnavailableReason.NO_PATH, here.reason)
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(0, 1, null, map = "map:1"), hidden(game)))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(0, 1, null, map = "map:1"), hidden(game)))
         assertEquals(Triple(1, 0, 1), Triple(game.zone, game.x, game.y))
     }
 
@@ -965,20 +965,20 @@ class HiddenDestinationsTravelTest {
         val names = mapOf(1 to MapName(1, "Violet City", "Violet City"), 2 to MapName(2, "Route 32", "Route 32"), 3 to MapName(3, "Violet City", "Violet Gym"))
         val areas = mapOf(1 to outdoor, 2 to outdoor, 3 to gym)
         val inGym = FloorsGame(areas, zone = 3, x = 1, y = 1, names = { names[it] ?: MapName(it) })
-        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(null, null, "Violet City"), hidden(inGym)))
-        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(0, 0, null, map = "Violet City"), hidden(inGym)))
+        refusedAsHidden(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Violet City"), hidden(inGym)))
+        refusedAsHidden(Recipes.COMMON.goTo(GameAction.GoTo(0, 0, null, map = "Violet City"), hidden(inGym)))
         // The gym's own name and display form are this map.
         for (here in listOf("Violet Gym", "Violet City (Violet Gym)")) {
-            val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, here), hidden(inGym))).error)
+            val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, here), hidden(inGym))).error)
             assertEquals(UnavailableReason.NO_PATH, error.reason, here)
         }
         val inTown = FloorsGame(areas, zone = 1, x = 0, y = 0, names = { names[it] ?: MapName(it) })
-        val already = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Violet City"), hidden(inTown))).error)
+        val already = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Violet City"), hidden(inTown))).error)
         assertEquals(UnavailableReason.NO_PATH, already.reason)
         assertEquals(listOf(3), inGym.zonesVisited)
         // Destinations shown: a name in an earlier version's display form ("Route 32 (Route 32)") still leads there.
         val shown = FloorsGame(areas, zone = 1, x = 0, y = 0, names = { names[it] ?: MapName(it) })
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "Route 32 (Route 32)"), shown.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "Route 32 (Route 32)"), shown.context()))
         assertEquals(2, shown.zone)
     }
 
@@ -986,11 +986,11 @@ class HiddenDestinationsTravelTest {
     fun anExitOfASharedAreaIsTakenButANeighbourTileIsRefusedAndExitsAreListedByIdOnly() {
         val outdoor = floor(1, listOf("......", "..#..."), zones = listOf("111222", "111222"))
         val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 1)
-        refusedAsHidden(MovePlans.goTo.run(GameAction.GoTo(5, 0, null), hidden(game)))
+        refusedAsHidden(Recipes.COMMON.goTo(GameAction.GoTo(5, 0, null), hidden(game)))
         assertEquals(1, game.zone)
-        val wrong = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "exit:north"), hidden(game)))
+        val wrong = assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "exit:north"), hidden(game)))
         assertEquals(listOf("exit:east"), assertIs<ActionError.InvalidParameter>(wrong.error).allowed)
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "exit:east"), hidden(game)))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "exit:east"), hidden(game)))
         assertEquals(2, game.zone, done.detail)
         assertEquals(3, game.x)
     }
@@ -1000,9 +1000,9 @@ class HiddenDestinationsTravelTest {
         // Zone 1's two halves (0,0) and (2,0) are joined only through zone 2's row below.
         val outdoor = floor(1, listOf(".#.", "..."), zones = listOf("111", "222"))
         val shown = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 0)
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null), shown.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.goTo(GameAction.GoTo(2, 0, null), shown.context()))
         val game = FloorsGame(mapOf(1 to outdoor, 2 to outdoor), zone = 1, x = 0, y = 0)
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(2, 0, null), hidden(game))).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(2, 0, null), hidden(game))).error)
         assertEquals(UnavailableReason.NO_PATH, error.reason)
         assertEquals(listOf(1), game.zonesVisited)
     }
@@ -1017,7 +1017,7 @@ class HiddenDestinationsTravelTest {
         val game = FloorsGame(mapOf(1 to floor(1, listOf("....."), warps = listOf(Warp(1, 0, 4, 0, 2, 0)))), zone = 1, x = 0, y = 0, people = mapOf(1 to listOf(guard)))
         val view = ReachSurvey(game, game.state(dev.kotlinds.pokemonclient.ZeroMemory), ActionSettings(hideDestinations = true)).of("warp:0")
         assertEquals(" [blocked_by_person: person:1 (guard)]", view.suffix())
-        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "warp:0"), hidden(game))).error)
+        val error = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(Recipes.COMMON.goTo(GameAction.GoTo(null, null, "warp:0"), hidden(game))).error)
         assertTrue(error.detail.endsWith(view.suffix()), error.detail)
         assertTrue("person:1 (guard) stands in the only way" in error.hint.orEmpty(), error.hint)
     }

@@ -48,8 +48,10 @@ import dev.kotlinds.pokemonclient.world.WorldLinks
 import dev.kotlinds.pokemonclient.world.WorldSource
 
 /**
- * Recipes of the movement actions: routes computed on the ROM's maps ([dev.kotlinds.pokemonclient.world]) with the
- * live people on top, then walked one tile at a time, checking the position after each step.
+ * The walking engine of the movement recipes ([MoveRecipes]: `go_to`, `interact`, `step`, `find_encounter`, `push`):
+ * routes computed on the ROM's maps ([dev.kotlinds.pokemonclient.world]) with the live people on top, then walked one
+ * tile at a time, checking the position after each step. Stateless and beside the chain of recipes: an action it
+ * needs on the way (a Repel used again) is played with the game's own recipes ([PlanContext.recipes]).
  *
  * Walking never trusts the map blindly: a step the game refuses (an invisible wall, a person who moved in the way)
  * is remembered and the route is computed again; anything that takes the screen away from the overworld (a battle,
@@ -57,76 +59,14 @@ import dev.kotlinds.pokemonclient.world.WorldSource
  */
 internal object MovePlans {
 
-    /** Walks to a tile or a target, on this map or another one ([WorldTravel]: through warps, holes and map edges). */
-    val goTo = ActionPlan<GameAction.GoTo> { action, context -> WorldTravel.goTo(action, context) }
 
-    /**
-     * Walks next to the target, faces it and presses A: the conversation / sign / item that follows is the result.
-     *
-     * People move: the target is looked up again (live position) before facing it and after a silent A. When the
-     * player didn't end orthogonally next to it (or two tiles away across a counter), facing it, the walk starts
-     * again (at most [INTERACT_TRIES] times). A press of A facing it that shows nothing is reported as such ("nothing
-     * to say"), not as a failure to get there.
-     *
-     * A trainer target who sees the player on the way and walks up to them starts the very battle asked for: that's
-     * a success ([engagedTarget]), not an interruption.
-     */
-    val interact = ActionPlan<GameAction.Interact> { action, context ->
-        repeat(INTERACT_TRIES) {
-            val target = resolve(context, action.target, null, null) ?: return@ActionPlan unknownTarget(context, action.target)
-            val talkedTo = context.state().field?.objects?.firstOrNull { objectTargetId(it) == action.target }
-            val trainerId = talkedTo?.trainer?.trainerId
-            // The tiles really moved (walk and turn), for an interruption after the walk arrived (see below).
-            val counter = TileCounter()
-            val walked = context.navigator.watching(counter::observe) { WorldTravel.walkNextTo(context, target.copy(adjacent = true)).walk }
-            if (walked is Walk.Interrupted) engagedTarget(context, action.target, trainerId, walked.state, walked.steps)?.let { return@ActionPlan it }
-            if (walked is Walk.NoRoute && talkedTo?.height != null && (walked.failure == RouteFailure.Unreachable || walked.failure == RouteFailure.DifferentLevel)) {
-                return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH,
-                    "no tile next to ${action.target} at its height (${talkedTo.height}) is reachable from here: ${walked.detail}",
-                    "the game only answers A facing someone at your own height (from the water, a person on the shore above " +
-                        "says nothing): find the way onto their level (a beach, stairs), then interact again"))
-            }
-            if (walked !is Walk.Arrived || walked.through != null) return@ActionPlan walked.toOutcome(context) { "" }
-            val field = walked.field
-            val live = resolve(context, action.target, null, null) ?: target
-            // Its height may only be known now (its map block loaded on the way): at another height than the player,
-            // A would do nothing, walk again to a tile at its height (resolve now knows it) instead of pressing.
-            val area = context.game.world?.areaOf(field.mapId)
-            val height = area?.let { a -> field.objects.firstOrNull { objectTargetId(it) == action.target }?.let { knownHeight(a, it) } }
-            if (height != null && height != field.height) return@repeat
-            val facing = facingTowards(field, live) ?: return@repeat
-            // Turned and checked before A (the verification rule): A facing elsewhere would talk to someone else.
-            when (val faced = context.navigator.watching(counter::observe) { FieldControl.face(context, facing, "talk to ${action.target}") }) {
-                is FieldControl.Facing.Faced -> Unit
-                // Stopped while turning to it: the target (a trainer) seeing the player then is the battle asked for,
-                // like on the way; anything else is an interruption after the tiles walked.
-                is FieldControl.Facing.Stopped -> return@ActionPlan engagedTarget(context, action.target, trainerId, faced.state, counter.tiles)
-                    ?: Walk.Interrupted(faced.state, counter.tiles).toOutcome(context) { "" }
-                is FieldControl.Facing.Failed -> return@ActionPlan ActionOutcome.Failed(faced.error)
-            }
-            val beforeState = context.navigator.settle()
-            val before = beforeState.screen
-            val after = pressA(context, beforeState)
-            val puzzleBefore = beforeState.field?.puzzle
-            val puzzleAfter = after.field?.puzzle
-            if (puzzleBefore != null && puzzleAfter != null && puzzleAfter != puzzleBefore) {
-                return@ActionPlan ActionOutcome.Done("the puzzle changed: ${puzzleChange(puzzleBefore, puzzleAfter)}")
-            }
-            if (!(after.screen is Screen.Overworld && after.screen.sameAsOverworld(before))) return@ActionPlan ActionOutcome.Done("now: ${after.screen.kind}")
-            // Nothing on screen: still facing it (it has nothing to say), or it walked away (try again).
-            val now = after.field ?: return@ActionPlan ActionOutcome.Done("now: ${after.screen.kind}")
-            val stillThere = resolve(context, action.target, null, null)?.let { facingTowards(now, it) == now.facing } == true
-            if (stillThere) return@ActionPlan ActionOutcome.Done("faced ${action.target} and pressed A: no message (nothing to say, or nothing to do there)")
-        }
-        ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "Couldn't get right in front of ${action.target} (it keeps moving, or only a diagonal tile is reachable)"))
-    }
 
     /**
      * Presses A (the player already faces what to press, checked by the caller) and waits for what follows: a screen
      * change, or, for the silent switches and levers, the puzzle state changing once their script has run.
      * [beforeState]: the state just before the press. The state after.
      */
-    private fun pressA(context: PlanContext, beforeState: GameState): GameState {
+    internal fun pressA(context: PlanContext, beforeState: GameState): GameState {
         context.scope.tap(Button.A)
         context.navigator.awaitChange(beforeState.screen)
         var after = context.navigator.settle()
@@ -156,117 +96,8 @@ internal object MovePlans {
         return if (field.puzzle != before.field?.puzzle) Walk.Arrived(field) else null
     }
 
-    /**
-     * The success of `interact` with a trainer ([trainerId]) who engaged the player in [state] (saw them on the way or
-     * while they turned to it, after [steps] tiles): the very battle asked for. Null when it isn't that trainer.
-     */
-    private fun engagedTarget(context: PlanContext, target: String, trainerId: Int?, state: GameState, steps: Int): ActionOutcome? {
-        if (trainerId == null || trainerId !in engagedTrainers(state)) return null
-        val now = context.navigator.settle()
-        return ActionOutcome.Done("$target saw you on the way (after $steps step(s)) and came to battle: the battle you asked for (now: ${now.screen.kind})")
-    }
 
-    /**
-     * The trainers ([dev.kotlinds.pokemonclient.state.FieldTrainer.trainerId]) engaging the player in [state]: the one
-     * who saw them (walking up), or those of the battle that started.
-     */
-    private fun engagedTrainers(state: GameState): Set<Int> =
-        setOfNotNull(state.field?.engagedTrainerId) + state.battle?.trainerIds.orEmpty()
 
-    /** The direction to face [target] from [field]: orthogonally next to it, or two tiles away across a counter. */
-    private fun facingTowards(field: FieldState, target: Target): Direction? {
-        val tx = target.x ?: return null
-        val ty = target.y ?: return null
-        val distance = kotlin.math.abs(tx - field.x) + kotlin.math.abs(ty - field.y)
-        if (distance !in 1..2) return null
-        return Direction.between(field.x, field.y, tx, ty)
-    }
-
-    /**
-     * Walks a straight line of [GameAction.Step.tiles] tiles, holding the direction (the turn, when the player faces
-     * elsewhere, is part of the hold: no press is lost). Checked tile by tile; a refused step says where it stopped.
-     */
-    val step = ActionPlan<GameAction.Step> { action, context ->
-        BikeRide.mount(context, action.options)
-        val state = context.state()
-        val start = state.field ?: return@ActionPlan notInField(context)
-        val mark = FieldControl.warpMark(context)
-        val d = action.direction
-        val tiles = (1..action.tiles).map { Node(start.x + d.dx * it, start.y + d.dy * it) }
-        // Run, but walk onto the tiles where wild Pokémon appear (like go_to): the pace changes tile by tile, held on.
-        val area = context.game.world?.areaOf(start.mapId)
-        val runOnto = area?.let { runOnto(it, start, action.options, stepWeights(context, state, action.options)) } ?: RunOnto { _, _ -> action.options.run }
-        var walked = WalkSegments.walk(context, WalkSegments.line(d, tiles, runOnto, taken = 0))
-        // A message the game shows by itself on the way (a Repel wearing off): closed, then what the agent chose
-        // ([MoveOptions.onRepelEnd]: stop there by default, or walk the rest of the line).
-        val notes = mutableListOf<String>()
-        var notices = 0
-        while (notices++ < MAX_NOTICES) {
-            val stopped = walked as? WalkSegments.Result.Stopped ?: break
-            when (val notice = FieldControl.closeNotice(context, stopped.state)) {
-                FieldControl.Notice.None -> break
-                is FieldControl.Notice.Failed -> return@ActionPlan ActionOutcome.Failed(notice.error)
-                is FieldControl.Notice.Stopped -> {
-                    notes += noticeNote(notice.notice, notice.state.field)
-                    walked = WalkSegments.Result.Stopped(notice.state, stopped.walked)
-                }
-                is FieldControl.Notice.Closed -> {
-                    val here = tiles.indexOfFirst { it.x == notice.field.x && it.y == notice.field.y }
-                    val left = tiles.drop(here + 1)
-                    val crosses = { area == null || crossesEncounters(area, stepWeights(context, context.state(), action.options), left) }
-                    when (val next = afterNotice(context, notice, action.options, crosses)) {
-                        is AfterNotice.Failed -> return@ActionPlan ActionOutcome.Failed(next.error)
-                        is AfterNotice.Stop -> return@ActionPlan ActionOutcome.Failed(ActionError.Interrupted(next.cause,
-                            "${here + 1} tile(s)" + (notes + next.note).joinToString("") { "; $it" }))
-                        is AfterNotice.WalkOn -> {
-                            notes += next.note
-                            walked = if (left.isEmpty()) WalkSegments.Result.Reached(notice.field)
-                            else WalkSegments.walk(context, WalkSegments.line(d, left, runOnto, taken = here + 1))
-                        }
-                    }
-                }
-            }
-        }
-        val told = notes.joinToString("") { "; $it" }
-        // Into a door, onto stairs or a hole: the walk ends there (the rest of the tiles aren't walked on the new map).
-        FieldControl.awaitOutcome(context, mark)?.takeUnless { PuzzleSolving.isRide(it) }?.let { return@ActionPlan ActionOutcome.Done(through(context, it).describe(it.last.to) + told) }
-        when (val walked = walked) {
-            is WalkSegments.Result.Reached -> ActionOutcome.Done("walked ${action.tiles} tile(s) ${d.name.lowercase()}, now at ${walked.field.x},${walked.field.y}$told")
-            is WalkSegments.Result.Elsewhere -> ActionOutcome.Done("moved to ${walked.field.x},${walked.field.y} (not a straight walk: slid, pushed, or another map)")
-            is WalkSegments.Result.Refused -> {
-                val done = kotlin.math.abs(walked.from.x - start.x) + kotlin.math.abs(walked.from.y - start.y)
-                // Walking into a boulder (Strength used) pushes it while the player stays: that's what the step did.
-                pushedAhead(context, start, walked.from.x + d.dx, walked.from.y + d.dy)?.let { return@ActionPlan ActionOutcome.Done(it) }
-                // A wild battle or a scene starting as the player stopped looks like a refused step at first, and a
-                // scene may take the control without leaving the field screen (Elm's aide walking up to the player in
-                // his lab, NOTES: "blocked after 4 tile(s)" while she talked): blocked only when the player keeps the
-                // control for a moment.
-                FieldControl.takenAfterRefusal(context)?.let { taken ->
-                    return@ActionPlan ActionOutcome.Failed(ActionError.Interrupted(cause(context, taken), "$done tile(s)$told"))
-                }
-                // Standing on a warp taken by entering it (just arrived on it): the press did nothing, say how to take it.
-                val underFeet = area?.warps
-                    ?.firstOrNull { it.zone == start.mapId && it.x == walked.from.x && it.y == walked.from.y && it.trigger == WarpTrigger.Enter }
-                ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH,
-                    "blocked after $done tile(s) at ${walked.from.x},${walked.from.y}: can't go ${d.name.lowercase()} from there (${refusalCause(context, walked.from, d)})",
-                    underFeet?.let { "you stand on warp:${it.id}, taken by stepping onto it (pressing on it does nothing): go_to warp:${it.id} steps off and back on" }))
-            }
-            is WalkSegments.Result.Stopped -> ActionOutcome.Failed(ActionError.Interrupted(cause(context, walked.state), "${walked.walked} tile(s)$told"))
-        }
-    }
-
-    /**
-     * When the object that stood at ([x], [y]) before [start] (a boulder) has moved since: what the step did to it
-     * (the game pushed it, the player staying behind), for the agent. Null when nothing moved there.
-     */
-    private fun pushedAhead(context: PlanContext, start: FieldState, x: Int, y: Int): String? {
-        val before = start.objects.firstOrNull { it.x == x && it.y == y && it.obstacle != null } ?: return null
-        val now = context.navigator.settle().field ?: return null
-        val after = now.objects.firstOrNull { it.id == before.id }
-        if (after != null && after.x == x && after.y == y) return null
-        return "pushed ${before.id} from $x,$y " + (after?.let { "to ${it.x},${it.y}" } ?: "(it is gone: fell through a hole)") +
-            "; you stay at ${now.x},${now.y}"
-    }
 
     /**
      * Why the game may have refused the step from [from] going [direction], from what the RAM and the map say now: who
@@ -296,62 +127,6 @@ internal object MovePlans {
     /** Most tiles one [GameAction.Step] walks. */
     const val MAX_STEP_TILES = 20
 
-    /**
-     * Walks to the nearest tile of this map where wild Pokémon appear ([encounterTile]: tall grass, a cave's floor, the
-     * water when surfing), then back and forth there until one appears: every step onto such a tile is an encounter
-     * check, so a single tile is paced from a neighbour.
-     */
-    val findEncounter = ActionPlan<GameAction.FindEncounter> { _, context ->
-        val state = context.state()
-        val start = state.field ?: return@ActionPlan notInField(context)
-        val world = context.game.world ?: return@ActionPlan noMap(start)
-        val area = world.areaOf(start.mapId) ?: return@ActionPlan noMap(start)
-        val surfing = start.movement == MovementMode.SURF
-        // Looking for wild Pokémon: running onto the encounter tiles doubles the chance of each step.
-        val pacing = MoveOptions(runInEncounterAreas = true)
-        val conditions = encounterConditions(state, pacing)
-        val ground = if (surfing) "water" else "tall grass or cave floor"
-        fun encounters(x: Int, y: Int, under: EncounterConditions = conditions) = encounterTile(world, area, start.mapId, x, y, surfing, under)
-        val spot = Target(ENCOUNTER_GROUND, null, null, null, isGoal = { node -> encounters(node.x, node.y) })
-        when (val walked = walkTo(context, spot, pacing)) {
-            is Walk.Arrived -> if (walked.through != null) return@ActionPlan walked.toOutcome(context) { "" }
-            is Walk.Interrupted -> return@ActionPlan if (walked.state.battle != null) ActionOutcome.Done("wild battle") else walked.toOutcome(context) { "" }
-            is Walk.NoRoute -> {
-                // A Repel keeping every wild Pokémon of the map away: the tiles are there, nothing can appear.
-                val repelled = conditions.repelLevel != null && (area.zoneBounds[start.mapId] ?: return@ActionPlan walked.toOutcome(context) { "" }).let { b ->
-                    (b[1]..b[3]).any { y -> (b[0]..b[2]).any { x -> encounters(x, y, conditions.copy(repelLevel = null)) } }
-                }
-                val detail = if (repelled) "your Repel keeps the wild Pokémon of this map away (lead level ${conditions.repelLevel}): wait for it to wear off"
-                else "no $ground with wild Pokémon reachable on this map from ${start.x},${start.y}"
-                return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, detail))
-            }
-            else -> return@ActionPlan walked.toOutcome(context) { "" }
-        }
-        // Pace: onto another encounter tile next to this one, or off this one and back (each entry is a check).
-        repeat(MAX_PACING_STEPS) {
-            val field = context.state().field ?: return@ActionPlan battleOrStop(context)
-            fun free(x: Int, y: Int) = area.tile(x, y)?.let { !it.blocked && it.kind != TileKind.Wall } == true &&
-                field.objects.none { it.kind != FieldObjectKind.FOLLOWER && it.x == x && it.y == y } && (surfing || area.tile(x, y)?.kind !is TileKind.Water)
-            val ways = Direction.entries.filter { d -> free(field.x + d.dx, field.y + d.dy) }
-                .sortedByDescending { d -> encounters(field.x + d.dx, field.y + d.dy) }
-            if (ways.isEmpty()) return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH, "no free tile next to ${field.x},${field.y} to pace to"))
-            var moved = false
-            for (d in ways) {
-                when (val step = stepOnce(context, d, Node(field.x + d.dx, field.y + d.dy), pacing)) {
-                    is StepResult.Moved -> moved = true
-                    is StepResult.Stopped -> return@ActionPlan battleOrStop(context)
-                    // A battle starting as the step ends looks like a refused step at first: settle before trying another way.
-                    is StepResult.Refused -> context.navigator.settle()
-                    is StepResult.Failed -> return@ActionPlan ActionOutcome.Failed(step.error)
-                }
-                if (context.state().battle != null || context.state().screen !is Screen.Overworld) return@ActionPlan battleOrStop(context)
-                if (moved) break
-            }
-            if (!moved) return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_PATH,
-                "every step from ${field.x},${field.y} was refused (${refusalCause(context, Node(field.x, field.y), ways.first())})"))
-        }
-        ActionOutcome.Failed(ActionError.Timeout("no wild Pokémon after $MAX_PACING_STEPS steps on the $ground"))
-    }
 
     /**
      * True when stepping onto ([x], [y]) of [area] can start a wild battle under [conditions]: a land encounter tile
@@ -371,15 +146,6 @@ internal object MovePlans {
         }
     }
 
-    /** What changed between two readings of a map puzzle, by id (shutters opened / closed, levers, routes). */
-    private fun puzzleChange(before: PuzzleState, after: PuzzleState): String = buildList {
-        val was = before.barriers.associate { it.id to it.open }
-        after.barriers.filter { was[it.id] != null && was[it.id] != it.open }.forEach { add("${it.id} ${if (it.open) "opened" else "closed"}") }
-        val flipped = before.switches.associate { it.id to it.flipped }
-        after.switches.filter { it.flipped != null && flipped[it.id] != it.flipped }.forEach { add("${it.id} ${if (it.flipped == true) "flipped" else "back"}") }
-        val routes = before.teleports.associate { it.id to it.to }
-        after.teleports.filter { routes[it.id] != it.to }.forEach { add("${it.id} now leads to ${it.to.x},${it.to.y}") }
-    }.joinToString().ifEmpty { "state updated" }
 
     // region Targets
 
@@ -764,7 +530,7 @@ internal object MovePlans {
      */
     private fun reapplyRepel(context: PlanContext, at: String): AfterNotice {
         val repel = repelInBag(context) ?: return AfterNotice.Stop("$at; no Repel left in the bag$REPEL_STOP_TAIL", InterruptionCause.REPEL_ENDED)
-        val used = context.run(GameAction.UseItem(ItemRef("item:${repel.item.id.value}")))
+        val used = context.recipes.useItem(GameAction.UseItem(ItemRef("item:${repel.item.id.value}")), context)
         if (used is ActionOutcome.Failed) return AfterNotice.Failed(used.error)
         if (context.navigator.settle().field?.repelSteps == 0) {
             return AfterNotice.Failed(ActionError.Timeout("used ${repel.item.name}, but no Repel is at work: call get_state"))
@@ -791,11 +557,11 @@ internal object MovePlans {
     }
 
     /** Whether one of [tiles] of [area] is a tile where wild Pokémon appear under [weights]. */
-    private fun crossesEncounters(area: Area, weights: StepWeights, tiles: List<Node>): Boolean =
+    internal fun crossesEncounters(area: Area, weights: StepWeights, tiles: List<Node>): Boolean =
         tiles.any { node -> area.tile(node.x, node.y)?.let { weights.encounter(it, area.zoneAt(node.x, node.y)) > 0 } == true }
 
     /** [FieldNotice]s a single walk closes at most before giving up the walk (one per Repel used: never more than a couple). */
-    private const val MAX_NOTICES = 3
+    internal const val MAX_NOTICES = 3
 
     private fun walkTo(context: PlanContext, target: Target, options: MoveOptions, notes: MutableList<String>): Walk {
         val refused = mutableSetOf<Pair<Node, Direction>>()
@@ -1611,10 +1377,10 @@ internal object MovePlans {
      * very first frames (the encounter's flash: no field, no battle read yet): what started is then read once the game
      * waits for input again.
      */
-    private fun cause(context: PlanContext, state: GameState): InterruptionCause =
+    internal fun cause(context: PlanContext, state: GameState): InterruptionCause =
         cause(if (state.battle == null && state.field == null) context.navigator.settle() else state)
 
-    private fun cause(state: GameState): InterruptionCause = when {
+    internal fun cause(state: GameState): InterruptionCause = when {
         state.battle != null -> if (state.battle.trainers.isEmpty()) InterruptionCause.WILD_BATTLE else InterruptionCause.TRAINER_SIGHT
         state.field?.trainerEncounter == true -> InterruptionCause.TRAINER_SIGHT
         (state.screen as? Screen.Dialogue)?.source == TextSource.PHONE -> InterruptionCause.PHONE_CALL
@@ -1622,18 +1388,12 @@ internal object MovePlans {
         else -> InterruptionCause.SCRIPT
     }
 
-    private fun battleOrStop(context: PlanContext): ActionOutcome {
-        val state = context.navigator.settle()
-        return if (state.battle != null) ActionOutcome.Done("wild battle")
-        else ActionOutcome.Failed(ActionError.Interrupted(cause(state), "walking in the grass"))
-    }
 
-    private fun notInField(context: PlanContext) =
+    internal fun notInField(context: PlanContext) =
         ActionOutcome.Failed(ActionError.UnexpectedScreen("the overworld", context.state().screen))
 
     // endregion
 
-    private fun Screen.Overworld.sameAsOverworld(other: Screen) = other is Screen.Overworld && other.banner == banner
 
     private const val STEP_FRAMES = 24
     /** Jumps and doors (the door opens first) take longer than a step. */
@@ -1657,19 +1417,11 @@ internal object MovePlans {
 
     /** Polls standing still on the source tile after which the teleport is considered not to have fired. */
     private const val TELEPORT_IDLE_POLLS = 45
-    private const val MAX_PACING_STEPS = 200
-    /** The target of [findEncounter]'s walk, as its messages name it. */
-    private const val ENCOUNTER_GROUND = "a tile with wild Pokémon"
 
     /** Tiles next to a warp the player stands on tried to step off and back on it ([takeWarpHere]): the "3 tries" rule. */
     private const val MAX_STEP_OFF_TRIES = 3
 
     /** The target id of the nearest PC (`interact(pc)`). */
     const val PC = "pc"
-    private const val INTERACT_TRIES = 3
     private const val PC_SEARCH = 24
-
-    /** True when moving actions can start: walking (or surfing) freely, with the maps known. */
-    fun canWalk(state: GameState, hasWorld: Boolean): Boolean =
-        hasWorld && state.field != null && FieldControl.inControl(state)
 }

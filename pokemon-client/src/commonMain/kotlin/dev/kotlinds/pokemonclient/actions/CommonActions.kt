@@ -399,7 +399,7 @@ object CommonActions {
             Parameter("map", ParameterType.STRING, "The map x / y are on, when it isn't the current one (its name as exits show it, or map:<id>).", required = false),
         ) + moveParameters,
         modes = assisted,
-        availability = { state -> if (MovePlans.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to targetChoices(state))) else Availability.Hidden },
+        availability = { state -> if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to targetChoices(state))) else Availability.Hidden },
         parse = { json ->
             val target = json["target"]?.jsonPrimitive?.contentOrNull
             val x = json["x"]?.jsonPrimitive?.intOrNull
@@ -415,7 +415,7 @@ object CommonActions {
         description = "Walk next to a person, sign or item of this map, face it and press A (talk, read, pick up).",
         parameters = listOf(Parameter("target", ParameterType.STRING, "person:N, item:N (item ball), sign:N, hidden_item:N or examine:N (something invisible to examine).")),
         modes = assisted,
-        availability = { state -> if (MovePlans.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to targetChoices(state))) else Availability.Hidden },
+        availability = { state -> if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to targetChoices(state))) else Availability.Hidden },
         parse = { json -> GameAction.Interact(string(json, "target")) },
     ))
 
@@ -430,7 +430,7 @@ object CommonActions {
             Parameter("tiles", ParameterType.INTEGER, "How many tiles (1-${MovePlans.MAX_STEP_TILES}, default 1).", required = false),
         ) + moveParameters,
         modes = assisted,
-        availability = { state -> if (MovePlans.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden },
+        availability = { state -> if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden },
         parse = { json ->
             val raw = string(json, "direction")
             val direction = Direction.parse(raw) ?: throw ActionException(ActionError.InvalidParameter("direction", raw, Direction.entries.map { it.name.lowercase() }))
@@ -445,7 +445,7 @@ object CommonActions {
         description = "Walk to the nearest place of this map where wild Pokémon appear (tall grass, a cave's floor; the water while surfing) and pace there until one appears.",
         parameters = emptyList(),
         modes = assisted,
-        availability = { state -> if (MovePlans.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden },
+        availability = { state -> if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden },
         parse = { GameAction.FindEncounter },
     ))
 
@@ -456,7 +456,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             when {
-                !MovePlans.canWalk(state, hasWorld = true) -> Availability.Hidden
+                !ActionConditions.canWalk(state, hasWorld = true) -> Availability.Hidden
                 state.field?.objects?.any { it.role == PersonRole.NURSE } != true -> Availability.Hidden
                 else -> Availability.Available()
             }
@@ -470,7 +470,7 @@ object CommonActions {
         parameters = listOf(Parameter("pokemon", ParameterType.STRING, "The Pokémon's id (mon:…).")),
         modes = assisted,
         availability = { state ->
-            if (MovePlans.canWalk(state, hasWorld = true) && state.field?.hasPc != false && state.party.size > 1) Availability.Available(mapOf("pokemon" to monChoices(state)))
+            if (ActionConditions.canWalk(state, hasWorld = true) && state.field?.hasPc != false && state.party.size > 1) Availability.Available(mapOf("pokemon" to monChoices(state)))
             else Availability.Hidden
         },
         parse = { json -> GameAction.Deposit(mon(json, "pokemon")) },
@@ -483,7 +483,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             when {
-                !MovePlans.canWalk(state, hasWorld = true) || state.field?.hasPc == false -> Availability.Hidden
+                !ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false -> Availability.Hidden
                 state.party.size >= 6 -> Availability.Unavailable(UnavailableReason.PARTY_FULL, "The party is full", "deposit one first, or swap them in one `pc` session")
                 else -> Availability.Available(state.storage?.let { mapOf("pokemon" to storedChoices(it)) } ?: emptyMap())
             }
@@ -505,7 +505,7 @@ object CommonActions {
         ))),
         modes = assisted,
         availability = { state ->
-            if (!MovePlans.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return@spec Availability.Hidden
+            if (!ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return@spec Availability.Hidden
             Availability.Available(buildMap {
                 put("party", monChoices(state))
                 state.storage?.let { put("stored", storedChoices(it)) }
@@ -595,7 +595,7 @@ object CommonActions {
             val battle = state.battle ?: return@spec Availability.Hidden
             if (state.screen !is Screen.BattleCommand) return@spec Availability.Hidden
             if (battle.trainers.isNotEmpty()) return@spec Availability.Unavailable(UnavailableReason.TRAINER_BATTLE, "You can't catch a trainer's Pokémon")
-            val balls = state.bag.orEmpty().firstOrNull { it.name == "balls" }?.items.orEmpty()
+            val balls = ActionConditions.ballsInBag(state)
             if (balls.isEmpty()) Availability.Unavailable(UnavailableReason.NO_STOCK, "No Poké Balls in the bag", "buy some at a Poké Mart")
             else Availability.Available(mapOf("ball" to balls.map { Choice("item:${it.item.id.value}", "${it.item.name} x${it.quantity}") }))
         },
@@ -624,7 +624,7 @@ object CommonActions {
         parameters = listOf(Parameter("rod", ParameterType.STRING, "The rod: its id or its name (Old Rod, Good Rod, Super Rod).")),
         modes = assisted,
         availability = { state ->
-            if (!MovePlans.canWalk(state, hasWorld = true)) return@spec Availability.Hidden
+            if (!ActionConditions.canWalk(state, hasWorld = true)) return@spec Availability.Hidden
             val rods = state.bag.orEmpty().flatMap { it.items }.filter { it.item.id.value in RODS }
             if (rods.isEmpty()) Availability.Hidden else Availability.Available(mapOf("rod" to rods.map { Choice("item:${it.item.id.value}", it.item.name) }))
         },
@@ -699,7 +699,7 @@ object CommonActions {
             // Null (a state not read by its game, tests) can't tell: hidden like a game without Fly.
             val fly = state.fieldMoves?.get(FieldMoveKind.FLY)
             when {
-                !MovePlans.canWalk(state, hasWorld = true) || fly == null || fly == FieldMoveAccess.Unknown -> Availability.Hidden
+                !ActionConditions.canWalk(state, hasWorld = true) || fly == null || fly == FieldMoveAccess.Unknown -> Availability.Hidden
                 fly == FieldMoveAccess.NotSupported -> Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "Fly isn't supported in this game yet (its party menu isn't decoded)")
                 state.field?.flyAllowed == false -> Availability.Unavailable(UnavailableReason.NOT_FLYABLE_HERE, "Fly can't be used on this map (the map doesn't allow it)", "go to a map where Fly works")
                 fly == FieldMoveAccess.NoPokemon -> Availability.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows Fly")

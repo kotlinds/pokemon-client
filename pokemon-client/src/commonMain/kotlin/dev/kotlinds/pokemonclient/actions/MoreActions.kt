@@ -54,7 +54,7 @@ object MoreActions {
         ),
         modes = assisted,
         availability = { state ->
-            if (!MovePlans.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return@spec Availability.Hidden
+            if (!ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return@spec Availability.Hidden
             Availability.Available(mapOf("pokemon" to (state.party.map { Choice(it.id.toString(), "${it.displayName} Lv${it.level} (party)") } +
                 state.storage?.boxes.orEmpty().flatMap { box -> box.mons.map { Choice(it.id.toString(), "${it.displayName} (${box.name})") } })), listed = false)
         },

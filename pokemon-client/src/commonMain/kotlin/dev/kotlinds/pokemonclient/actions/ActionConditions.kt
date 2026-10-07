@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.state.AnimationKind
+import dev.kotlinds.pokemonclient.state.BagItem
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.GameState
@@ -29,6 +30,15 @@ internal object ActionConditions {
 
     /** The entry of the battle command menu that opens the bag (absent in battles without one). */
     const val BATTLE_BAG = "option:bag"
+
+    /**
+     * The balls pocket of the state's bag ([dev.kotlinds.pokemonclient.state.BagPocket.name], language independent):
+     * what `throw_ball` lists and throws from.
+     */
+    const val BALLS_BAG_POCKET = "balls"
+
+    /** The balls in the bag ([BALLS_BAG_POCKET]): the choices of `throw_ball`, and what its recipe throws. */
+    fun ballsInBag(state: GameState): List<BagItem> = state.bag.orEmpty().firstOrNull { it.name == BALLS_BAG_POCKET }?.items.orEmpty()
 
     /** The screens `use_item` starts from in battle: the command menu, when it has a BAG. */
     fun canUseItemInBattle(state: GameState): Boolean =
@@ -90,6 +100,14 @@ internal object ActionConditions {
 
     // endregion
 
+    // region Moving
+
+    /** True when moving actions can start: walking (or surfing) freely, with the maps known. */
+    fun canWalk(state: GameState, hasWorld: Boolean): Boolean =
+        hasWorld && state.field != null && FieldControl.inControl(state)
+
+    // endregion
+
     // region Services: the Poké Mart
 
     /** Where a purchase (`buy`) or a sale (`sell`) can start from. */
@@ -100,7 +118,7 @@ internal object ActionConditions {
         is Screen.Shop -> ShopStage.SHOP_LIST
         is Screen.Quantity -> if (state.field != null && clerkFaced(state) != null) ShopStage.QUANTITY else null
         is Screen.ListMenu -> if (screen.kind == MenuKind.MULTICHOICE && screen.entries.size == CLERK_MENU_SIZE && clerkFaced(state) != null) ShopStage.CLERK_MENU else null
-        else -> if (MovePlans.canWalk(state, hasWorld = true) && shopClerks(state).isNotEmpty()) ShopStage.OVERWORLD else null
+        else -> if (canWalk(state, hasWorld = true) && shopClerks(state).isNotEmpty()) ShopStage.OVERWORLD else null
     }
 
     /**

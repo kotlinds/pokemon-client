@@ -99,8 +99,8 @@ class ActionRegistryTest {
 
     /**
      * A game's own recipe ([dev.kotlinds.pokemonclient.PokemonGame.recipes], a subclass overriding one method) is
-     * played for that game only: through the registry like every host, and when another recipe carries the action out
-     * as one of its steps ([PlanContext.run]); a game without it plays the common one.
+     * played for that game only: through the registry like every host, and when the walking engine carries the
+     * action out as one of its steps (on [PlanContext.recipes]); a game without it plays the common one.
      */
     @Test
     fun aGamesOwnRecipeReplacesTheCommonOneForThatGameOnly() {
@@ -108,15 +108,17 @@ class ActionRegistryTest {
         val done = assertIs<ActionOutcome.Done>(registry.execute(GameAction.Wait(frames = 10), overriding.scope(), overriding))
         assertEquals("the game's own wait", done.detail)
         assertEquals(0L, overriding.console.frame, "the common recipe would have waited 10 frames")
-        // As a step of another recipe: the game's own one too.
-        assertEquals("the game's own wait", assertIs<ActionOutcome.Done>(overriding.context().run(GameAction.Wait(frames = 10))).detail)
+        // As a step carried out by the engine (on the context's recipes): the game's own one too.
+        val step = overriding.context()
+        assertEquals("the game's own wait", assertIs<ActionOutcome.Done>(step.recipes.perform(GameAction.Wait(frames = 10), step)).detail)
         assertEquals(0L, overriding.console.frame)
         // The same action in a game without its own recipe: the common one, never the other game's.
         val plain = FakeGame(Screen.Overworld(null, Awaiting.INPUT))
         val common = assertIs<ActionOutcome.Done>(registry.execute(GameAction.Wait(frames = 10), plain.scope(), plain))
         assertTrue(common.detail != "the game's own wait")
         assertTrue(plain.console.frame >= 10L, "frame ${plain.console.frame}")
-        assertTrue(assertIs<ActionOutcome.Done>(plain.context().run(GameAction.Wait(frames = 10))).detail != "the game's own wait")
+        val plainStep = plain.context()
+        assertTrue(assertIs<ActionOutcome.Done>(plainStep.recipes.perform(GameAction.Wait(frames = 10), plainStep)).detail != "the game's own wait")
         assertTrue(plain.console.frame >= 20L, "frame ${plain.console.frame}")
     }
 
