@@ -36,6 +36,12 @@ See [docs/adding-a-game.md](docs/adding-a-game.md).
   typed error, never silently aliased).
 - Clear layers behind interfaces (`ConsolePort`, `PokemonGame`, plans, registry). KDoc on public types and on
   anything non-obvious; comments explain **why**, with decompilation references when the behaviour comes from the game.
+- **Safety by construction first.** When a design can make a mistake impossible (the compiler or the structure
+  rules it out), prefer it over a design that relies on a convention to follow and to check in review. Examples:
+  an exhaustive `when` over a sealed type so every case must be handled; a single call path so an override can't be
+  bypassed (virtual calls in a class hierarchy rather than "remember to go through the registry"); a private
+  constructor so objects are only built the right way; typed ids rather than strings. When a convention is
+  unavoidable, write it down and test it.
 - Ids are never derived from the text shown on screen: the game may run in another language. Screens, menu entries
   and their ids (`option:yes`, `move:33`, `mon:…`, `person:3`) come from structure, positions, function pointers or
   game ids. Displayed labels are for display only.
