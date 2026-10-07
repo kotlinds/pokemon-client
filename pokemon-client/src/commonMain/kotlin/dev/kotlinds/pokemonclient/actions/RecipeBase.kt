@@ -40,8 +40,11 @@ import dev.kotlinds.pokemonclient.state.Screen
  *   the chain.
  *
  * Every entry is `internal`: the recipes run only through [ActionRegistry.execute] (availability checked first) or
- * as a step of another recipe; they are not part of the library's API, and every game lives in this module. The
- * constructor is internal too: no recipes can be made outside it.
+ * as a step of another recipe. What a game may change is `protected open` (the recipes, the shared steps, and in
+ * [Recipes] the availability methods): overridable by a game's subclass, also from another module (a game written in
+ * its own project before it is contributed), but never callable by the library's users. A game's recipes are made
+ * from [Recipes] (or a generation's subclass, `Gen4Recipes`), whose constructor is public; the families of the chain
+ * keep an internal constructor: nothing can be inserted below [Recipes].
  *
  * Recipes are stateless (one instance per game, shared by its sessions and threads): what an action needs to
  * remember lives in its local variables or in its [PlanContext]. They are blocking (not `suspend`), like the

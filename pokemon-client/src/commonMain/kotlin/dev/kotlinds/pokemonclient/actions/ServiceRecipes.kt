@@ -31,26 +31,26 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     // region Availability: when each action of this family can run (read by the listing and the execution alike)
 
     /** `heal`: walking freely in a Pokémon Center (a nurse on the map). */
-    internal open fun healAvailability(state: GameState): Availability = when {
+    protected open fun healAvailability(state: GameState): Availability = when {
         !ActionConditions.canWalk(state, hasWorld = true) -> Availability.Hidden
         state.field?.objects?.any { it.role == PersonRole.NURSE } != true -> Availability.Hidden
         else -> Availability.Available()
     }
 
     /** `deposit`: walking freely where a PC may be, with two Pokémon or more. */
-    internal open fun depositAvailability(state: GameState): Availability =
+    protected open fun depositAvailability(state: GameState): Availability =
         if (ActionConditions.canWalk(state, hasWorld = true) && state.field?.hasPc != false && state.party.size > 1) Availability.Available(mapOf("pokemon" to ActionConditions.monChoices(state)))
         else Availability.Hidden
 
     /** `withdraw`: walking freely where a PC may be, with room in the party. */
-    internal open fun withdrawAvailability(state: GameState): Availability = when {
+    protected open fun withdrawAvailability(state: GameState): Availability = when {
         !ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false -> Availability.Hidden
         state.party.size >= 6 -> Availability.Unavailable(UnavailableReason.PARTY_FULL, "The party is full", "deposit one first, or swap them in one `pc` session")
         else -> Availability.Available(state.storage?.let { mapOf("pokemon" to ActionConditions.storedChoices(it)) } ?: emptyMap())
     }
 
     /** `pc`: walking freely where a PC may be. */
-    internal open fun pcAvailability(state: GameState): Availability {
+    protected open fun pcAvailability(state: GameState): Availability {
         if (!ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return Availability.Hidden
         return Availability.Available(buildMap {
             put("party", ActionConditions.monChoices(state))
@@ -59,14 +59,14 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     }
 
     /** `release`: walking freely where a PC may be; accepted, never offered (dangerous). */
-    internal open fun releaseAvailability(state: GameState): Availability {
+    protected open fun releaseAvailability(state: GameState): Availability {
         if (!ActionConditions.canWalk(state, hasWorld = true) || state.field?.hasPc == false) return Availability.Hidden
         return Availability.Available(mapOf("pokemon" to (state.party.map { Choice(it.id.toString(), "${it.displayName} Lv${it.level} (party)") } +
             state.storage?.boxes.orEmpty().flatMap { box -> box.mons.map { Choice(it.id.toString(), "${it.displayName} (${box.name})") } })), listed = false)
     }
 
     /** `buy`: at a Poké Mart ([ActionConditions.shopStage]), what each clerk sells. */
-    internal open fun buyAvailability(state: GameState): Availability {
+    protected open fun buyAvailability(state: GameState): Availability {
         if (ActionConditions.shopStage(state) == null) return Availability.Hidden
         // Clerk by clerk (never one list mixing two counters): an item sold by several says by whom.
         val stock = ActionConditions.shopStock(state)
@@ -80,7 +80,7 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     }
 
     /** `sell`: at a Poké Mart (walking there, the clerk's menu or the selling bag), the bag's items but the key items. */
-    internal open fun sellAvailability(state: GameState): Availability {
+    protected open fun sellAvailability(state: GameState): Availability {
         val atShop = ActionConditions.shopStage(state).let { it == ShopStage.OVERWORLD || it == ShopStage.CLERK_MENU } ||
             (state.screen is Screen.Bag && state.field != null && ActionConditions.shopStage(state.copy(screen = Screen.Overworld(awaiting = Awaiting.INPUT))) != null)
         if (!atShop) return Availability.Hidden
@@ -89,7 +89,7 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     }
 
     /** `set_quantity`: on a quantity screen. */
-    internal open fun setQuantityAvailability(state: GameState): Availability {
+    protected open fun setQuantityAvailability(state: GameState): Availability {
         val screen = state.screen as? Screen.Quantity ?: return Availability.Hidden
         return Availability.Available(mapOf("value" to listOf(Choice("${screen.min}..${screen.max}", "now ${screen.value}"))))
     }

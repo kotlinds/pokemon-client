@@ -9,6 +9,7 @@ import dev.kotlinds.pokemonclient.actions.Recipes
  *
  * Abstract: each Gen 4 game gives its own subclass ([dev.kotlinds.pokemonclient.games.hgss.HgssRecipes],
  * [dev.kotlinds.pokemonclient.games.platinum.PlatinumRecipes]), even empty, so a game's own recipe always has its
- * place. Stateless, like every [Recipes].
+ * place. Stateless, like every [Recipes]. Its constructor is public, like [Recipes]': a Gen 4 game written outside the
+ * library extends it the same way.
  */
-abstract class Gen4Recipes internal constructor() : Recipes()
+abstract class Gen4Recipes : Recipes()

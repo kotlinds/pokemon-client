@@ -82,10 +82,11 @@ interface PokemonGame {
      * [dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes]). Required, with no default: there is no shared recipes
      * object, so a game's recipes are only ever reached through the game (and its contexts,
      * [dev.kotlinds.pokemonclient.actions.PlanContext.recipes]), never combined with another game's. The constructor of
-     * the recipes is internal: games live in this module. Only *how* actions are done and, where the game itself
-     * differs, *when* (an availability method overridden, documented on the override) change: their specs (names,
-     * parameters, ids, errors, descriptions: what agents see) are the common ones, so the contract is the same for
-     * every game. Every action is played and listed through here, also when the walking engine carries out an action
+     * the recipes is public (a game may be written outside this library, in its own project); what a game overrides is
+     * `protected`: called only by the chain itself, which the registry enters. Only *how* actions are done and, where
+     * the game itself differs, *when* (an availability method overridden, documented on the override) change: their
+     * specs (names, parameters, ids, errors, descriptions: what agents see) are the common ones, so the contract is the
+     * same for every game. Every action is played and listed through here, also when the walking engine carries out an action
      * as one of its steps.
      */
     val recipes: dev.kotlinds.pokemonclient.actions.Recipes

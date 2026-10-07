@@ -258,8 +258,11 @@ enum class UnavailableReason {
     PUZZLE_LEFT_TO_AGENT,
 
     /**
-     * The game has it, but the library doesn't support it in this game yet (a screen it goes through isn't decoded):
-     * the same action as in every game, said unavailable rather than tried blindly.
+     * Not possible in this game, whatever the situation. Either the game has it but the library doesn't support it in
+     * this game yet (a screen it goes through isn't decoded: Platinum's Fly): the same action as in every game, listed
+     * unavailable rather than tried blindly ([Availability.Unavailable]); or the game doesn't have it at all
+     * (`tune_radio` in Platinum, which has no Pokégear): never listed, refused with this reason when executed
+     * ([Availability.NotInThisGame]).
      */
     NOT_SUPPORTED_BY_GAME,
 

@@ -21,7 +21,7 @@ object MoreActions {
     /** The start menu entries `open_menu` offers (their ids on the menu, language independent). */
     private val START_ENTRIES = listOf("option:pokedex", "option:pokemon", "option:bag", "option:trainer_card", "option:save", "option:options", "option:pokegear")
 
-    val sell = ActionDefinition(GameAction.Sell::class, Recipes::sellAvailability, spec(
+    val sell = ActionDefinition(GameAction.Sell::class, Recipes.Conditions.sell, spec(
         name = "sell",
         description = "Sell items at this Poké Mart (walks to the clerk, SELL, picks the item, sets the number, accepts the price). " +
             "Also works from the clerk's menu or the selling bag. The answer says what was earned.",
@@ -33,7 +33,7 @@ object MoreActions {
         parse = { json -> GameAction.Sell(ItemRef(string(json, "item")), json["quantity"]?.jsonPrimitive?.intOrNull?.also { check(it, "quantity", 1..999) } ?: 1) },
     ))
 
-    val release = ActionDefinition(GameAction.Release::class, Recipes::releaseAvailability, spec(
+    val release = ActionDefinition(GameAction.Release::class, Recipes.Conditions.release, spec(
         name = "release",
         description = "Release a Pokémon for good, at the PC of this building (party or box). Dangerous: refused unless " +
             "confirm is true; the Pokémon is named by its id only.",
@@ -48,7 +48,7 @@ object MoreActions {
         },
     ))
 
-    val drag = ActionDefinition(GameAction.Drag::class, Recipes::dragAvailability, spec(
+    val drag = ActionDefinition(GameAction.Drag::class, Recipes.Conditions.drag, spec(
         name = "drag",
         description = "Drag the stylus on the bottom screen from (x, y) to (to_x, to_y) (pixels of the bottom screen: " +
             "x 0-255, y 0-191), held all along, then lift it: the Ruins of Alph panels, sliders. Says whether the screen changed.",
@@ -69,7 +69,7 @@ object MoreActions {
         },
     ))
 
-    val openMenu = ActionDefinition(GameAction.OpenMenu::class, Recipes::openMenuAvailability, spec(
+    val openMenu = ActionDefinition(GameAction.OpenMenu::class, Recipes.Conditions.openMenu, spec(
         name = "open_menu",
         description = "Open the start menu and pick one of its entries by id (option:bag, option:pokemon, option:pokedex, " +
             "option:trainer_card, option:pokegear, option:options, option:save), checked on the menu itself.",

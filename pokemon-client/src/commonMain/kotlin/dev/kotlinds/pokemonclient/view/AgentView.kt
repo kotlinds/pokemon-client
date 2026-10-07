@@ -218,7 +218,12 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
         if (story.blockers.isNotEmpty()) put(BLOCKED_BY, JsonArray(story.blockers.map { JsonPrimitive(blockedBy(it, state.field, walkthrough, hidden)) }))
     }
 
-    /** The actions possible now (names only in a compact answer), and those shown but not possible, with why. */
+    /**
+     * The actions possible now (names only in a compact answer), and those shown but not possible, with why
+     * ([dev.kotlinds.pokemonclient.actions.Availability.Unavailable]). Neither lists what is meaningless on this screen
+     * nor what the game doesn't have at all (`tune_radio` in a game without a Pokégear:
+     * [dev.kotlinds.pokemonclient.actions.Availability.NotInThisGame]): an agent trying one gets a typed refusal.
+     */
     private fun JsonObjectBuilder.actions(state: GameState, mode: ActionMode, detail: Detail) {
         if (detail == Detail.COMPACT) {
             put("actions", JsonArray(registry.available(state, mode, game).map { JsonPrimitive(it.name) }))

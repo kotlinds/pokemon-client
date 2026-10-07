@@ -28,7 +28,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
     // region Availability: when each action of this family can run (read by the listing and the execution alike)
 
     /** `attack`: from the command menu, or from the battle's move list already open (a previous attempt left it there). */
-    internal open fun attackAvailability(state: GameState): Availability {
+    protected open fun attackAvailability(state: GameState): Availability {
         val battle = state.battle ?: return Availability.Hidden
         if (state.screen !is Screen.BattleCommand && (state.screen as? Screen.MoveSelect)?.context != MoveContext.BATTLE) return Availability.Hidden
         val actor = battle.battlers.firstOrNull { it.ref == (battle.actor ?: BattlerRef.PLAYER_LEFT) } ?: return Availability.Hidden
@@ -36,7 +36,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
     }
 
     /** `run`: from the command menu of a wild battle. */
-    internal open fun runAvailability(state: GameState): Availability {
+    protected open fun runAvailability(state: GameState): Availability {
         val battle = state.battle
         return when {
             battle == null || state.screen !is Screen.BattleCommand -> Availability.Hidden
@@ -46,7 +46,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
     }
 
     /** `keep_battling`: on the switch-or-keep question; accepted while the messages before it still scroll. */
-    internal open fun keepBattlingAvailability(state: GameState): Availability {
+    protected open fun keepBattlingAvailability(state: GameState): Availability {
         val screen = state.screen
         return when {
             (screen as? Screen.ListMenu)?.kind == MenuKind.BATTLE_SWITCH_OR_KEEP -> Availability.Available()
@@ -58,7 +58,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
     }
 
     /** `switch`: on the screens a switch starts from ([ActionConditions.canSwitch]), unless trapped or no one else can battle. */
-    internal open fun switchAvailability(state: GameState): Availability {
+    protected open fun switchAvailability(state: GameState): Availability {
         if (state.battle == null || !ActionConditions.canSwitch(state)) return Availability.Hidden
         // A voluntary switch (command menu) is refused while the active Pokémon is trapped (Mean Look, Spider Web,
         // a binding move, Ingrain); a replacement after a K.O. never is.
@@ -74,7 +74,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
     }
 
     /** `throw_ball`: from the command menu of a wild battle, with balls in the bag. */
-    internal open fun throwBallAvailability(state: GameState): Availability {
+    protected open fun throwBallAvailability(state: GameState): Availability {
         val battle = state.battle ?: return Availability.Hidden
         if (state.screen !is Screen.BattleCommand) return Availability.Hidden
         if (battle.trainers.isNotEmpty()) return Availability.Unavailable(UnavailableReason.TRAINER_BATTLE, "You can't catch a trainer's Pokémon")
@@ -84,7 +84,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
     }
 
     /** `learn_move`: on the question about a new move, or the list of moves to forget. */
-    internal open fun learnMoveAvailability(state: GameState): Availability {
+    protected open fun learnMoveAvailability(state: GameState): Availability {
         if (!ActionConditions.isLearnPrompt(state)) return Availability.Hidden
         // On the list itself, the moves the game lets go of (not HMs, not the new one).
         val list = state.screen as? Screen.MoveSelect

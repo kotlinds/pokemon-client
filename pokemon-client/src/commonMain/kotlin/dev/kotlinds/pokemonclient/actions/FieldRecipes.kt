@@ -37,7 +37,7 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
     // region Availability: when each action of this family can run (read by the listing and the execution alike)
 
     /** `set_options`: in the field or on the OPTIONS screen, once the start menu has OPTIONS. */
-    internal open fun setOptionsAvailability(state: GameState): Availability {
+    protected open fun setOptionsAvailability(state: GameState): Availability {
         ActionConditions.locked(state, StartMenuFeature.OPTIONS)?.let { return it }
         if (!ActionConditions.inField(state) && !ActionConditions.isOptionsScreen(state)) return Availability.Hidden
         val now = state.options
@@ -51,7 +51,7 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
     }
 
     /** `open_menu`: walking or on the start menu, once it opens; accepted, never offered. */
-    internal open fun openMenuAvailability(state: GameState): Availability {
+    protected open fun openMenuAvailability(state: GameState): Availability {
         val walking = FieldControl.inControl(state)
         val inMenu = (state.screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU
         return when {
@@ -63,18 +63,18 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
     }
 
     /** `save_game`: in the field, once the start menu has SAVE. */
-    internal open fun saveGameAvailability(state: GameState): Availability =
+    protected open fun saveGameAvailability(state: GameState): Availability =
         ActionConditions.locked(state, StartMenuFeature.SAVE) ?: if (ActionConditions.inField(state)) Availability.Available() else Availability.Hidden
 
     /** `fish`: walking freely, with a rod in the bag ([ActionConditions.RODS]). */
-    internal open fun fishAvailability(state: GameState): Availability {
+    protected open fun fishAvailability(state: GameState): Availability {
         if (!ActionConditions.canWalk(state, hasWorld = true)) return Availability.Hidden
         val rods = state.bag.orEmpty().flatMap { it.items }.filter { it.item.id.value in ActionConditions.RODS }
         return if (rods.isEmpty()) Availability.Hidden else Availability.Available(mapOf("rod" to rods.map { Choice("item:${it.item.id.value}", it.item.name) }))
     }
 
     /** `fly`: walking freely, by the game's Fly rule as the state read it ([GameState.fieldMoves]) and the map's flag. */
-    internal open fun flyAvailability(state: GameState): Availability {
+    protected open fun flyAvailability(state: GameState): Availability {
         // The game's Fly rule (the move, the badge by id: never its shown name, the game may be in French).
         // Null (a state not read by its game, tests) can't tell: hidden like a game without Fly.
         val fly = state.fieldMoves?.get(FieldMoveKind.FLY)
@@ -89,7 +89,7 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
     }
 
     /** `use_field_move`: in the field, the moves of this action ([FieldMoveUse.ACTION]) the party can use now. */
-    internal open fun useFieldMoveAvailability(state: GameState): Availability {
+    protected open fun useFieldMoveAvailability(state: GameState): Availability {
         if (!ActionConditions.inField(state)) return Availability.Hidden
         // The game's rules as the state read them (GameState.fieldMoves: the move known, the badge): the moves of
         // this action only (Fly and the moves walks use have their own ways).
@@ -110,20 +110,19 @@ abstract class FieldRecipes internal constructor() : ServiceRecipes() {
     }
 
     /**
-     * `tune_radio`: walking, or on the Pokégear's radio or map (or its phone), in a game that has a Pokégear
-     * ([GameState.pokegear]: a game without one, Platinum, refuses it, typed) once it has the Radio Card. Offered on the
-     * radio itself; from the field it is accepted (it opens the Pokégear) without being offered.
+     * `tune_radio`: walking, or on the Pokégear's radio or map (or its phone), in a game that has a Pokégear, once it
+     * has the Radio Card. Offered on the radio itself; from the field it is accepted (it opens the Pokégear) without
+     * being offered. A game without a Pokégear ([GameState.pokegear] false: Platinum, which has the Pokétch) doesn't
+     * have the action at all: [Availability.NotInThisGame] on every screen, never listed.
      */
-    internal open fun tuneRadioAvailability(state: GameState): Availability {
+    protected open fun tuneRadioAvailability(state: GameState): Availability {
+        if (state.pokegear == false) return Availability.NotInThisGame("This game has no Pokégear (so no radio)")
         val screen = state.screen
         val radio = (screen as? Screen.Viewer)?.radio
         val onGear = screen is Screen.Viewer && screen.app in POKEGEAR_VIEWERS ||
             (screen as? Screen.ListMenu)?.kind == MenuKind.PHONE_CONTACTS
         val walking = FieldControl.inControl(state)
         if (!onGear && !walking) return Availability.Hidden
-        if (state.pokegear == false) {
-            return Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "This game has no Pokégear (so no radio)")
-        }
         if (state.player?.pokegearCards?.contains(PokegearCard.RADIO) == false) {
             return Availability.Unavailable(UnavailableReason.NOT_UNLOCKED_YET, "The Pokégear has no Radio Card yet", "the Goldenrod Radio Tower's quiz gives it")
         }

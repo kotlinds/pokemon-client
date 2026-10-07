@@ -23,19 +23,19 @@ abstract class BasicRecipes internal constructor() : RecipeBase() {
     // region Availability: when each action of this family can run (read by the listing and the execution alike)
 
     /** `press`: always (a raw button, like a human). */
-    internal open fun pressAvailability(state: GameState): Availability = Availability.Available()
+    protected open fun pressAvailability(state: GameState): Availability = Availability.Available()
 
     /** `touch`: always. */
-    internal open fun touchAvailability(state: GameState): Availability = Availability.Available()
+    protected open fun touchAvailability(state: GameState): Availability = Availability.Available()
 
     /** `wait`: always. */
-    internal open fun waitAvailability(state: GameState): Availability = Availability.Available()
+    protected open fun waitAvailability(state: GameState): Availability = Availability.Available()
 
     /** `drag`: always. */
-    internal open fun dragAvailability(state: GameState): Availability = Availability.Available()
+    protected open fun dragAvailability(state: GameState): Availability = Availability.Available()
 
     /** `advance_dialogue`: on a message, or an incoming call; accepted as a no-op on a choice. */
-    internal open fun advanceDialogueAvailability(state: GameState): Availability = when (val screen = state.screen) {
+    protected open fun advanceDialogueAvailability(state: GameState): Availability = when (val screen = state.screen) {
         is Screen.Dialogue, is Screen.PressToContinue -> Availability.Available()
         is Screen.Overworld -> if (screen.incomingCall?.answer != null) Availability.Available() else Availability.Hidden
         // Nothing to read: accepted as a no-op, so a chain like `press a` → `advance_dialogue` doesn't fail.
@@ -44,13 +44,13 @@ abstract class BasicRecipes internal constructor() : RecipeBase() {
     }
 
     /** `choose`: on any menu, its selectable entries. */
-    internal open fun chooseAvailability(state: GameState): Availability {
+    protected open fun chooseAvailability(state: GameState): Availability {
         val menu = state.screen as? Screen.Selectable ?: return Availability.Hidden
         return Availability.Available(mapOf("entry" to menu.entries.filter { it.selectable }.map { Choice(it.id, it.label) }))
     }
 
     /** `enter_text`: on the naming keyboard. */
-    internal open fun enterTextAvailability(state: GameState): Availability =
+    protected open fun enterTextAvailability(state: GameState): Availability =
         if (state.screen is Screen.Keyboard) Availability.Available() else Availability.Hidden
 
     // endregion

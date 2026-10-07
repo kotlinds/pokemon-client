@@ -23,11 +23,11 @@ abstract class BagPartyRecipes internal constructor() : BattleRecipes() {
     // region Availability: when each action of this family can run (read by the listing and the execution alike)
 
     /** `reorder_party`: in the field, with two Pokémon or more. */
-    internal open fun reorderPartyAvailability(state: GameState): Availability =
+    protected open fun reorderPartyAvailability(state: GameState): Availability =
         if (ActionConditions.inField(state) && state.party.size > 1) Availability.Available(mapOf("pokemon" to ActionConditions.monChoices(state))) else Availability.Hidden
 
     /** `take_item`: in the field, when a Pokémon holds an item. */
-    internal open fun takeItemAvailability(state: GameState): Availability {
+    protected open fun takeItemAvailability(state: GameState): Availability {
         val holders = state.party.filter { it.heldItem != null }
         return when {
             !ActionConditions.inField(state) -> Availability.Hidden
@@ -37,32 +37,32 @@ abstract class BagPartyRecipes internal constructor() : BattleRecipes() {
     }
 
     /** `give_item`: in the field. */
-    internal open fun giveItemAvailability(state: GameState): Availability =
+    protected open fun giveItemAvailability(state: GameState): Availability =
         if (ActionConditions.inField(state)) Availability.Available(mapOf("pokemon" to ActionConditions.monChoices(state))) else Availability.Hidden
 
     /** `use_item`: in the field, or from a battle's command menu that has a BAG. */
-    internal open fun useItemAvailability(state: GameState): Availability = when {
+    protected open fun useItemAvailability(state: GameState): Availability = when {
         state.battle != null -> if (ActionConditions.canUseItemInBattle(state)) Availability.Available(ActionConditions.itemChoices(state, inBattle = true)) else Availability.Hidden
         ActionConditions.inField(state) -> Availability.Available(ActionConditions.itemChoices(state, inBattle = false))
         else -> Availability.Hidden
     }
 
     /** `teach`: in the field, with a machine in the bag. */
-    internal open fun teachAvailability(state: GameState): Availability {
+    protected open fun teachAvailability(state: GameState): Availability {
         val machines = state.bag.orEmpty().firstOrNull { it.name == "tms_hms" }?.items.orEmpty()
         return if (!ActionConditions.inField(state) || machines.isEmpty()) Availability.Hidden
         else Availability.Available(mapOf("item" to machines.map { Choice("item:${it.item.id.value}", it.item.name) }, "pokemon" to ActionConditions.monChoices(state)))
     }
 
     /** `use_key_item`: in the field, with a key item in the bag. */
-    internal open fun useKeyItemAvailability(state: GameState): Availability {
+    protected open fun useKeyItemAvailability(state: GameState): Availability {
         val keys = state.bag.orEmpty().firstOrNull { it.name == "key_items" }?.items.orEmpty()
         return if (!ActionConditions.inField(state) || keys.isEmpty()) Availability.Hidden
         else Availability.Available(mapOf("item" to keys.map { Choice("item:${it.item.id.value}", it.item.name) }))
     }
 
     /** `register_item`: in the field, with a key item in the bag. */
-    internal open fun registerItemAvailability(state: GameState): Availability {
+    protected open fun registerItemAvailability(state: GameState): Availability {
         val keys = state.bag.orEmpty().firstOrNull { it.name == "key_items" }?.items.orEmpty()
         return if (!ActionConditions.inField(state) || keys.isEmpty()) Availability.Hidden
         else Availability.Available(mapOf("item" to keys.map { Choice("item:${it.item.id.value}", it.item.name + if (state.registeredItems.firstOrNull() == it.item.id) " (on Y)" else "") }))

@@ -24,7 +24,7 @@ object CommonActions {
     private val both = setOf(ActionMode.PURE, ActionMode.ASSISTED)
     private val assisted = setOf(ActionMode.ASSISTED)
 
-    val press = ActionDefinition(GameAction.Press::class, Recipes::pressAvailability, spec(
+    val press = ActionDefinition(GameAction.Press::class, Recipes.Conditions.press, spec(
         name = "press",
         description = "Press one button once, like a human (A confirms / talks / advances text, B cancels, X opens the menu, D-pad moves). " +
             "In the field, a D-pad press while facing another direction only turns the player (no step): to walk, use step.",
@@ -34,7 +34,7 @@ object CommonActions {
         enumerate = { Button.entries.map(GameAction::Press) },
     ))
 
-    val touch = ActionDefinition(GameAction.Touch::class, Recipes::touchAvailability, spec(
+    val touch = ActionDefinition(GameAction.Touch::class, Recipes.Conditions.touch, spec(
         name = "touch",
         description = "Touch the bottom (touch) screen at x (0-255), y (0-191) pixels of the bottom screen. On a screenshot of both " +
             "screens (256x384, the top screen first), the bottom screen's y is the screenshot's y minus 192.",
@@ -46,7 +46,7 @@ object CommonActions {
         parse = { GameAction.Touch(TouchPoint(int(it, "x", 0..255), int(it, "y", 0..191))) },
     ))
 
-    val wait = ActionDefinition(GameAction.Wait::class, Recipes::waitAvailability, spec(
+    val wait = ActionDefinition(GameAction.Wait::class, Recipes.Conditions.wait, spec(
         name = "wait",
         description = "Let the game run: a number of frames (60 per second), or until it waits for you again when omitted; " +
             "with until=change, until something changes on screen (new text, screen, cursor), at most `frames` (30 s by default).",
@@ -63,7 +63,7 @@ object CommonActions {
         enumerate = { listOf(GameAction.Wait()) },
     ))
 
-    val advanceDialogue = ActionDefinition(GameAction.AdvanceDialogue::class, Recipes::advanceDialogueAvailability, spec(
+    val advanceDialogue = ActionDefinition(GameAction.AdvanceDialogue::class, Recipes.Conditions.advanceDialogue, spec(
         name = "advance_dialogue",
         description = "Read the messages through to the end (every page is returned), stopping at the first choice (already on a choice: does nothing). When the phone rings (incoming_call), answers it first.",
         parameters = emptyList(),
@@ -72,7 +72,7 @@ object CommonActions {
         enumerate = { listOf(GameAction.AdvanceDialogue) },
     ))
 
-    val choose = ActionDefinition(GameAction.Choose::class, Recipes::chooseAvailability, spec(
+    val choose = ActionDefinition(GameAction.Choose::class, Recipes.Conditions.choose, spec(
         name = "choose",
         description = "Choose an entry of the menu on screen by its id (the cursor is moved and checked for you).",
         parameters = listOf(Parameter("entry", ParameterType.STRING, "Id of the entry, from the menu's entries.")),
@@ -81,7 +81,7 @@ object CommonActions {
         enumerate = { state -> (state.screen as? Screen.Selectable)?.entries?.filter { it.selectable }?.map { GameAction.Choose(it.id) }.orEmpty() },
     ))
 
-    val attack = ActionDefinition(GameAction.Attack::class, Recipes::attackAvailability, spec(
+    val attack = ActionDefinition(GameAction.Attack::class, Recipes.Conditions.attack, spec(
         name = "attack",
         description = "Use a move of the active Pokémon this turn (in double battles, also give the target).",
         parameters = listOf(
@@ -98,7 +98,7 @@ object CommonActions {
         },
     ))
 
-    val run = ActionDefinition(GameAction.Run::class, Recipes::runAvailability, spec(
+    val run = ActionDefinition(GameAction.Run::class, Recipes.Conditions.run, spec(
         name = "run",
         description = "Flee the wild battle.",
         parameters = emptyList(),
@@ -107,7 +107,7 @@ object CommonActions {
         enumerate = { listOf(GameAction.Run) },
     ))
 
-    val keepBattling = ActionDefinition(GameAction.KeepBattling::class, Recipes::keepBattlingAvailability, spec(
+    val keepBattling = ActionDefinition(GameAction.KeepBattling::class, Recipes.Conditions.keepBattling, spec(
         name = "keep_battling",
         description = "Keep your Pokémon in when the opponent is about to send in a new one (waits for the question if the messages before it still scroll).",
         parameters = emptyList(),
@@ -116,7 +116,7 @@ object CommonActions {
         enumerate = { listOf(GameAction.KeepBattling) },
     ))
 
-    val reorderParty = ActionDefinition(GameAction.ReorderParty::class, Recipes::reorderPartyAvailability, spec(
+    val reorderParty = ActionDefinition(GameAction.ReorderParty::class, Recipes.Conditions.reorderParty, spec(
         name = "reorder_party",
         description = "Move a Pokémon of your party to a position (1 = the lead, sent out first in battles): it swaps places with the Pokémon there. " +
             "Or give `order`, the whole new order at once.",
@@ -133,7 +133,7 @@ object CommonActions {
         parse = { json -> parseReorderParty(json) },
     ))
 
-    val takeItem = ActionDefinition(GameAction.TakeItem::class, Recipes::takeItemAvailability, spec(
+    val takeItem = ActionDefinition(GameAction.TakeItem::class, Recipes.Conditions.takeItem, spec(
         name = "take_item",
         description = "Take back the item held by a Pokémon.",
         parameters = listOf(Parameter("pokemon", ParameterType.STRING, "The Pokémon's id (mon:…).")),
@@ -141,7 +141,7 @@ object CommonActions {
         parse = { json -> GameAction.TakeItem(mon(json, "pokemon")) },
     ))
 
-    val giveItem = ActionDefinition(GameAction.GiveItem::class, Recipes::giveItemAvailability, spec(
+    val giveItem = ActionDefinition(GameAction.GiveItem::class, Recipes.Conditions.giveItem, spec(
         name = "give_item",
         description = "Give an item from the bag to a Pokémon to hold.",
         parameters = listOf(
@@ -152,7 +152,7 @@ object CommonActions {
         parse = { json -> GameAction.GiveItem(mon(json, "pokemon"), ItemRef(string(json, "item"))) },
     ))
 
-    val useItem = ActionDefinition(GameAction.UseItem::class, Recipes::useItemAvailability, spec(
+    val useItem = ActionDefinition(GameAction.UseItem::class, Recipes.Conditions.useItem, spec(
         name = "use_item",
         description = "Use an item from the bag, in the field or in battle (on a Pokémon when the item needs one: Potion, Revive, Rare Candy...; " +
             "give `move` for an Ether-like item). The battle pocket is found for you. In the field, `items` uses several items in one go.",
@@ -199,7 +199,7 @@ object CommonActions {
         json["move"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let(::MoveRef),
     )
 
-    val saveGame = ActionDefinition(GameAction.SaveGame::class, Recipes::saveGameAvailability, spec(
+    val saveGame = ActionDefinition(GameAction.SaveGame::class, Recipes.Conditions.saveGame, spec(
         name = "save_game",
         description = "Save the game (start menu → SAVE). Safe to do often.",
         parameters = emptyList(),
@@ -207,7 +207,7 @@ object CommonActions {
         parse = { GameAction.SaveGame },
     ))
 
-    val chooseStarter = ActionDefinition(GameAction.ChooseStarter::class, Recipes::chooseStarterAvailability, spec(
+    val chooseStarter = ActionDefinition(GameAction.ChooseStarter::class, Recipes.Conditions.chooseStarter, spec(
         name = "choose_starter",
         description = "Take one of the starters on the professor's machine, for good: turns the machine to its ball, looks at it, " +
             "picks it and confirms (each step checked on the machine's state).",
@@ -216,7 +216,7 @@ object CommonActions {
         parse = { json -> GameAction.ChooseStarter(string(json, "starter")) },
     ))
 
-    val softReset = ActionDefinition(GameAction.SoftReset::class, Recipes::softResetAvailability, spec(
+    val softReset = ActionDefinition(GameAction.SoftReset::class, Recipes.Conditions.softReset, spec(
         name = "soft_reset",
         description = "Restart the game (L+R+START+SELECT) and continue the saved game: everything since the last save is LOST " +
             "(retry a lost battle, a failed capture...). Not while the game saves.",
@@ -225,7 +225,7 @@ object CommonActions {
         parse = { GameAction.SoftReset },
     ))
 
-    val continueGame = ActionDefinition(GameAction.ContinueGame::class, Recipes::continueGameAvailability, spec(
+    val continueGame = ActionDefinition(GameAction.ContinueGame::class, Recipes.Conditions.continueGame, spec(
         name = "continue_game",
         description = "From the intro movie, the title screen or the main menu: go on to the main menu, pick CONTINUE and " +
             "wait until the saved game runs. Each screen is read before acting and each input checked (the title screen " +
@@ -235,7 +235,7 @@ object CommonActions {
         parse = { GameAction.ContinueGame },
     ))
 
-    val watchHallOfFame = ActionDefinition(GameAction.WatchHallOfFame::class, Recipes::watchHallOfFameAvailability, spec(
+    val watchHallOfFame = ActionDefinition(GameAction.WatchHallOfFame::class, Recipes.Conditions.watchHallOfFame, spec(
         name = "watch_hall_of_fame",
         description = "After beating the Champion: waits while the Hall of Fame presents each team member (progress " +
             "\"3/6 Pokémon presented, TYPHLOSION\"; presses during it are ignored by the game), presses A when the " +
@@ -282,7 +282,7 @@ object CommonActions {
         ),
     )
 
-    val goTo = ActionDefinition(GameAction.GoTo::class, Recipes::goToAvailability, spec(
+    val goTo = ActionDefinition(GameAction.GoTo::class, Recipes.Conditions.goTo, spec(
         name = "go_to",
         description = "Walk to a tile (x, y), or to a target: person:N, item:N, sign:N, hidden_item:N (next to it), warp:N or " +
             "hole:N (goes through), cart:N / teleport:N of the puzzle (rides it), exit:north|south|east|west (into the neighbouring map that way), a map's name " +
@@ -318,7 +318,7 @@ object CommonActions {
         },
     ))
 
-    val interact = ActionDefinition(GameAction.Interact::class, Recipes::interactAvailability, spec(
+    val interact = ActionDefinition(GameAction.Interact::class, Recipes.Conditions.interact, spec(
         name = "interact",
         description = "Walk next to a person, sign or item of this map, face it and press A (talk, read, pick up).",
         parameters = listOf(Parameter("target", ParameterType.STRING, "person:N, item:N (item ball), sign:N, hidden_item:N or examine:N (something invisible to examine).")),
@@ -326,7 +326,7 @@ object CommonActions {
         parse = { json -> GameAction.Interact(string(json, "target")) },
     ))
 
-    val step = ActionDefinition(GameAction.Step::class, Recipes::stepAvailability, spec(
+    val step = ActionDefinition(GameAction.Step::class, Recipes.Conditions.step, spec(
         name = "step",
         description = "Walk a few tiles straight in a direction (turning first if needed: no press is lost to the turn). " +
             "Stops early when the way is blocked (says where) or something happens (battle, trainer, script, the Repel wearing off: " +
@@ -346,7 +346,7 @@ object CommonActions {
         },
     ))
 
-    val findEncounter = ActionDefinition(GameAction.FindEncounter::class, Recipes::findEncounterAvailability, spec(
+    val findEncounter = ActionDefinition(GameAction.FindEncounter::class, Recipes.Conditions.findEncounter, spec(
         name = "find_encounter",
         description = "Walk to the nearest place of this map where wild Pokémon appear (tall grass, a cave's floor; the water while surfing) and pace there until one appears.",
         parameters = emptyList(),
@@ -354,7 +354,7 @@ object CommonActions {
         parse = { GameAction.FindEncounter },
     ))
 
-    val heal = ActionDefinition(GameAction.Heal::class, Recipes::healAvailability, spec(
+    val heal = ActionDefinition(GameAction.Heal::class, Recipes.Conditions.heal, spec(
         name = "heal",
         description = "Heal the party at the nurse of this Pokémon Center (walks to the counter, answers YES).",
         parameters = emptyList(),
@@ -362,7 +362,7 @@ object CommonActions {
         parse = { GameAction.Heal },
     ))
 
-    val deposit = ActionDefinition(GameAction.Deposit::class, Recipes::depositAvailability, spec(
+    val deposit = ActionDefinition(GameAction.Deposit::class, Recipes.Conditions.deposit, spec(
         name = "deposit",
         description = "Deposit a party Pokémon in the PC of this building (walks to the PC; first box with room).",
         parameters = listOf(Parameter("pokemon", ParameterType.STRING, "The Pokémon's id (mon:…).")),
@@ -370,7 +370,7 @@ object CommonActions {
         parse = { json -> GameAction.Deposit(mon(json, "pokemon")) },
     ))
 
-    val withdraw = ActionDefinition(GameAction.Withdraw::class, Recipes::withdrawAvailability, spec(
+    val withdraw = ActionDefinition(GameAction.Withdraw::class, Recipes.Conditions.withdraw, spec(
         name = "withdraw",
         description = "Take a Pokémon out of the PC of this building into the party (walks to the PC, finds its box).",
         parameters = listOf(Parameter("pokemon", ParameterType.STRING, "The stored Pokémon's id (mon:…).")),
@@ -378,7 +378,7 @@ object CommonActions {
         parse = { json -> GameAction.Withdraw(mon(json, "pokemon")) },
     ))
 
-    val pc = ActionDefinition(GameAction.Pc::class, Recipes::pcAvailability, spec(
+    val pc = ActionDefinition(GameAction.Pc::class, Recipes.Conditions.pc, spec(
         name = "pc",
         description = "Several PC storage operations in one session at the PC of this building (it stays on in between), in order: " +
             "{\"op\":\"deposit\",\"pokemon\":\"mon:…\",\"box\":2?}, {\"op\":\"withdraw\",\"pokemon\":\"mon:…\"}, " +
@@ -394,7 +394,7 @@ object CommonActions {
         parse = { json -> GameAction.Pc(pcOperations(json)) },
     ))
 
-    val buy = ActionDefinition(GameAction.Buy::class, Recipes::buyAvailability, spec(
+    val buy = ActionDefinition(GameAction.Buy::class, Recipes.Conditions.buy, spec(
         name = "buy",
         description = "Buy items at this Poké Mart in one visit to the counter (walks to the clerk who sells them, when a floor has " +
             "several; also works from the clerk's menu or the shop list): one `item` + `quantity`, or a list `items` of {item, quantity}. " +
@@ -413,7 +413,7 @@ object CommonActions {
         parse = { json -> GameAction.Buy(purchases(json)) },
     ))
 
-    val setQuantity = ActionDefinition(GameAction.SetQuantity::class, Recipes::setQuantityAvailability, spec(
+    val setQuantity = ActionDefinition(GameAction.SetQuantity::class, Recipes.Conditions.setQuantity, spec(
         name = "set_quantity",
         description = "On a quantity screen (shop, bag...): set the number (each press is read back), and confirm it with A when `confirm` is true.",
         parameters = listOf(
@@ -424,7 +424,7 @@ object CommonActions {
         parse = { json -> GameAction.SetQuantity(int(json, "value", 0..999), bool(json, "confirm")) },
     ))
 
-    val switch = ActionDefinition(GameAction.Switch::class, Recipes::switchAvailability, spec(
+    val switch = ActionDefinition(GameAction.Switch::class, Recipes.Conditions.switch, spec(
         name = "switch",
         description = "Send another Pokémon into battle (instead of attacking, or to replace a fainted one).",
         parameters = listOf(Parameter("pokemon", ParameterType.STRING, "The Pokémon's id (mon:…).")),
@@ -432,7 +432,7 @@ object CommonActions {
         parse = { json -> GameAction.Switch(mon(json, "pokemon")) },
     ))
 
-    val throwBall = ActionDefinition(GameAction.ThrowBall::class, Recipes::throwBallAvailability, spec(
+    val throwBall = ActionDefinition(GameAction.ThrowBall::class, Recipes.Conditions.throwBall, spec(
         name = "throw_ball",
         description = "Throw a Poké Ball at the wild Pokémon (wild battles only). Says how it ended: caught (then answers the " +
             "nickname question and goes on until the battle is over), broke free after N shakes, or missed.",
@@ -444,7 +444,7 @@ object CommonActions {
         parse = { json -> GameAction.ThrowBall(ItemRef(string(json, "ball")), json["nickname"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }) },
     ))
 
-    val learnMove = ActionDefinition(GameAction.LearnMove::class, Recipes::learnMoveAvailability, spec(
+    val learnMove = ActionDefinition(GameAction.LearnMove::class, Recipes.Conditions.learnMove, spec(
         name = "learn_move",
         description = "A Pokémon wants to learn a new move but knows four: forget one of them, or keep the old moves (no `forget`).",
         parameters = listOf(Parameter("forget", ParameterType.STRING, "The move to forget (id or name); omit to keep the old moves.", required = false)),
@@ -452,7 +452,7 @@ object CommonActions {
         parse = { json -> GameAction.LearnMove(json["forget"]?.jsonPrimitive?.contentOrNull?.let(::MoveRef)) },
     ))
 
-    val fish = ActionDefinition(GameAction.Fish::class, Recipes::fishAvailability, spec(
+    val fish = ActionDefinition(GameAction.Fish::class, Recipes.Conditions.fish, spec(
         name = "fish",
         description = "Cast a rod once towards the water you face (A is pressed exactly when something bites). Ends hooked (wild battle) or with nothing.",
         parameters = listOf(Parameter("rod", ParameterType.STRING, "The rod: its id or its name (Old Rod, Good Rod, Super Rod).")),
@@ -460,7 +460,7 @@ object CommonActions {
         parse = { json -> GameAction.Fish(ItemRef(string(json, "rod"))) },
     ))
 
-    val enterText = ActionDefinition(GameAction.EnterText::class, Recipes::enterTextAvailability, spec(
+    val enterText = ActionDefinition(GameAction.EnterText::class, Recipes.Conditions.enterText, spec(
         name = "enter_text",
         description = "Type a name on the naming keyboard (nickname, box name...): replaces what is there, then OK.",
         parameters = listOf(Parameter("text", ParameterType.STRING, "The text to type.")),
@@ -468,7 +468,7 @@ object CommonActions {
         parse = { json -> GameAction.EnterText(json["text"]?.jsonPrimitive?.contentOrNull ?: throw ActionException(ActionError.InvalidParameter("text", "missing"))) },
     ))
 
-    val teach = ActionDefinition(GameAction.Teach::class, Recipes::teachAvailability, spec(
+    val teach = ActionDefinition(GameAction.Teach::class, Recipes.Conditions.teach, spec(
         name = "teach",
         description = "Teach a TM / HM from the bag to a Pokémon (give `forget` when it already knows four moves).",
         parameters = listOf(
@@ -480,7 +480,7 @@ object CommonActions {
         parse = { json -> GameAction.Teach(ItemRef(string(json, "item")), mon(json, "pokemon"), json["forget"]?.jsonPrimitive?.contentOrNull?.let(::MoveRef)) },
     ))
 
-    val useKeyItem = ActionDefinition(GameAction.UseKeyItem::class, Recipes::useKeyItemAvailability, spec(
+    val useKeyItem = ActionDefinition(GameAction.UseKeyItem::class, Recipes.Conditions.useKeyItem, spec(
         name = "use_key_item",
         description = "Use a key item from the bag (Bicycle, Dowsing Machine, a rod...). Keys that work by interacting with what " +
             "they open or wake (Basement Key, Card Key, SquirtBottle) have no USE: interact instead.",
@@ -489,7 +489,7 @@ object CommonActions {
         parse = { json -> GameAction.UseKeyItem(ItemRef(string(json, "item"))) },
     ))
 
-    val registerItem = ActionDefinition(GameAction.RegisterItem::class, Recipes::registerItemAvailability, spec(
+    val registerItem = ActionDefinition(GameAction.RegisterItem::class, Recipes.Conditions.registerItem, spec(
         name = "register_item",
         description = "Register a key item you use often (Bicycle, rod...): the first registered item is then used with Y, the second with its touch button, without the bag.",
         parameters = listOf(Parameter("item", ParameterType.STRING, "The key item: its id or its name.")),
@@ -497,7 +497,7 @@ object CommonActions {
         parse = { json -> GameAction.RegisterItem(ItemRef(string(json, "item"))) },
     ))
 
-    val fly = ActionDefinition(GameAction.Fly::class, Recipes::flyAvailability, spec(
+    val fly = ActionDefinition(GameAction.Fly::class, Recipes.Conditions.fly, spec(
         name = "fly",
         description = "Fly to a town already visited (needs a Pokémon knowing Fly and its badge, on a map that allows it: listed as " +
             "unavailable where the map's own flag forbids it). In HGSS a town of the " +
@@ -507,7 +507,7 @@ object CommonActions {
         parse = { json -> GameAction.Fly(string(json, "destination")) },
     ))
 
-    val useFieldMove = ActionDefinition(GameAction.UseFieldMove::class, Recipes::useFieldMoveAvailability, spec(
+    val useFieldMove = ActionDefinition(GameAction.UseFieldMove::class, Recipes.Conditions.useFieldMove, spec(
         name = "use_field_move",
         description = "Use a field move outside battle in one call (Teleport, Dig, Flash, Sweet Scent, Milk Drink / Softboiled...): " +
             "a Pokémon of the party that knows it is picked for you (read by move id), then party menu → the Pokémon → the move, " +
@@ -532,7 +532,7 @@ object CommonActions {
         },
     ))
 
-    val setOptions = ActionDefinition(GameAction.SetOptions::class, Recipes::setOptionsAvailability, spec(
+    val setOptions = ActionDefinition(GameAction.SetOptions::class, Recipes.Conditions.setOptions, spec(
         name = "set_options",
         description = "Set the game's OPTIONS (start menu → OPTIONS): text speed, battle scene (animations), battle style; then CONFIRM. " +
             "Omitted settings stay as they are.",

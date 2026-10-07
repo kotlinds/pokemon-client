@@ -18,7 +18,7 @@ object PuzzleActions {
 
     private val assisted = setOf(ActionMode.ASSISTED)
 
-    val push = ActionDefinition(GameAction.Push::class, Recipes::pushAvailability, object : ActionSpec<GameAction.Push> {
+    val push = ActionDefinition(GameAction.Push::class, Recipes.Conditions.push, object : ActionSpec<GameAction.Push> {
         override val name = "push"
         override val description = "Push a Strength boulder: one tile towards `direction` (walks to its other side first), or, without a " +
             "direction, into its own hole (puzzle.boulder_holes, Ice Path B1F: it drops to the floor below, where it stops slides on " +

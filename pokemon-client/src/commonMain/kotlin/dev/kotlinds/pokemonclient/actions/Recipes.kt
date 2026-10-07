@@ -34,16 +34,22 @@ import dev.kotlinds.pokemonclient.state.sameAs
  * game overrides one only when the game itself differs, documented on the override (docs/adding-a-game.md,
  * "Overriding a condition"); the contract (names, parameters, ids, errors) never varies.
  *
+ * Public and open, with a public constructor: a game written outside this library (in its own project, before it is
+ * contributed) instantiates it or its own subclass (`object : Recipes() { override fun openParty(...) ... }`). What it
+ * may override is `protected open`: the recipes, the shared steps and the availability methods; none of them can be
+ * called from outside the chain, which is entered only through the registry ([ActionRegistry.execute]) and the
+ * context-taking entries of [RecipeBase].
+ *
  * The top of the chain of families ([BasicRecipes], [BattleRecipes], [BagPartyRecipes], [MoveRecipes],
  * [ServiceRecipes], [FieldRecipes]): it holds the recipes of the game as a whole (soft reset, continuing the saved
  * game, the starter, the Hall of Fame).
  */
-open class Recipes internal constructor() : FieldRecipes() {
+open class Recipes : FieldRecipes() {
 
     // region Availability: when each action of this family can run (read by the listing and the execution alike)
 
     /** `soft_reset`: anywhere but while the game saves by itself; accepted on the intro screens, not offered there. */
-    internal open fun softResetAvailability(state: GameState): Availability = when {
+    protected open fun softResetAvailability(state: GameState): Availability = when {
         state.screen is Screen.Intro -> Availability.Available(listed = false)
         // The game refuses the reset while it saves by itself (after the Hall of Fame).
         (state.screen as? Screen.Animation)?.kind == AnimationKind.SAVING -> Availability.Hidden
@@ -51,17 +57,17 @@ open class Recipes internal constructor() : FieldRecipes() {
     }
 
     /** `continue_game`: on the intro movie, the title screen, the main menu or the loading between them. */
-    internal open fun continueGameAvailability(state: GameState): Availability =
+    protected open fun continueGameAvailability(state: GameState): Availability =
         if (ActionConditions.beforeTheGame(state)) Availability.Available() else Availability.Hidden
 
     /** `choose_starter`: on the professor's machine, its starters. */
-    internal open fun chooseStarterAvailability(state: GameState): Availability {
+    protected open fun chooseStarterAvailability(state: GameState): Availability {
         val screen = state.screen as? Screen.StarterChoice ?: return Availability.Hidden
         return Availability.Available(mapOf("starter" to screen.starters.map { Choice("species:${it.id.value}", it.name) }))
     }
 
     /** `watch_hall_of_fame`: on the registration in the Hall of Fame, or the save after it. */
-    internal open fun watchHallOfFameAvailability(state: GameState): Availability =
+    protected open fun watchHallOfFameAvailability(state: GameState): Availability =
         if (ActionConditions.hallOfFameOffered(state)) Availability.Available() else Availability.Hidden
 
     // endregion
@@ -292,6 +298,59 @@ open class Recipes internal constructor() : FieldRecipes() {
         "The team (${team.joinToString()}) is in the Hall of Fame."
 
     // endregion
+
+    /**
+     * The availability methods (`<action>Availability`, `protected`: a game overrides them, nobody else calls them) as
+     * the action definitions hold them ([ActionDefinition.availability], [CommonActions]...): the module's only way to
+     * read them, always on the recipes of the game given to the registry. Each entry is a reference to the method
+     * itself (a virtual call: the game's override when it has one), never a wrapper with logic of its own.
+     */
+    internal object Conditions {
+        val press: (Recipes, GameState) -> Availability = Recipes::pressAvailability
+        val touch: (Recipes, GameState) -> Availability = Recipes::touchAvailability
+        val wait: (Recipes, GameState) -> Availability = Recipes::waitAvailability
+        val drag: (Recipes, GameState) -> Availability = Recipes::dragAvailability
+        val advanceDialogue: (Recipes, GameState) -> Availability = Recipes::advanceDialogueAvailability
+        val choose: (Recipes, GameState) -> Availability = Recipes::chooseAvailability
+        val enterText: (Recipes, GameState) -> Availability = Recipes::enterTextAvailability
+        val attack: (Recipes, GameState) -> Availability = Recipes::attackAvailability
+        val switch: (Recipes, GameState) -> Availability = Recipes::switchAvailability
+        val keepBattling: (Recipes, GameState) -> Availability = Recipes::keepBattlingAvailability
+        val run: (Recipes, GameState) -> Availability = Recipes::runAvailability
+        val throwBall: (Recipes, GameState) -> Availability = Recipes::throwBallAvailability
+        val learnMove: (Recipes, GameState) -> Availability = Recipes::learnMoveAvailability
+        val useItem: (Recipes, GameState) -> Availability = Recipes::useItemAvailability
+        val teach: (Recipes, GameState) -> Availability = Recipes::teachAvailability
+        val reorderParty: (Recipes, GameState) -> Availability = Recipes::reorderPartyAvailability
+        val giveItem: (Recipes, GameState) -> Availability = Recipes::giveItemAvailability
+        val takeItem: (Recipes, GameState) -> Availability = Recipes::takeItemAvailability
+        val useKeyItem: (Recipes, GameState) -> Availability = Recipes::useKeyItemAvailability
+        val registerItem: (Recipes, GameState) -> Availability = Recipes::registerItemAvailability
+        val goTo: (Recipes, GameState) -> Availability = Recipes::goToAvailability
+        val interact: (Recipes, GameState) -> Availability = Recipes::interactAvailability
+        val step: (Recipes, GameState) -> Availability = Recipes::stepAvailability
+        val findEncounter: (Recipes, GameState) -> Availability = Recipes::findEncounterAvailability
+        val push: (Recipes, GameState) -> Availability = Recipes::pushAvailability
+        val heal: (Recipes, GameState) -> Availability = Recipes::healAvailability
+        val pc: (Recipes, GameState) -> Availability = Recipes::pcAvailability
+        val deposit: (Recipes, GameState) -> Availability = Recipes::depositAvailability
+        val withdraw: (Recipes, GameState) -> Availability = Recipes::withdrawAvailability
+        val release: (Recipes, GameState) -> Availability = Recipes::releaseAvailability
+        val buy: (Recipes, GameState) -> Availability = Recipes::buyAvailability
+        val sell: (Recipes, GameState) -> Availability = Recipes::sellAvailability
+        val setQuantity: (Recipes, GameState) -> Availability = Recipes::setQuantityAvailability
+        val fly: (Recipes, GameState) -> Availability = Recipes::flyAvailability
+        val fish: (Recipes, GameState) -> Availability = Recipes::fishAvailability
+        val useFieldMove: (Recipes, GameState) -> Availability = Recipes::useFieldMoveAvailability
+        val saveGame: (Recipes, GameState) -> Availability = Recipes::saveGameAvailability
+        val setOptions: (Recipes, GameState) -> Availability = Recipes::setOptionsAvailability
+        val openMenu: (Recipes, GameState) -> Availability = Recipes::openMenuAvailability
+        val tuneRadio: (Recipes, GameState) -> Availability = Recipes::tuneRadioAvailability
+        val softReset: (Recipes, GameState) -> Availability = Recipes::softResetAvailability
+        val continueGame: (Recipes, GameState) -> Availability = Recipes::continueGameAvailability
+        val chooseStarter: (Recipes, GameState) -> Availability = Recipes::chooseStarterAvailability
+        val watchHallOfFame: (Recipes, GameState) -> Availability = Recipes::watchHallOfFameAvailability
+    }
 
     private companion object {
         /** The soft reset of the DS Pokémon games: L + R + START + SELECT held together (src/main.c main loop). */

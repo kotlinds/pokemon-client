@@ -40,9 +40,9 @@ data class GameState(
     val startMenu: Set<StartMenuFeature>? = null,
     /**
      * Whether this game has a Pokégear (the phone, map and radio of HeartGold / SoulSilver): false for a game without
-     * one (Platinum has a Pokétch instead), whose Pokégear actions (`tune_radio`) are then refused as
-     * NOT_SUPPORTED_BY_GAME; null when unknown (a state built without its game: taken as present). Which cards it has
-     * is [PlayerInfo.pokegearCards].
+     * one (Platinum has a Pokétch instead), whose Pokégear actions (`tune_radio`) then don't exist (never listed, refused
+     * as NOT_SUPPORTED_BY_GAME: [dev.kotlinds.pokemonclient.actions.Availability.NotInThisGame]); null when unknown (a
+     * state built without its game: taken as present). Which cards it has is [PlayerInfo.pokegearCards].
      */
     val pokegear: Boolean? = null,
     /**

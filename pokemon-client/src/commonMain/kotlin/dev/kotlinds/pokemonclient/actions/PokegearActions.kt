@@ -24,7 +24,7 @@ object PokegearActions {
 
     private val assisted = setOf(ActionMode.ASSISTED)
 
-    val tuneRadio = ActionDefinition(TuneRadio::class, Recipes::tuneRadioAvailability, object : ActionSpec<TuneRadio> {
+    val tuneRadio = ActionDefinition(TuneRadio::class, Recipes.Conditions.tuneRadio, object : ActionSpec<TuneRadio> {
         override val name = "tune_radio"
         override val description = "Tune the Pokégear radio to a station (opens the Pokégear and its radio from the field " +
             "or another Pokégear app, touches the preset button or drags the dial's cursor onto the channel, checks the " +

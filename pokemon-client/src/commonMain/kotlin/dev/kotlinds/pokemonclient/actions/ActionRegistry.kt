@@ -29,7 +29,8 @@ class ActionDefinition<A : GameAction> internal constructor(
     val type: KClass<A>,
     /**
      * When the action can run, and with which parameter values: the one method of the game's recipes for this action
-     * (`Recipes::<action>Availability`, the common rule unless the game overrides it). The single entry point: the
+     * (`Recipes::<action>Availability`, `protected`, so held through [Recipes.Conditions]; the common rule unless the
+     * game overrides it). The single entry point: the
      * listing ([ActionRegistry.available], [ActionRegistry.unavailable], [ActionRegistry.enumerate]) and the execution
      * ([ActionRegistry.execute]) both read it, on the same game's recipes, so an action is never listed but refused, or
      * accepted but not listed (other than an explicit [Availability.Available.listed] = false).
@@ -70,7 +71,10 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
             (listedAvailability(def, state, game.recipes) as? Availability.Available)?.takeIf { it.listed }?.let { AvailableAction(def.spec.name, def.spec.description, it.choices) }
         }
 
-    /** Actions of [mode] shown but not usable now in [game], with the reason (e.g. "nobody knows Fly"). */
+    /**
+     * Actions of [mode] shown but not usable now in [game], with the reason (e.g. "nobody knows Fly"). Neither an action
+     * meaningless on this screen ([Availability.Hidden]) nor one the game doesn't have ([Availability.NotInThisGame]).
+     */
     fun unavailable(state: GameState, mode: ActionMode, game: PokemonGame): List<UnavailableAction> = definitions
         .filter { mode in it.spec.modes }
         .mapNotNull { def ->
@@ -123,7 +127,9 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
     /**
      * Executes [action] with the console leased to [scope]: checks it is available now, runs [game]'s recipe for it
      * ([dev.kotlinds.pokemonclient.PokemonGame.recipes], [RecipeBase.perform]), and reports interruptions (a battle
-     * starting, the human taking over...) as typed errors. [settings]: what the application lets the recipes do by
+     * starting, the human taking over...) as typed errors. A refusal presses nothing: [Availability.Unavailable] with its
+     * reason, [Availability.Hidden] as [UnavailableReason.WRONG_SCREEN], [Availability.NotInThisGame] as
+     * [UnavailableReason.NOT_SUPPORTED_BY_GAME]. [settings]: what the application lets the recipes do by
      * themselves (solve movement puzzles, use hidden knowledge).
      */
     fun execute(action: GameAction, scope: ActionScope, game: PokemonGame, settings: ActionSettings = ActionSettings()): ActionOutcome {
@@ -137,6 +143,8 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
                 return ActionOutcome.Failed(ActionError.Unavailable(availability.reason, availability.detail, hint))
             }
             Availability.Hidden -> return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "${def.spec.name} isn't possible on this screen"))
+            // Not a screen to wait for: the game doesn't have the action at all.
+            is Availability.NotInThisGame -> return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, availability.detail))
             is Availability.Available -> Unit
         }
         return try {
@@ -198,12 +206,13 @@ class ActionRegistry private constructor(private val definitions: List<ActionDef
      * never presses a button): the screen the action needs is often only a few frames away (NOTES: `reorder_party`
      * refused on "overworld, awaiting animation" right after BATTLE_WON, accepted when retried a second later). An
      * action available at once runs at once (advance_dialogue while text prints...); one still refused after settling
-     * is refused for real.
+     * is refused for real. An action the game doesn't have ([Availability.NotInThisGame]) is refused at once: no screen
+     * would change that.
      */
     internal fun availabilityToRun(def: ActionDefinition<*>, context: PlanContext): Availability {
         val now = context.state()
         val availability = def.availability(context.recipes, now)
-        if (availability is Availability.Available || now.screen.awaiting == Awaiting.INPUT) return availability
+        if (availability is Availability.Available || availability is Availability.NotInThisGame || now.screen.awaiting == Awaiting.INPUT) return availability
         return def.availability(context.recipes, context.navigator.settle())
     }
 

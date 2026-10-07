@@ -114,6 +114,7 @@ class AvailabilityTest {
         "yes / no" to state(yesNo("Sure?")),
         "keyboard" to state(Screen.Keyboard("pokemon", "upper", "", 10, listOf(Entry("option:ok", "OK")), Cursor.At(0), Topology.vertical(1))),
         "wild battle" to state(command, field = false, battle = battle(BattleKind.WILD)),
+        "wild battle, no Pokégear" to state(command, field = false, battle = battle(BattleKind.WILD)).copy(pokegear = false),
         "trainer battle" to state(command, field = false, battle = battle(BattleKind.TRAINER)),
         "title screen" to state(Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.INPUT), field = false, player = null),
     )
@@ -125,8 +126,9 @@ class AvailabilityTest {
     /**
      * For every action type and every state above, in each mode: the listing places the action exactly where the
      * availability the execution checks says (available and listed, unavailable with the same reason, or not listed:
-     * hidden, or accepted without being offered), and the execution refuses exactly what isn't available, with the
-     * listed reason, before pressing anything.
+     * hidden, not in this game, or accepted without being offered), and the execution refuses exactly what isn't
+     * available, before pressing anything: with the listed reason, as a wrong screen when hidden, as not supported by
+     * the game (with its detail) when the game doesn't have the action.
      */
     @Test
     fun theListingAndTheExecutionAgreeForEveryActionAndState() {
@@ -149,9 +151,19 @@ class AvailabilityTest {
                         assertEquals(toRun.reason, unavailable[action]?.reason, where)
                     }
                     Availability.Hidden -> assertTrue(action !in available && action !in unavailable, where)
+                    is Availability.NotInThisGame -> assertTrue(action !in available && action !in unavailable, where)
                 }
                 // Nothing enumerated that the execution would refuse.
                 if (def.type in enumerated) assertIs<Availability.Available>(toRun, where)
+                // What isn't listed at all is refused too, each with its own reason.
+                val sample = sample(action) ?: continue
+                val expected = when (toRun) {
+                    Availability.Hidden -> UnavailableReason.WRONG_SCREEN to "$action isn't possible on this screen"
+                    is Availability.NotInThisGame -> UnavailableReason.NOT_SUPPORTED_BY_GAME to toRun.detail
+                    else -> continue
+                }
+                val refused = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(sample, game.scope(), game), where).error, where)
+                assertEquals(expected, refused.reason to refused.detail, where)
             }
             // The execution refuses what isn't available, with the listed reason, without a press.
             for ((action, listed) in unavailable) {
@@ -192,6 +204,52 @@ class AvailabilityTest {
             Availability.Unavailable(UnavailableReason.NOT_SUPPORTED_BY_GAME, "this game saves elsewhere")
     }
 
+    /** A game without a save menu at all (its own `saveGameAvailability`): the action doesn't exist in it. */
+    private class NoSaveMenuRecipes : Recipes() {
+        /** Test game: this "game" has no way to save (an override, documented as every override must be). */
+        override fun saveGameAvailability(state: GameState): Availability = Availability.NotInThisGame("this game can't be saved")
+    }
+
+    /**
+     * An action a game doesn't have ([Availability.NotInThisGame], here its own override) is listed nowhere and refused
+     * as not supported by the game, with its detail, before any press; another game keeps the common rule.
+     */
+    @Test
+    fun anActionNotInTheGameIsNeverListedAndRefusedAsNotSupported() {
+        val walking = state(overworld)
+        val game = game(walking, NoSaveMenuRecipes())
+        assertTrue(registry.available(walking, ActionMode.ASSISTED, game).none { it.name == "save_game" })
+        assertTrue(registry.unavailable(walking, ActionMode.ASSISTED, game).none { it.name == "save_game" })
+        assertTrue(registry.enumerate(walking, ActionMode.ASSISTED, game).values.none { it is GameAction.SaveGame })
+        val refused = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(GameAction.SaveGame, game.scope(), game)).error)
+        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME to "this game can't be saved", refused.reason to refused.detail)
+        assertTrue(game.presses.isEmpty() && game.touches.isEmpty())
+        assertTrue(registry.available(walking, ActionMode.ASSISTED, game(walking)).any { it.name == "save_game" })
+    }
+
+    /**
+     * Not in this game is not to be confused with hidden: refused at once, even while the game is busy (nothing to
+     * settle for: no frame runs), where a hidden action waits for the game to settle and is refused as a wrong screen.
+     */
+    @Test
+    fun anActionNotInTheGameIsRefusedAtOnceAndAHiddenOneAsAWrongScreen() {
+        val busy = state(Screen.Overworld(awaiting = Awaiting.ANIMATION))
+        val game = game(busy, NoSaveMenuRecipes())
+        val scope = game.scope()
+        val refused = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(GameAction.SaveGame, scope, game)).error)
+        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME, refused.reason)
+        assertEquals(0L, scope.framesUsed, "refused without letting the game run")
+
+        // Hidden (run outside a battle): unchanged, a wrong screen, not listed either.
+        val walking = state(overworld)
+        val common = game(walking)
+        assertEquals(Availability.Hidden, registry.availabilityToRun(CommonActions.run, common.context()))
+        assertTrue(registry.unavailable(walking, ActionMode.ASSISTED, common).none { it.name == "run" })
+        val wrong = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(GameAction.Run, common.scope(), common)).error)
+        assertEquals(UnavailableReason.WRONG_SCREEN, wrong.reason)
+        assertTrue(common.presses.isEmpty())
+    }
+
     /** A game's own condition is applied by the listing and by the execution; other games keep the common one. */
     @Test
     fun aGamesOwnConditionIsAppliedByTheListingAndTheExecutionForThatGameOnly() {
@@ -210,18 +268,25 @@ class AvailabilityTest {
     }
 
     /**
-     * `tune_radio` in a game without a Pokégear (the state says so, [GameState.pokegear]: Platinum) is refused, typed,
-     * by the listing and the execution alike (it was accepted while not listed); in a game with one, it is accepted
-     * from the field (opening the Pokégear) and offered on the radio.
+     * `tune_radio` in a game without a Pokégear (the state says so, [GameState.pokegear]: Platinum) doesn't exist
+     * ([Availability.NotInThisGame]): listed nowhere, on any screen, and refused by the execution as not supported by
+     * the game (never as a wrong screen, even in a battle), before any press; in a game with one, it is accepted from
+     * the field (opening the Pokégear) and offered on the radio.
      */
     @Test
-    fun tuneRadioIsRefusedWithoutAPokegearAndAcceptedWithOne() {
-        val noGear = state(overworld, player = null).copy(pokegear = false)
-        val platinumLike = game(noGear)
-        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME, registry.unavailable(noGear, ActionMode.ASSISTED, platinumLike).single { it.name == "tune_radio" }.reason)
-        val refused = assertIs<ActionOutcome.Failed>(registry.execute(TuneRadio(RadioStation.POKE_FLUTE), platinumLike.scope(), platinumLike))
-        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME, assertIs<ActionError.Unavailable>(refused.error).reason)
-        assertTrue(platinumLike.presses.isEmpty() && platinumLike.touches.isEmpty())
+    fun tuneRadioDoesntExistWithoutAPokegearAndIsAcceptedWithOne() {
+        for (noGear in listOf(state(overworld, player = null), state(command, field = false, battle = battle(BattleKind.WILD))).map { it.copy(pokegear = false) }) {
+            val platinumLike = game(noGear)
+            val where = noGear.screen::class.simpleName
+            assertTrue(registry.unavailable(noGear, ActionMode.ASSISTED, platinumLike).none { it.name == "tune_radio" }, where)
+            assertTrue(registry.available(noGear, ActionMode.ASSISTED, platinumLike).none { it.name == "tune_radio" }, where)
+            assertTrue(registry.enumerate(noGear, ActionMode.ASSISTED, platinumLike).values.none { it is TuneRadio }, where)
+            val refused = assertIs<ActionOutcome.Failed>(registry.execute(TuneRadio(RadioStation.POKE_FLUTE), platinumLike.scope(), platinumLike), where)
+            val error = assertIs<ActionError.Unavailable>(refused.error, where)
+            assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME, error.reason, where)
+            assertEquals("This game has no Pokégear (so no radio)", error.detail, where)
+            assertTrue(platinumLike.presses.isEmpty() && platinumLike.touches.isEmpty(), where)
+        }
 
         // A game with a Pokégear and its Radio Card: accepted from the field (not offered there), offered on the radio.
         val walking = state(overworld).copy(pokegear = true)
@@ -241,11 +306,14 @@ class AvailabilityTest {
         val platinum = PlatinumGame(PlatinumVersion.PLATINUM_US)
         val bedroom = platinum.state(PlatinumFixtures.load("pt_bedroom"))
         assertEquals(false, bedroom.pokegear)
-        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME, registry.unavailable(bedroom, ActionMode.ASSISTED, platinum).single { it.name == "tune_radio" }.reason)
-        // Executed with Platinum's own recipes on its state: refused before any press.
+        // Platinum has no Pokégear: tune_radio is listed nowhere (not even unavailable).
+        assertTrue(registry.unavailable(bedroom, ActionMode.ASSISTED, platinum).none { it.name == "tune_radio" })
+        assertTrue(registry.available(bedroom, ActionMode.ASSISTED, platinum).none { it.name == "tune_radio" })
+        // Executed with Platinum's own recipes on its state: refused as not supported by the game, before any press.
         val played = FakeGame(bedroom.screen, state = { bedroom.copy(screen = it) }).also { it.recipes = platinum.recipes }
-        val refused = assertIs<ActionOutcome.Failed>(registry.execute(TuneRadio(RadioStation.POKE_FLUTE), played.scope(), played))
-        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME, assertIs<ActionError.Unavailable>(refused.error).reason)
+        val refused = assertIs<ActionError.Unavailable>(assertIs<ActionOutcome.Failed>(registry.execute(TuneRadio(RadioStation.POKE_FLUTE), played.scope(), played)).error)
+        assertEquals(UnavailableReason.NOT_SUPPORTED_BY_GAME, refused.reason)
+        assertEquals("This game has no Pokégear (so no radio)", refused.detail)
         assertTrue(played.presses.isEmpty() && played.touches.isEmpty())
 
         val hgss = HgssGame(HgssVersion.HEARTGOLD_US)

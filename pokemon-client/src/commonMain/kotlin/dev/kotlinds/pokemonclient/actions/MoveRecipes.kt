@@ -40,23 +40,23 @@ abstract class MoveRecipes internal constructor() : BagPartyRecipes() {
     // region Availability: when each action of this family can run (read by the listing and the execution alike)
 
     /** `go_to`: walking freely ([ActionConditions.canWalk]), the map's people, items and signs as targets. */
-    internal open fun goToAvailability(state: GameState): Availability =
+    protected open fun goToAvailability(state: GameState): Availability =
         if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to ActionConditions.targetChoices(state))) else Availability.Hidden
 
     /** `interact`: walking freely, the map's people, items and signs as targets. */
-    internal open fun interactAvailability(state: GameState): Availability =
+    protected open fun interactAvailability(state: GameState): Availability =
         if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available(mapOf("target" to ActionConditions.targetChoices(state))) else Availability.Hidden
 
     /** `step`: walking freely. */
-    internal open fun stepAvailability(state: GameState): Availability =
+    protected open fun stepAvailability(state: GameState): Availability =
         if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden
 
     /** `find_encounter`: walking freely. */
-    internal open fun findEncounterAvailability(state: GameState): Availability =
+    protected open fun findEncounterAvailability(state: GameState): Availability =
         if (ActionConditions.canWalk(state, hasWorld = true)) Availability.Available() else Availability.Hidden
 
     /** `push`: walking freely on a map with Strength boulders (their holes said, Ice Path B1F). */
-    internal open fun pushAvailability(state: GameState): Availability {
+    protected open fun pushAvailability(state: GameState): Availability {
         if (!ActionConditions.canWalk(state, hasWorld = true)) return Availability.Hidden
         val field = state.field ?: return Availability.Hidden
         val holes = field.puzzle?.boulderHoles.orEmpty().filter { !it.fallen }.associateBy { it.boulder }
