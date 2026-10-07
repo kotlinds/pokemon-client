@@ -60,7 +60,7 @@ class ServicesRecipesTest {
                 else -> screen
             }
         }
-        val done = assertIs<ActionOutcome.Done>(FieldPlans.heal.run(GameAction.Heal, ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.heal(GameAction.Heal, ui.context()))
         assertEquals("party healed", done.detail)
         assertTrue(ui.party.all { it.hp == it.maxHp })
     }
@@ -78,8 +78,8 @@ class ServicesRecipesTest {
 
     /**
      * A game's own `interact` ([dev.kotlinds.pokemonclient.PokemonGame.recipes], a subclass overriding it) is played
-     * by the recipes that talk to someone as one of their steps (`heal` to the nurse, `buy` to the clerk:
-     * [PlanContext.run]), not only when the agent calls `interact` itself; without it, the common one (the other heal
+     * by the recipes that talk to someone as one of their steps (`heal` to the nurse, `buy` to the clerk: a virtual
+     * call of [RecipeBase.interact]), not only when the agent calls `interact` itself; without it, the common one (the other heal
      * and buy tests). The guard against delegating recipes (`by`), whose nested calls would skip the override.
      */
     @Test
@@ -103,7 +103,7 @@ class ServicesRecipesTest {
             }
         }
         center.game.recipes = ownInteract
-        assertEquals("party healed", assertIs<ActionOutcome.Done>(FieldPlans.heal.run(GameAction.Heal, center.context())).detail)
+        assertEquals("party healed", assertIs<ActionOutcome.Done>(center.game.recipes.heal(GameAction.Heal, center.context())).detail)
         assertEquals(listOf("person:0"), talked)
         // buy: a clerk whose catalog isn't known (talked to, the list read on screen).
         val clerk = FieldObject("person:4", "shop clerk", FieldObjectKind.PERSON, 1, 0, Direction.SOUTH, role = PersonRole.CLERK)
@@ -125,7 +125,7 @@ class ServicesRecipesTest {
         // The same counter in a game without override: the common interact, never the other game's.
         center.party = listOf(mon(1, hp = 5))
         center.game.recipes = Recipes.COMMON
-        assertEquals("party healed", assertIs<ActionOutcome.Done>(FieldPlans.heal.run(GameAction.Heal, center.context())).detail)
+        assertEquals("party healed", assertIs<ActionOutcome.Done>(center.game.recipes.heal(GameAction.Heal, center.context())).detail)
         assertEquals(listOf("person:0", "person:4"), talked)
     }
 
@@ -133,7 +133,7 @@ class ServicesRecipesTest {
     fun healWithoutANurseIsRefusedAtOnce() {
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1, hp = 5)), world = world(3, 3))
         ui.field = field(1, 1, Direction.NORTH)
-        val failed = assertIs<ActionOutcome.Failed>(FieldPlans.heal.run(GameAction.Heal, ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.heal(GameAction.Heal, ui.context()))
         assertEquals(UnavailableReason.WRONG_SCREEN, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -192,19 +192,19 @@ class ServicesRecipesTest {
         )
         fun shop() = ScriptedUi(list, party = listOf(mon(1))).also { it.money = 2000 }
         val ui = shop()
-        val listed = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        val listed = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), ui.context()))
         assertEquals("nothing bought; sold here: item:2 (HYPER BALL, ₽1200), item:17 (POTION, ₽300)", listed.detail)
         val choices = ActionRegistry.of().available(ui.game.state(list), ActionMode.ASSISTED).single { it.name == "buy" }.choices.getValue("item")
         assertEquals(listOf("item:2" to "HYPER BALL ₽1200", "item:17" to "POTION ₽300"), choices.map { it.value to it.label })
         // The price of the data, not of the label: 2 × 1200 > 2000, refused by id and by the game's name alike.
         for (asked in listOf("item:2", "hyper ball")) {
             val at = shop()
-            val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef(asked), 2))), at.context()), asked)
+            val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef(asked), 2))), at.context()), asked)
             assertEquals(UnavailableReason.NOT_ENOUGH_MONEY, assertIs<ActionError.Unavailable>(failed.error).reason, asked)
             assertTrue(Button.A !in at.game.presses, asked)
         }
         // The English name isn't this game's: refused with the ids and the game's names.
-        val unknown = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("Ultra Ball"), 1))), shop().context()))
+        val unknown = assertIs<ActionOutcome.Failed>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef("Ultra Ball"), 1))), shop().context()))
         assertEquals(listOf("item:2 (HYPER BALL, ₽1200)", "item:17 (POTION, ₽300)"), assertIs<ActionError.InvalidParameter>(unknown.error).allowed)
     }
 
@@ -239,7 +239,7 @@ class ServicesRecipesTest {
     @Test
     fun aPokeathlonShopIsPaidInAthletePointsOneOfEach() {
         val ui = pokeathlonUi()
-        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("item:50"), 1))), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef("item:50"), 1))), ui.context()))
         assertEquals("bought 1 Rare Candy (2000 athlete points), 500 athlete points left", done.detail)
         assertTrue(ui.game.presses.none { it == Button.UP || it == Button.RIGHT }, "no quantity to set")
         assertEquals(72178, ui.money, "the money isn't touched")
@@ -247,7 +247,7 @@ class ServicesRecipesTest {
 
     @Test
     fun aPokeathlonShopRefusesWhatIsSoldOutTooDearOrMoreThanOne() {
-        val listed = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), pokeathlonUi().context()))
+        val listed = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), pokeathlonUi().context()))
         assertEquals(
             "nothing bought; sold here: item:485 (Red Apricorn, 200 athlete points, sold out), item:81 (Moon Stone, 3000 athlete points), item:50 (Rare Candy, 2000 athlete points)",
             listed.detail,
@@ -258,7 +258,7 @@ class ServicesRecipesTest {
         // Each refused before anything is chosen (a fresh counter each time: a refusal leaves the list).
         fun refused(item: String, quantity: Int): ActionError {
             val at = pokeathlonUi()
-            val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef(item), quantity))), at.context()), item)
+            val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef(item), quantity))), at.context()), item)
             assertTrue(Button.A !in at.game.presses, item)
             return failed.error
         }
@@ -279,7 +279,7 @@ class ServicesRecipesTest {
         )
         for (action in listOf(GameAction.Buy(emptyList()), GameAction.Buy(listOf(Purchase(ItemRef("item:1"), 1))))) {
             val ui = ScriptedUi(seals, party = listOf(mon(1)))
-            val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(action, ui.context()), action.toString())
+            val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.buy(action, ui.context()), action.toString())
             assertEquals(UnavailableReason.GOODS_NOT_ITEMS, assertIs<ActionError.Unavailable>(failed.error).reason)
             assertTrue(Button.A !in ui.game.presses)
         }
@@ -288,7 +288,7 @@ class ServicesRecipesTest {
     @Test
     fun buySetsTheQuantityConfirmsAndChecksTheBagAndTheMoney() {
         val ui = shopUi(money = 20000)
-        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("Ultra Ball"), 12))), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef("Ultra Ball"), 12))), ui.context()))
         assertEquals("bought 12 Ultra Ball (₽14400), ₽5600 left", done.detail)
         // ±10 first, then ±1: RIGHT, UP (1 → 11 → 12).
         assertEquals(listOf(Button.RIGHT, Button.UP), ui.game.presses.filter { it == Button.RIGHT || it == Button.UP })
@@ -298,7 +298,7 @@ class ServicesRecipesTest {
     @Test
     fun aPurchaseTheMoneyCantPayIsRefusedBeforeChoosingAnything() {
         val ui = shopUi(money = 2000)
-        val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("item:2"), 2))), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef("item:2"), 2))), ui.context()))
         assertEquals(UnavailableReason.NOT_ENOUGH_MONEY, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(Button.A !in ui.game.presses)
         assertEquals(2000, ui.money)
@@ -307,7 +307,7 @@ class ServicesRecipesTest {
     @Test
     fun buyWithoutAnItemListsTheShopListAndBuysNothing() {
         val ui = shopUi(money = 20000)
-        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), ui.context()))
         assertEquals("nothing bought; sold here: item:2 (Ultra Ball, ₽1200)", done.detail)
         assertTrue(Button.A !in ui.game.presses)
         assertEquals(20000, ui.money)
@@ -321,7 +321,7 @@ class ServicesRecipesTest {
         )
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), world = world(3, 3))
         ui.field = field(1, 2, Direction.NORTH, listOf(clerk))
-        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), ui.context()))
         assertEquals("nothing bought; sold here: item:4 (Poké Ball, ₽200)", done.detail)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -342,14 +342,14 @@ class ServicesRecipesTest {
             speciesInfo = listOf(species(1, emptySet()), species(2, setOf(tm54))).associateBy { it.id },
             machineItems = mapOf(dev.kotlinds.pokemonclient.state.ItemId(381) to tm54),
         )
-        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), ui.context()))
         assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000, party can learn: ${MonId(2, 1)} MON2)", done.detail)
         // Below the Pokédex level: only what the shop shows.
         val plain = PlanContext(ui.game.scope(), ui.game, settings = ActionSettings(pokedex = false))
-        assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000)", assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), plain)).detail)
+        assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000)", assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), plain)).detail)
         // Nobody: said so.
         ui.game.data = StubGameData(speciesInfo = listOf(species(1, emptySet()), species(2, emptySet())).associateBy { it.id }, machineItems = mapOf(dev.kotlinds.pokemonclient.state.ItemId(381) to tm54))
-        assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000, party can learn: nobody)", assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context())).detail)
+        assertEquals("nothing bought; sold here: item:381 (TM54, ₽2000, party can learn: nobody)", assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), ui.context())).detail)
     }
 
     /**
@@ -370,7 +370,7 @@ class ServicesRecipesTest {
     @Test
     fun buyWithoutAnItemListsEachClerksOwnStock() {
         val ui = twoClerks()
-        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), ui.context()))
         assertEquals(
             "nothing bought; person:3 sells: item:17 (Potion, ₽300), item:27 (Full Heal, ₽600); person:5 sells: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)",
             done.detail,
@@ -385,14 +385,14 @@ class ServicesRecipesTest {
     fun buyGoesToTheClerkWhoSellsTheItem() {
         val ui = twoClerks()
         val state = ui.game.state(ui.game.screen)
-        assertEquals("person:5", (ShopPlans.clerkFor(state, listOf(Purchase(ItemRef("item:4"), 10))) as Step.Done).value?.id)
-        assertEquals("person:3", (ShopPlans.clerkFor(state, listOf(Purchase(ItemRef("Potion"), 1))) as Step.Done).value?.id, "the nearest of those who sell it")
+        assertEquals("person:5", (Recipes.COMMON.clerkFor(state, listOf(Purchase(ItemRef("item:4"), 10))) as Step.Done).value?.id)
+        assertEquals("person:3", (Recipes.COMMON.clerkFor(state, listOf(Purchase(ItemRef("Potion"), 1))) as Step.Done).value?.id, "the nearest of those who sell it")
         // Nobody sells it: refused before moving, with each clerk's items.
-        val failed = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("item:2"), 1))), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef("item:2"), 1))), ui.context()))
         val error = assertIs<ActionError.InvalidParameter>(failed.error)
         assertTrue("item:4 (Poké Ball, ₽200, person:5)" in error.allowed, error.allowed.toString())
         // Sold, but by two different clerks: one buy each.
-        val split = assertIs<ActionOutcome.Failed>(ShopPlans.buy.run(GameAction.Buy(listOf(Purchase(ItemRef("item:4"), 1), Purchase(ItemRef("item:27"), 1))), ui.context()))
+        val split = assertIs<ActionOutcome.Failed>(Recipes.COMMON.buy(GameAction.Buy(listOf(Purchase(ItemRef("item:4"), 1), Purchase(ItemRef("item:27"), 1))), ui.context()))
         assertEquals(UnavailableReason.NO_STOCK, assertIs<ActionError.Unavailable>(split.error).reason)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -411,7 +411,7 @@ class ServicesRecipesTest {
                 else -> screen
             }
         }
-        val done = assertIs<ActionOutcome.Done>(ShopPlans.buy.run(GameAction.Buy(emptyList()), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.buy(GameAction.Buy(emptyList()), ui.context()))
         assertEquals("nothing bought; sold here: item:17 (Potion, ₽300)", done.detail)
         assertIs<Screen.Overworld>(ui.game.screen)
     }
@@ -491,7 +491,7 @@ class ServicesRecipesTest {
         val opened = mutableListOf<PcMode>()
         val ui = pcUi(listOf(mon(1), mon(2)), listOf(stored), opened)
         val ops = listOf(PcOperation.Deposit(MonId(2, 1)), PcOperation.Withdraw(MonId(7, 1)))
-        val done = assertIs<ActionOutcome.Done>(PcPlans.pc.run(GameAction.Pc(ops), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.pc(GameAction.Pc(ops), ui.context()))
         assertEquals("deposited MON2 in BOX 1 (2/30); withdrew MON7 (party: 2/6)", done.detail)
         assertEquals(listOf(MonId(1, 1), MonId(7, 1)), ui.party.map { it.id })
         assertIs<Screen.Overworld>(ui.game.screen)
@@ -499,7 +499,7 @@ class ServicesRecipesTest {
         assertEquals(listOf(PcMode.DEPOSIT, PcMode.WITHDRAW), opened)
     }
 
-    /** The same for the PC: a game's own `interact` boots it ([PcPlans] talks to it as a step of the session). */
+    /** The same for the PC: a game's own `interact` boots it ([ServiceRecipes.openStorage] talks to it as a step of the session). */
     @Test
     fun aGamesOwnInteractIsPlayedByThePc() {
         val talked = mutableListOf<String>()
@@ -517,7 +517,7 @@ class ServicesRecipesTest {
         val opened = mutableListOf<PcMode>()
         val ui = pcUi(listOf(mon(1), mon(2), mon(3)), emptyList(), opened)
         val ops = listOf(PcOperation.Deposit(MonId(2, 1)), PcOperation.Deposit(MonId(3, 1)))
-        val done = assertIs<ActionOutcome.Done>(PcPlans.pc.run(GameAction.Pc(ops), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.pc(GameAction.Pc(ops), ui.context()))
         assertEquals("deposited MON2 in BOX 1 (1/30); deposited MON3 in BOX 1 (2/30)", done.detail)
         assertEquals(listOf(MonId(1, 1)), ui.party.map { it.id })
         assertEquals(listOf(PcMode.DEPOSIT), opened)
@@ -534,7 +534,7 @@ class ServicesRecipesTest {
             if (screen is Screen.PcBox) Screen.YesNo("Release it?", listOf(Entry("option:yes", "YES", dangerous = true), Entry("option:no", "NO")), Cursor.At(1), Topology.vertical(2))
             else leave(screen)
         }
-        val done = assertIs<ActionOutcome.Done>(PcPlans.deposit.run(GameAction.Deposit(MonId(2, 1)), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.deposit(GameAction.Deposit(MonId(2, 1)), ui.context()))
         assertTrue(done.detail.orEmpty().startsWith("deposited MON2 in BOX 1 (1/30); then leaving the box failed: UNEXPECTED_SCREEN"), done.detail)
         // Left the usual way: nothing more said (aSingleDepositStillOpensTheBoxOnceAndSwitchesThePcOff).
     }
@@ -543,7 +543,7 @@ class ServicesRecipesTest {
     fun aSingleDepositStillOpensTheBoxOnceAndSwitchesThePcOff() {
         val opened = mutableListOf<PcMode>()
         val ui = pcUi(listOf(mon(1), mon(2)), emptyList(), opened)
-        val done = assertIs<ActionOutcome.Done>(PcPlans.deposit.run(GameAction.Deposit(MonId(2, 1)), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.deposit(GameAction.Deposit(MonId(2, 1)), ui.context()))
         assertEquals("deposited MON2 in BOX 1 (1/30)", done.detail)
         assertEquals(listOf(PcMode.DEPOSIT), opened)
         assertIs<Screen.Overworld>(ui.game.screen)
@@ -554,12 +554,12 @@ class ServicesRecipesTest {
         val stored = BoxMon(MonId(7, 1), 0, 0, dev.kotlinds.pokemonclient.state.Named(dev.kotlinds.pokemonclient.state.SpeciesId(7), "MON7"), null, 20, null, false)
         // The last Pokémon can't be deposited.
         val alone = pcUi(listOf(mon(1)), listOf(stored))
-        val last = assertIs<ActionOutcome.Failed>(PcPlans.pc.run(GameAction.Pc(listOf(PcOperation.Deposit(MonId(1, 1)))), alone.context()))
+        val last = assertIs<ActionOutcome.Failed>(Recipes.COMMON.pc(GameAction.Pc(listOf(PcOperation.Deposit(MonId(1, 1)))), alone.context()))
         assertEquals(UnavailableReason.LAST_POKEMON, assertIs<ActionError.Unavailable>(last.error).reason)
         assertTrue(alone.game.presses.isEmpty())
         // A full party can't withdraw (unless a deposit comes first in the same session).
         val full = pcUi((1..6).map { mon(it) }, listOf(stored))
-        val failed = assertIs<ActionOutcome.Failed>(PcPlans.pc.run(GameAction.Pc(listOf(PcOperation.Withdraw(MonId(7, 1)))), full.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.pc(GameAction.Pc(listOf(PcOperation.Withdraw(MonId(7, 1)))), full.context()))
         assertEquals(UnavailableReason.PARTY_FULL, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(full.game.presses.isEmpty())
     }

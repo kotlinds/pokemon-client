@@ -45,7 +45,7 @@ class MoreActionsTest {
     @Test
     fun releaseNeedsAnExplicitConfirmation() {
         val game = FakeGame(Screen.Overworld(awaiting = Awaiting.INPUT))
-        val outcome = PcPlans.release.run(GameAction.Release(MonId.parse("mon:c50a0956.76f3a6fb")!!, confirm = false), game.context())
+        val outcome = Recipes.COMMON.release(GameAction.Release(MonId.parse("mon:c50a0956.76f3a6fb")!!, confirm = false), game.context())
         val error = assertIs<ActionError.InvalidParameter>(assertIs<ActionOutcome.Failed>(outcome).error)
         assertEquals("confirm", error.parameter)
         assertTrue(game.presses.isEmpty())

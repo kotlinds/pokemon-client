@@ -10,7 +10,6 @@ import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.MenuKind
-import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.state.Entry
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.MapName
@@ -22,7 +21,7 @@ internal object FieldPlans {
 
     /** Saves the game: start menu → SAVE → YES (→ YES again to overwrite another save), then waits for the end. */
     val saveGame = ActionPlan<GameAction.SaveGame> { _, context ->
-        PartyBagPlans.openStartMenuEntry(context, "option:save").andThen {
+        context.recipes.openStartMenuEntry(context, "option:save").andThen {
             context.navigator.choose(Screen.YesNo::class, "YES (save)") { it.id == "option:yes" }
         }.andThen {
             // Then, after some text: "There is already a saved file. Is it OK to overwrite it?" (YES), the saving
@@ -54,34 +53,10 @@ internal object FieldPlans {
             }
             result
         }.then {
-            PartyBagPlans.closeToOverworld(context)
+            context.recipes.closeToOverworld(context)
             ActionOutcome.Done("saved")
         }
     }
-
-    /**
-     * Heals the party at a Pokémon Center: talk to the nurse, answer YES to "Would you like to rest your Pokémon?",
-     * then read the messages until the player can walk again.
-     */
-    val heal = ActionPlan<GameAction.Heal> { _, context ->
-        val nurse = context.state().field?.objects?.firstOrNull { it.role == PersonRole.NURSE }
-            ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no nurse here", "go to a Pokémon Center"))
-        when (val talk = context.run(GameAction.Interact(nurse.id))) {
-            is ActionOutcome.Failed -> return@ActionPlan talk
-            is ActionOutcome.Done -> Unit
-        }
-        context.navigator.advanceUntil(HEAL_WAITS) { it.screen is Screen.YesNo || it.screen is Screen.Overworld }.andThen { state ->
-            if (state.screen is Screen.YesNo) context.navigator.choose(Screen.YesNo::class, "YES (heal)") { it.id == "option:yes" } else Step.Done(state)
-        }.andThen {
-            context.navigator.advanceUntil(HEAL_WAITS) { it.screen is Screen.Overworld }
-        }.then { state ->
-            val hurt = state.party.filter { !it.isEgg && it.hp < it.maxHp }
-            if (hurt.isEmpty()) ActionOutcome.Done("party healed")
-            else ActionOutcome.Failed(ActionError.Timeout("still hurt after the nurse: ${hurt.joinToString { it.displayName }}"))
-        }
-    }
-
-    private const val HEAL_WAITS = 120
 
     /**
      * One cast of [GameAction.Fish.rod] (used from the bag) towards the water the player faces. A is pressed on the
@@ -97,7 +72,7 @@ internal object FieldPlans {
             return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NOT_FACING_WATER, "The player doesn't face water", "stand at the shore, facing the water"))
         }
         // Like any key item: with Y when the rod is registered there, else through the bag.
-        val cast = PartyBagPlans.activateKeyItem(context, action.rod)
+        val cast = context.recipes.activateKeyItem(context, action.rod)
         if (cast is Step.Failed) return@ActionPlan ActionOutcome.Failed(cast.error)
         var bitten = false
         var frames = 0
@@ -146,7 +121,7 @@ internal object FieldPlans {
         val startMap = context.state().field?.mapId
         val first = flyOnce(context, action.destination, startMap, hubAllowed = true)
         if (first is Step.Failed) {
-            PartyBagPlans.closeToOverworld(context)
+            context.recipes.closeToOverworld(context)
             return@ActionPlan ActionOutcome.Failed(first.error)
         }
         val (landed, viaHub) = (first as Step.Done).value
@@ -154,7 +129,7 @@ internal object FieldPlans {
         // On the hub now: the second flight, from where every region can be chosen.
         when (val second = flyOnce(context, action.destination, landed.field?.mapId, hubAllowed = false)) {
             is Step.Failed -> {
-                PartyBagPlans.closeToOverworld(context)
+                context.recipes.closeToOverworld(context)
                 ActionOutcome.Failed(ActionError.BatchStepFailed(1, "fly(${action.destination})", listOf("flew to $viaHub (Fly only reaches the other region from there)"), second.error))
             }
             is Step.Done -> ActionOutcome.Done(landedDetail(second.value.first, startMap) + " (flew via $viaHub: Fly only reaches the other region from there)")
@@ -215,7 +190,7 @@ internal object FieldPlans {
     private fun openFieldMove(context: PlanContext, move: FieldMoveKind, users: List<dev.kotlinds.pokemonclient.state.PartyMon>): Step<GameState> {
         val label = with(FieldMoveWalk) { move.label() }
         if (users.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.NO_POKEMON_KNOWS_MOVE, "No Pokémon in the party knows $label"))
-        return PartyBagPlans.openParty(context).andThen { state ->
+        return context.recipes.openParty(context).andThen { state ->
             if (state.screen !is Screen.PartyGrid) return@andThen Step.Failed(ActionError.UnexpectedScreen("the party", state.screen))
             for (user in users) {
                 val opened = context.navigator.choose(Screen.PartyGrid::class, user.displayName) { it.id == user.id.toString() }
@@ -261,7 +236,7 @@ internal object FieldPlans {
         } else knowers.sortedBy { it.fainted }
         val opened = openFieldMove(context, move, users)
         if (opened is Step.Failed) {
-            PartyBagPlans.closeToOverworld(context)
+            context.recipes.closeToOverworld(context)
             return@ActionPlan ActionOutcome.Failed(opened.error)
         }
         if (target != null && move.healsAnother) healAnother(context, label, target) else fieldMoveResult(context, label, before)
@@ -294,13 +269,13 @@ internal object FieldPlans {
                 (s.screen is Screen.PartyGrid && s.screen.awaiting == Awaiting.INPUT && said.isNotEmpty())
         }
         if (end is Step.Failed) {
-            PartyBagPlans.closeToOverworld(context)
+            context.recipes.closeToOverworld(context)
             return ActionOutcome.Failed(end.error)
         }
         val state = (end as Step.Done).value
         val text = said.joinToString(" ") { it.replace('\n', ' ') }.takeIf { it.isNotBlank() }
         if (state.screen is Screen.PartyGrid) {
-            PartyBagPlans.closeToOverworld(context)
+            context.recipes.closeToOverworld(context)
             return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.CANNOT_USE_HERE, "The game refused $label here" + (text?.let { ": \"$it\"" } ?: "")))
         }
         if (state.battle != null) {
@@ -335,7 +310,7 @@ internal object FieldPlans {
                 (s.screen is Screen.PartyGrid && s.screen.awaiting == Awaiting.INPUT) || s.screen is Screen.Overworld
             }
         }
-        PartyBagPlans.closeToOverworld(context)
+        context.recipes.closeToOverworld(context)
         return result.then { _ ->
             val after = context.state().party.firstOrNull { it.id == target.id }
             val gained = (after?.hp ?: target.hp) - target.hp

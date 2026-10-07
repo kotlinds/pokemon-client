@@ -1,36 +1,36 @@
 package dev.kotlinds.pokemonclient.actions
 
-import dev.kotlinds.pokemonclient.state.kind
 import dev.kotlinds.pokemonclient.console.Button
-import dev.kotlinds.pokemonclient.state.StartMenuFeature
+import dev.kotlinds.pokemonclient.data.MachineCompatibility
 import dev.kotlinds.pokemonclient.state.Awaiting
-import dev.kotlinds.pokemonclient.state.Entry
 import dev.kotlinds.pokemonclient.state.GameState
-import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.MovementMode
-import dev.kotlinds.pokemonclient.state.PartyPurpose
+import dev.kotlinds.pokemonclient.state.PartyMon
 import dev.kotlinds.pokemonclient.state.Screen
-import dev.kotlinds.pokemonclient.data.MachineCompatibility
-import dev.kotlinds.pokemonclient.data.MachineId
+import dev.kotlinds.pokemonclient.state.kind
 
 /**
- * Recipes of the party and bag actions out of battle (start menu → POKéMON / BAG → ...). Every step goes through the
- * navigator (cursor read, one tap at a time, confirm only on the target), and entries are found by their ids.
+ * The recipes of the party and bag actions out of battle (start menu → POKéMON / BAG → ...): `reorder_party`,
+ * `take_item`, `give_item`, `use_item` (its field half; the battle half is [BattleRecipes.useItemInBattle]), `teach`,
+ * `use_key_item` and `register_item`. A family of the chain of [RecipeBase], above [BattleRecipes]. Every step goes
+ * through the navigator (cursor read, one tap at a time, confirm only on the target), and entries are found by their
+ * ids; the start menu, the party and the bag are reached through the shared steps of [RecipeBase]
+ * ([openStartMenuEntry], [openParty], [bagItem], [closeToOverworld]), which a game may override.
  */
-internal object PartyBagPlans {
+abstract class BagPartyRecipes internal constructor() : BattleRecipes() {
 
     /**
      * Moves [GameAction.ReorderParty.mon] to a position: party → mon → SWITCH → the mon at that position. With an
      * [GameAction.ReorderParty.order], every position in turn in the same party session (see [reorderWhole]).
      */
-    val reorderParty = ActionPlan<GameAction.ReorderParty> { action, context ->
-        if (action.order.isNotEmpty()) return@ActionPlan reorderWhole(action.order, context)
+    override fun reorderParty(action: GameAction.ReorderParty, context: PlanContext): ActionOutcome {
+        if (action.order.isNotEmpty()) return reorderWhole(action.order, context)
         val state = context.state()
         val target = state.party.getOrNull(action.position - 1)
-            ?: return@ActionPlan ActionOutcome.Failed(ActionError.InvalidParameter("position", action.position.toString(), (1..state.party.size).map(Int::toString)))
-        if (target.id == action.mon) return@ActionPlan ActionOutcome.Done("already at position ${action.position}")
-        openParty(context).andThen {
+            ?: return ActionOutcome.Failed(ActionError.InvalidParameter("position", action.position.toString(), (1..state.party.size).map(Int::toString)))
+        if (target.id == action.mon) return ActionOutcome.Done("already at position ${action.position}")
+        return openParty(context).andThen {
             context.navigator.choose(Screen.PartyGrid::class, "the Pokémon to move") { it.id == action.mon.toString() }
         }.andThen {
             context.navigator.choose(Screen.ContextMenu::class, "SWITCH") { it.id == "option:switch" }
@@ -78,15 +78,12 @@ internal object PartyBagPlans {
         }
     }
 
-    /** Frames the party screen's swap animation may take before the new order shows in the party. */
-    private const val SWAP_FRAMES = 300
-
     /**
      * Takes the item held by a Pokémon: party → mon → ITEM → TAKE. For Mail (MAIL → TAKE), the game then asks "Send the
      * removed Mail to your PC?": YES keeps the written message in the PC's mailbox (NO would erase it).
      */
-    val takeItem = ActionPlan<GameAction.TakeItem> { action, context ->
-        openParty(context).andThen {
+    override fun takeItem(action: GameAction.TakeItem, context: PlanContext): ActionOutcome {
+        return openParty(context).andThen {
             context.navigator.choose(Screen.PartyGrid::class, "the Pokémon") { it.id == action.mon.toString() }
         }.andThen {
             context.navigator.choose(Screen.ContextMenu::class, "ITEM") { it.id == "option:item" || it.id == "option:mail" }
@@ -106,14 +103,14 @@ internal object PartyBagPlans {
      * before anything is pressed: giving it opens the mail editor, where the game wants a written message (an empty one
      * is refused) and that editor isn't decoded.
      */
-    val giveItem = ActionPlan<GameAction.GiveItem> { action, context ->
+    override fun giveItem(action: GameAction.GiveItem, context: PlanContext): ActionOutcome {
         val mail = context.state().bag.orEmpty().firstOrNull { it.name == MAIL_POCKET }?.items.orEmpty()
             .firstOrNull { matchesRef(action.item.raw, "item", it.item.id.value, it.item.name) }
         if (mail != null) {
-            return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.MAIL_NEEDS_WRITING,
+            return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.MAIL_NEEDS_WRITING,
                 "Giving ${mail.item.name} opens the mail editor to write a message, which isn't supported", "give another item"))
         }
-        bagItem(context, action.item).andThen { itemEntry ->
+        return bagItem(context, action.item).andThen { itemEntry ->
             context.navigator.choose(Screen.Bag::class, itemEntry.label) { it.id == itemEntry.id }
         }.andThen {
             context.navigator.choose(Screen.ContextMenu::class, "GIVE") { it.id == "option:give" }
@@ -136,10 +133,10 @@ internal object PartyBagPlans {
      * checked on the item's quantity (consumed = it worked; "It won't have any effect" keeps it). In battle, the
      * battle half ([BattleRecipes.useItemInBattle]) is played instead.
      */
-    val useItem = ActionPlan<GameAction.UseItem> { action, context ->
+    override fun useItem(action: GameAction.UseItem, context: PlanContext): ActionOutcome {
         // The battle half of this same recipe, not another action: the game's own step (a game may override it alone);
         // a game overriding `use_item` replaces both halves.
-        if (context.state().battle != null) return@ActionPlan context.recipes.useItemInBattle(action, context)
+        if (context.state().battle != null) return useItemInBattle(action, context)
         val done = mutableListOf<String>()
         for ((index, use) in action.uses.withIndex()) {
             when (val outcome = useOneItem(use, context)) {
@@ -147,12 +144,12 @@ internal object PartyBagPlans {
                 is ActionOutcome.Failed -> {
                     closeToOverworld(context)
                     val error = if (action.uses.size == 1) outcome.error else ActionError.BatchStepFailed(index, use.key, done, outcome.error)
-                    return@ActionPlan ActionOutcome.Failed(error)
+                    return ActionOutcome.Failed(error)
                 }
             }
         }
         closeToOverworld(context)
-        ActionOutcome.Done(done.joinToString("; "))
+        return ActionOutcome.Done(done.joinToString("; "))
     }
 
     /** One field item use, from the overworld or from the bag left open by the previous use. */
@@ -191,26 +188,6 @@ internal object PartyBagPlans {
         }
     }
 
-    /** "Restore which move?" lists: the field one (moves + QUIT) and the battle one (moves + CANCEL). */
-    internal fun isMoveList(screen: Screen): Boolean =
-        screen is Screen.ListMenu && screen.entries.any { it.id.startsWith("move:") } && screen.entries.all { it.id.startsWith("move:") || it.id.startsWith("option:") || it.id.startsWith("slot:") }
-
-    /** Picks [move] on a "Restore which move?" list (typed error listing the moves when it's missing or unknown). */
-    internal fun chooseMove(context: PlanContext, list: Screen.Selectable, move: MoveRef?): Step<GameState> {
-        val moves = list.entries.filter { it.id.startsWith("move:") }
-        val entry = move?.let { ref ->
-            moves.firstOrNull { e -> matchesRef(ref.raw, "move", e.id.removePrefix("move:").toIntOrNull() ?: -1, e.label.substringBefore(" (")) }
-        } ?: return Step.Failed(ActionError.InvalidParameter("move", move?.raw ?: "none", moves.map { "${it.id} = ${it.label}" }))
-        return context.navigator.choose(list::class, entry.label) { it.id == entry.id }
-    }
-
-    /** Enough for Sacred Ash on six fainted Pokémon (an HP bar and a message each). */
-    private const val EFFECT_PRESSES = 30
-
-    /** About 20 s: with the session's settling, the agent's call stays well under its client's timeout. */
-    private const val EFFECT_MAX_FRAMES = 1200
-    private const val EFFECT_SETTLE_FRAMES = 240
-
     /** How many of [item] the bag holds. */
     private fun quantity(state: GameState, item: ItemRef): Int = state.bag.orEmpty().flatMap { it.items }
         .filter { matchesRef(item.raw, "item", it.item.id.value, it.item.name) }.sumOf { it.quantity }
@@ -221,14 +198,14 @@ internal object PartyBagPlans {
      * can't learn it (UNABLE on the game's party screen) or knows it already is refused before the bag opens, naming
      * who of the party can ([MachineCompatibility]). The result is checked on the Pokémon's moves.
      */
-    val teach = ActionPlan<GameAction.Teach> { action, context ->
+    override fun teach(action: GameAction.Teach, context: PlanContext): ActionOutcome {
         val start = context.state()
         val mon = start.party.firstOrNull { it.id == action.mon }
-            ?: return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_POKEMON, "${action.mon} isn't in the party"))
-        machineRefusal(context, start, mon, action.item)?.let { return@ActionPlan ActionOutcome.Failed(it) }
+            ?: return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_POKEMON, "${action.mon} isn't in the party"))
+        machineRefusal(context, start, mon, action.item)?.let { return ActionOutcome.Failed(it) }
         // Four moves: the move to forget is checked before any menu opens (the game would ask "Should a move be
         // forgotten?" and the walk through the menus can't answer it).
-        forgetRefusal(context, mon, action.forget)?.let { return@ActionPlan ActionOutcome.Failed(it) }
+        forgetRefusal(context, mon, action.forget)?.let { return ActionOutcome.Failed(it) }
         val result = bagItem(context, action.item).andThen { machine ->
             context.navigator.choose(Screen.Bag::class, machine.label) { it.id == machine.id }
         }.andThen {
@@ -252,34 +229,17 @@ internal object PartyBagPlans {
                 val yes = context.navigator.choose(Screen.YesNo::class, "YES (forget a move)") { it.id == "option:yes" }
                 if (yes is Step.Failed) return@andThen yes
             }
-            when (val forgot = context.run(GameAction.LearnMove(forget))) {
+            when (val forgot = learnMove(GameAction.LearnMove(forget), context)) {
                 is ActionOutcome.Failed -> Step.Failed(forgot.error)
                 is ActionOutcome.Done -> Step.Done(context.state())
             }
         }
         closeToOverworld(context, maxPresses = 12)
-        result.then {
+        return result.then {
             val machineMove = context.state().party.firstOrNull { it.id == action.mon }?.moves.orEmpty()
             if (machineMove.size != mon.moves.size || machineMove.map { it.move.id } != mon.moves.map { it.move.id }) ActionOutcome.Done("${mon.displayName} learned it")
             else ActionOutcome.Failed(ActionError.Timeout("${mon.displayName}'s moves didn't change"))
         }
-    }
-
-    /**
-     * Why teaching [mon] with [forget] would fail on the "forget a move" question, before any menu: four moves and no
-     * [forget] ([ActionError.ForgetNeeded], listing the moves it can forget), a [forget] it doesn't know
-     * ([ActionError.InvalidParameter]) or an HM move ([ActionError.HmCannotForget]: the game never lets one go). Null
-     * when the teaching can go on (fewer than four moves: [forget] isn't needed and is ignored).
-     */
-    internal fun forgetRefusal(context: PlanContext, mon: dev.kotlinds.pokemonclient.state.PartyMon, forget: MoveRef?): ActionError? {
-        if (mon.moves.size < MAX_MOVES) return null
-        // HM moves, by id from the game's machine table (never by name): the moves of HM01..HM08.
-        val hms = context.game.data?.let { data -> MachineId.all.filter { it.isHm }.mapNotNull(data::machineMove).toSet() }.orEmpty()
-        val forgettable = mon.moves.filter { it.move.id !in hms }
-        if (forget == null) return ActionError.ForgetNeeded(mon.displayName, forgettable.map { "move:${it.move.id.value} ${it.move.name}" })
-        val known = mon.moves.firstOrNull { matchesRef(forget.raw, "move", it.move.id.value, it.move.name) }
-            ?: return ActionError.InvalidParameter("forget", forget.raw, forgettable.map { "move:${it.move.id.value} ${it.move.name}" })
-        return if (known.move.id in hms) ActionError.HmCannotForget(known.move.name) else null
     }
 
     /**
@@ -288,7 +248,7 @@ internal object PartyBagPlans {
      * who of the party can learn it. Null when it can, or when the game's data or the item isn't known (the screens
      * decide then).
      */
-    private fun machineRefusal(context: PlanContext, state: GameState, mon: dev.kotlinds.pokemonclient.state.PartyMon, item: ItemRef): ActionError? {
+    private fun machineRefusal(context: PlanContext, state: GameState, mon: PartyMon, item: ItemRef): ActionError? {
         val data = context.game.data ?: return null
         val itemId = state.bag.orEmpty().flatMap { it.items }.firstOrNull { matchesRef(item.raw, "item", it.item.id.value, it.item.name) }?.item?.id ?: return null
         val machine = data.machineOf(itemId) ?: return null
@@ -301,16 +261,13 @@ internal object PartyBagPlans {
         }
     }
 
-    /** Moves a Pokémon knows at most. */
-    private const val MAX_MOVES = 4
-
     /**
      * Uses a key item (Bicycle, Itemfinder, a rod...): see [activateKeyItem]. The Bicycle is checked on the player's
      * movement: where the map forbids cycling (indoors...) or while surfing it's refused without pressing anything,
      * and when the game still says no ("There's a time and place for everything!", mud, tall grass...) the movement
      * hasn't changed: the message is closed and the refusal is a typed error, never Done.
      */
-    val useKeyItem = ActionPlan<GameAction.UseKeyItem> { action, context ->
+    override fun useKeyItem(action: GameAction.UseKeyItem, context: PlanContext): ActionOutcome {
         val before = context.navigator.settle()
         val bicycle = isBicycle(context, before, action.item)
         val field = before.field
@@ -320,9 +277,9 @@ internal object PartyBagPlans {
                 field.movement == MovementMode.SURF -> "the player is surfing"
                 else -> null
             }
-            if (why != null) return@ActionPlan ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.CANNOT_USE_HERE, "${action.item.raw} can't be used here: $why", "walk, or ride outdoors"))
+            if (why != null) return ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.CANNOT_USE_HERE, "${action.item.raw} can't be used here: $why", "walk, or ride outdoors"))
         }
-        activateKeyItem(context, action.item).then { how ->
+        return activateKeyItem(context, action.item).then { how ->
             var state = context.navigator.settle()
             if (bicycle && field != null) {
                 // Mounting or dismounting changes the movement; the game's refusal is only a message.
@@ -347,16 +304,12 @@ internal object PartyBagPlans {
         return matchesRef(item.raw, "item", id, name)
     }
 
-    /** Polls of [BIKE_POLL_FRAMES] frames to wait for the bicycle's effect (the mount, or the refusal message). */
-    private const val BIKE_WAITS = 15
-    private const val BIKE_POLL_FRAMES = 4
-
     /**
      * Starts using a key item and returns as soon as the game reacts (without waiting for what follows: a rod's
      * cast must be watched frame by frame). With Y when it's the item registered there, else bag → the item → USE.
      * The value says which way it went.
      */
-    fun activateKeyItem(context: PlanContext, item: ItemRef): Step<String> {
+    internal open fun activateKeyItem(context: PlanContext, item: ItemRef): Step<String> {
         // An item without USE (a key used by interacting) is refused before the bag opens: it would only show its
         // other entries (NOTES: "No USE on context_menu (entries: , , , MOVE, CANCEL)", the menu left open).
         noUseFromBag(context, item)?.let { return Step.Failed(it) }
@@ -384,9 +337,9 @@ internal object PartyBagPlans {
     }
 
     /** Bag → the key item → REGISTER. The first free slot gets it: the first one is Y. */
-    val registerItem = ActionPlan<GameAction.RegisterItem> { action, context ->
+    override fun registerItem(action: GameAction.RegisterItem, context: PlanContext): ActionOutcome {
         val before = context.state().registeredItems
-        bagItem(context, action.item).andThen { item ->
+        return bagItem(context, action.item).andThen { item ->
             context.navigator.choose(Screen.Bag::class, item.label) { it.id == item.id }
         }.andThen {
             context.navigator.choose(Screen.ContextMenu::class, "REGISTER") { it.id == "option:register" }
@@ -407,7 +360,7 @@ internal object PartyBagPlans {
      * item, the game's touch button for the second one ([dev.kotlinds.pokemonclient.PokemonGame.registeredItemTouch]).
      * Returns how ("with Y"...), or null (nothing pressed) otherwise.
      */
-    fun quickUse(context: PlanContext, item: ItemRef): String? {
+    private fun quickUse(context: PlanContext, item: ItemRef): String? {
         val state = context.navigator.settle()
         if (state.screen !is Screen.Overworld || state.screen.awaiting != Awaiting.INPUT) return null
         val slot = state.registeredItems.indexOfFirst { id -> id != null && matchesRef(item.raw, "item", id.value, state.itemName(id.value)) }
@@ -422,115 +375,24 @@ internal object PartyBagPlans {
 
     private fun GameState.itemName(id: Int) = bag.orEmpty().flatMap { it.items }.firstOrNull { it.item.id.value == id }?.item?.name ?: ""
 
-    private const val TEACH_WAITS = 40
+    private companion object {
+        /** Frames the party screen's swap animation may take before the new order shows in the party. */
+        const val SWAP_FRAMES = 300
 
-    /** The bag pocket of the Mail items (pocket ids are the same in every language). */
-    private const val MAIL_POCKET = "mail"
+        /** Enough for Sacred Ash on six fainted Pokémon (an HP bar and a message each). */
+        const val EFFECT_PRESSES = 30
 
-    // region Routes
+        /** About 20 s: with the session's settling, the agent's call stays well under its client's timeout. */
+        const val EFFECT_MAX_FRAMES = 1200
+        const val EFFECT_SETTLE_FRAMES = 240
 
-    /** Opens the start menu (X) from the overworld and picks [entryId], or does nothing if already there. */
-    fun openStartMenuEntry(context: PlanContext, entryId: String): Step<GameState> {
-        var state = context.navigator.settle()
-        if (state.screen is Screen.Overworld) {
-            context.scope.tap(Button.X)
-            context.navigator.awaitChange(state.screen)
-            state = context.navigator.settle()
-        }
-        if ((state.screen as? Screen.ListMenu)?.kind != MenuKind.START_MENU) {
-            return Step.Failed(ActionError.UnexpectedScreen("the start menu", state.screen))
-        }
-        return context.navigator.choose(Screen.ListMenu::class, entryId) { it.id == entryId }
+        /** Polls of [BIKE_POLL_FRAMES] frames to wait for the bicycle's effect (the mount, or the refusal message). */
+        const val BIKE_WAITS = 15
+        const val BIKE_POLL_FRAMES = 4
+
+        const val TEACH_WAITS = 40
+
+        /** The bag pocket of the Mail items (pocket ids are the same in every language). */
+        const val MAIL_POCKET = "mail"
     }
-
-    /** The field party grid (from the overworld, or already open). */
-    fun openParty(context: PlanContext): Step<GameState> {
-        val state = context.navigator.settle()
-        if ((state.screen as? Screen.PartyGrid)?.purpose == PartyPurpose.FIELD) return Step.Done(state)
-        return openStartMenuEntry(context, "option:pokemon")
-    }
-
-    /**
-     * Opens the bag on the pocket holding [item] and turns pages until the item is on screen; returns its entry.
-     */
-    fun bagItem(context: PlanContext, item: ItemRef): Step<Entry> {
-        val owned = context.state().bag.orEmpty().flatMap { pocket -> pocket.items.map { pocket.name to it } }
-            .firstOrNull { (_, stack) -> matchesRef(item.raw, "item", stack.item.id.value, stack.item.name) }
-            ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_ITEM, "There's no ${item.raw} in the bag"))
-        val (pocket, stack) = owned
-        val opened = (context.state().screen as? Screen.Bag)?.let { Step.Done(context.state()) } ?: openStartMenuEntry(context, "option:bag")
-        if (opened is Step.Failed) return opened
-        var bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen))
-        if (bag.pocket != pocket) {
-            val tab = "pocket:$pocket"
-            when (val switched = context.navigator.choose(Screen.Bag::class, pocket) { it.id == tab }) {
-                is Step.Failed -> return switched
-                is Step.Done -> bag = switched.value.screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", switched.value.screen))
-            }
-        }
-        val itemId = "item:${stack.item.id.value}"
-        repeat(bag.pages.coerceAtLeast(1)) {
-            bag.entries.firstOrNull { it.id == itemId }?.let { return Step.Done(it) }
-            // Not on this page: turn the page with the (touch) arrow, then look again.
-            val next = bag.entries.firstOrNull { it.id == "page:next" }?.touch ?: return@repeat
-            val before = bag
-            context.scope.touch(next)
-            context.navigator.awaitChange(before)
-            bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen))
-        }
-        return Step.Failed(ActionError.NotOnScreen(stack.item.name, "the $pocket pocket", bag.entries.map { it.label }))
-    }
-
-    /** Presses B until the player can walk again (at most a few times), reading every message on the way. */
-    fun closeToOverworld(context: PlanContext, maxPresses: Int = MAX_CLOSE_PRESSES) {
-        repeat(maxPresses) {
-            val state = context.navigator.settle()
-            when (state.screen) {
-                is Screen.Overworld -> return
-                // A question about learning a move (Rare Candy...) is the agent's to answer: B would give the move up.
-                is Screen.YesNo, is Screen.MoveSelect -> if (state.battle == null && ActionConditions.isLearnPrompt(state)) return else context.scope.tap(Button.B)
-                is Screen.Dialogue, is Screen.PressToContinue -> context.scope.tap(Button.A)
-                // The Pokégear has no B: its Close button is touched.
-                is Screen.Viewer -> state.screen.exit.touch?.let { context.scope.touch(it) } ?: context.scope.tap(state.screen.exit.button ?: Button.B)
-                else -> context.scope.tap(Button.B)
-            }
-            context.navigator.awaitChange(state.screen, maxFrames = 60)
-        }
-    }
-
-    // endregion
-
-    private const val MAX_CLOSE_PRESSES = 8
-
-    /**
-     * Field actions need the player free to act: walking around, or already in a field menu (start menu, the party,
-     * the bag and their menus). Not in the PC's menus: their actions (DEPOSIT, MARKING...) aren't the party's.
-     */
-    fun inField(state: GameState): Boolean = state.battle == null && when (val s = state.screen) {
-        // X opens nothing before the bag is given (the start of a new game).
-        is Screen.Overworld -> s.awaiting == Awaiting.INPUT && state.startMenu?.contains(StartMenuFeature.BAG) != false
-        is Screen.ListMenu -> s.kind == MenuKind.START_MENU
-        is Screen.PartyGrid -> true
-        is Screen.Bag -> !s.inBattle
-        is Screen.ContextMenu -> !isPcMenu(s)
-        else -> false
-    }
-
-    /**
-     * True for the menu opened on a PC box slot: it has entries only the PC offers (DEPOSIT, WITHDRAW, MARKING,
-     * RELEASE, HELD ITEMS), or is the MOVE ITEMS menu (a single GIVE / TAKE then EXIT).
-     */
-    fun isPcMenu(menu: Screen.ContextMenu): Boolean =
-        menu.item == null && (menu.entries.any { it.id in PC_ONLY_ENTRIES } ||
-            (menu.entries.size == 2 && menu.entries[0].id in setOf("option:give", "option:take")))
-
-    private val PC_ONLY_ENTRIES = setOf("option:deposit", "option:withdraw", "option:marking", "option:release", "option:held_items")
-
-    fun owns(state: GameState, mon: MonId) = state.party.any { it.id == mon }
-}
-
-/** Chains a navigation step into another one. */
-internal inline fun <T, R> Step<T>.andThen(next: (T) -> Step<R>): Step<R> = when (this) {
-    is Step.Done -> next(value)
-    is Step.Failed -> this
 }

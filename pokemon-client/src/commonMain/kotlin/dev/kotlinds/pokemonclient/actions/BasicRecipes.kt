@@ -100,7 +100,7 @@ abstract class BasicRecipes internal constructor() : RecipeBase() {
             val phoneLeftOpen = (started as? Screen.Dialogue)?.source == TextSource.PHONE &&
                 (end.screen as? Screen.ListMenu)?.kind == MenuKind.PHONE_CONTACTS
             if (phoneLeftOpen) {
-                PartyBagPlans.closeToOverworld(context)
+                closeToOverworld(context)
                 ActionOutcome.Done("call ended, Pokégear closed")
             } else ActionOutcome.Done()
         }

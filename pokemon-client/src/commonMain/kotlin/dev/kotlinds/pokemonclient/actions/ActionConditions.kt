@@ -1,13 +1,19 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.state.AnimationKind
+import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.IntroStage
 import dev.kotlinds.pokemonclient.state.LearnQuestion
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MoveContext
 import dev.kotlinds.pokemonclient.state.PartyPurpose
+import dev.kotlinds.pokemonclient.state.PersonRole
 import dev.kotlinds.pokemonclient.state.Screen
+import dev.kotlinds.pokemonclient.state.ShopCurrency
+import dev.kotlinds.pokemonclient.state.ShopItem
+import dev.kotlinds.pokemonclient.state.StartMenuFeature
 import dev.kotlinds.pokemonclient.state.ViewerApp
 
 /**
@@ -53,6 +59,85 @@ internal object ActionConditions {
         prompt.learning?.question == LearnQuestion.FORGET_A_MOVE && prompt.entries.any { it.id == "option:yes" } -> "option:yes"
         else -> null
     }
+
+    // endregion
+
+    // region Bag and party
+
+    /**
+     * Field actions need the player free to act: walking around, or already in a field menu (start menu, the party,
+     * the bag and their menus). Not in the PC's menus: their actions (DEPOSIT, MARKING...) aren't the party's.
+     */
+    fun inField(state: GameState): Boolean = state.battle == null && when (val s = state.screen) {
+        // X opens nothing before the bag is given (the start of a new game).
+        is Screen.Overworld -> s.awaiting == Awaiting.INPUT && state.startMenu?.contains(StartMenuFeature.BAG) != false
+        is Screen.ListMenu -> s.kind == MenuKind.START_MENU
+        is Screen.PartyGrid -> true
+        is Screen.Bag -> !s.inBattle
+        is Screen.ContextMenu -> !isPcMenu(s)
+        else -> false
+    }
+
+    /**
+     * True for the menu opened on a PC box slot: it has entries only the PC offers (DEPOSIT, WITHDRAW, MARKING,
+     * RELEASE, HELD ITEMS), or is the MOVE ITEMS menu (a single GIVE / TAKE then EXIT).
+     */
+    private fun isPcMenu(menu: Screen.ContextMenu): Boolean =
+        menu.item == null && (menu.entries.any { it.id in PC_ONLY_ENTRIES } ||
+            (menu.entries.size == 2 && menu.entries[0].id in setOf("option:give", "option:take")))
+
+    private val PC_ONLY_ENTRIES = setOf("option:deposit", "option:withdraw", "option:marking", "option:release", "option:held_items")
+
+    // endregion
+
+    // region Services: the Poké Mart
+
+    /** Where a purchase (`buy`) or a sale (`sell`) can start from. */
+    enum class ShopStage { OVERWORLD, CLERK_MENU, SHOP_LIST, QUANTITY }
+
+    /** The stage of the shop the state is at, or null when no purchase can start from here. */
+    fun shopStage(state: GameState): ShopStage? = when (val screen = state.screen) {
+        is Screen.Shop -> ShopStage.SHOP_LIST
+        is Screen.Quantity -> if (state.field != null && clerkFaced(state) != null) ShopStage.QUANTITY else null
+        is Screen.ListMenu -> if (screen.kind == MenuKind.MULTICHOICE && screen.entries.size == CLERK_MENU_SIZE && clerkFaced(state) != null) ShopStage.CLERK_MENU else null
+        else -> if (MovePlans.canWalk(state, hasWorld = true) && shopClerks(state).isNotEmpty()) ShopStage.OVERWORLD else null
+    }
+
+    /**
+     * What one clerk sells ([clerk] null: the counter the player is at, its list on screen or the clerk faced), as
+     * the game decides it ([FieldObject.catalog]: the clerk's own mart script and the badges, read before talking),
+     * with the [currency] its prices are in (money for a catalog; the list on screen says).
+     */
+    data class ShopStock(val clerk: FieldObject?, val items: List<ShopItem>, val currency: ShopCurrency = ShopCurrency.MONEY)
+
+    /**
+     * What can be bought here, clerk by clerk: the list on screen when the shop is open, the clerk faced (their menu
+     * is open), else every clerk of the map whose catalog is known, nearest first (a floor of a department store has
+     * two: each sells its own list, never mixed).
+     */
+    fun shopStock(state: GameState): List<ShopStock> {
+        (state.screen as? Screen.Shop)?.let { shop -> return listOf(ShopStock(null, shop.items, shop.currency)) }
+        if (shopStage(state) != ShopStage.OVERWORLD) return listOfNotNull(clerkFaced(state)?.catalog?.let { ShopStock(null, it) })
+        return shopClerks(state).mapNotNull { c -> c.catalog?.let { ShopStock(c, it) } }
+    }
+
+    /** Every clerk of this map, nearest first. */
+    fun shopClerks(state: GameState): List<FieldObject> {
+        val field = state.field ?: return emptyList()
+        return field.objects.filter { it.role == PersonRole.CLERK }.sortedBy { kotlin.math.abs(it.x - field.x) + kotlin.math.abs(it.y - field.y) }
+    }
+
+    /** The clerk the player faces (next to them, or across the counter: two tiles ahead). */
+    private fun clerkFaced(state: GameState): FieldObject? {
+        val field = state.field ?: return null
+        val facing = field.facing ?: return null
+        return field.objects.firstOrNull { o ->
+            o.role == PersonRole.CLERK && (1..2).any { d -> o.x == field.x + facing.dx * d && o.y == field.y + facing.dy * d }
+        }
+    }
+
+    /** The clerk's menu: BUY / SELL / SEE YA!. */
+    private const val CLERK_MENU_SIZE = 3
 
     // endregion
 

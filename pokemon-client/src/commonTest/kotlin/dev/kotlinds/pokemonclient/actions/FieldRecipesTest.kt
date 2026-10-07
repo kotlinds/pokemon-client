@@ -94,7 +94,7 @@ class FieldRecipesTest {
     @Test
     fun teachForgetsTheGivenMoveAndChecksTheNewMoveSet() {
         val ui = teachUi(fourMoves)
-        val outcome = PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context())
+        val outcome = Recipes.COMMON.teach(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context())
         assertIs<ActionOutcome.Done>(outcome, outcome.toString())
         assertEquals(listOf(436, 15, 53, 264), ui.party.first().moves.map { it.move.id.value })
         assertIs<Screen.Overworld>(ui.game.screen)
@@ -103,7 +103,7 @@ class FieldRecipesTest {
     @Test
     fun anHmIsNeverForgottenForATm() {
         val ui = teachUi(fourMoves)
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("item:328"), MonId(1, 1), MoveRef("Cut")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.teach(GameAction.Teach(ItemRef("item:328"), MonId(1, 1), MoveRef("Cut")), ui.context()))
         assertEquals(ActionError.HmCannotForget("Cut"), failed.error)
         // Nothing forgotten, and the move list stays open for the agent's next choice (learn_move).
         assertEquals(fourMoves, ui.party.first().moves)
@@ -116,16 +116,16 @@ class FieldRecipesTest {
         val ui = teachUi(fourMoves)
         // HM01 teaches Cut: the game never lets it go, so it isn't offered.
         ui.game.data = StubGameData(machines = mapOf(dev.kotlinds.pokemonclient.data.MachineId(93) to MoveId(15)))
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1)), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.teach(GameAction.Teach(ItemRef("TM01"), MonId(1, 1)), ui.context()))
         val error = assertIs<ActionError.ForgetNeeded>(failed.error)
         assertEquals("INVALID_PARAM", error.code)
         assertEquals(listOf("move:436 Lava Plume", "move:53 Flamethrower", "move:129 Swift"), error.forgettable)
         assertTrue(ui.game.presses.isEmpty(), "no menu opened: ${ui.game.presses}")
         assertIs<Screen.Overworld>(ui.game.screen)
         // An HM move or a move it doesn't know: refused as early.
-        val hm = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("move:15")), ui.context()))
+        val hm = assertIs<ActionOutcome.Failed>(Recipes.COMMON.teach(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("move:15")), ui.context()))
         assertEquals(ActionError.HmCannotForget("Cut"), hm.error)
-        val unknown = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Tackle")), ui.context()))
+        val unknown = assertIs<ActionOutcome.Failed>(Recipes.COMMON.teach(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Tackle")), ui.context()))
         assertEquals("forget", assertIs<ActionError.InvalidParameter>(unknown.error).parameter)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -133,7 +133,7 @@ class FieldRecipesTest {
     @Test
     fun teachRefusesAPokemonOutsideTheParty() {
         val ui = teachUi(fourMoves)
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(9, 9), MoveRef("Swift")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.teach(GameAction.Teach(ItemRef("TM01"), MonId(9, 9), MoveRef("Swift")), ui.context()))
         assertEquals(UnavailableReason.UNKNOWN_POKEMON, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -158,7 +158,7 @@ class FieldRecipesTest {
         // Race: four `teach` answered UNABLE! on the party screen, the bag opened each time.
         val ui = teachUi(fourMoves)
         ui.game.data = tmData(mon1CanLearn = false)
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.teach(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context()))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.CANNOT_LEARN, error.reason)
         assertEquals("party can learn it: ${MonId(2, 1)} MON2", error.hint)
@@ -169,7 +169,7 @@ class FieldRecipesTest {
     fun teachGoesOnForAPokemonThatCanLearnTheMachine() {
         val ui = teachUi(fourMoves)
         ui.game.data = tmData(mon1CanLearn = true)
-        assertIs<ActionOutcome.Done>(PartyBagPlans.teach.run(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.teach(GameAction.Teach(ItemRef("TM01"), MonId(1, 1), MoveRef("Swift")), ui.context()))
         assertEquals(listOf(436, 15, 53, 264), ui.party.first().moves.map { it.move.id.value })
     }
 
@@ -182,7 +182,7 @@ class FieldRecipesTest {
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), bag = listOf(BagPocket("tms_hms", listOf(tm01, hm04))))
         ui.onA = { screen, id -> if (isStart(screen) && id == "option:bag") page1 else screen }
         ui.game.onTouch = { point, screen -> if (point == next && (screen as? Screen.Bag)?.page == 0) page2 else screen }
-        val found = assertIs<Step.Done<Entry>>(PartyBagPlans.bagItem(ui.context(), ItemRef("HM04")))
+        val found = assertIs<Step.Done<Entry>>(Recipes.COMMON.bagItem(ui.context(), ItemRef("HM04")))
         assertEquals("item:423", found.value.id)
         assertEquals(listOf(next), ui.game.touches)
     }
@@ -209,7 +209,7 @@ class FieldRecipesTest {
             Screen.Overworld(null, Awaiting.ANIMATION)
         }
         ui.game.onFrame = { _, screen -> if (screen is Screen.Overworld && screen.awaiting == Awaiting.ANIMATION) OVERWORLD else screen }
-        val done = assertIs<ActionOutcome.Done>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("Bicycle")), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.useKeyItem(GameAction.UseKeyItem(ItemRef("Bicycle")), ui.context()))
         assertTrue("with Y" in done.detail.orEmpty() && "bike" in done.detail.orEmpty(), done.detail)
         assertEquals(listOf(Button.Y), ui.game.presses)
     }
@@ -232,7 +232,7 @@ class FieldRecipesTest {
                 else -> screen
             }
         }
-        val done = assertIs<ActionOutcome.Done>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("item:450")), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.useKeyItem(GameAction.UseKeyItem(ItemRef("item:450")), ui.context()))
         assertTrue("from the bag" in done.detail.orEmpty(), done.detail)
         assertTrue(Button.Y !in ui.game.presses)
     }
@@ -242,7 +242,7 @@ class FieldRecipesTest {
         val ui = keyItemsUi()
         ui.game.bicycleItem = 450
         ui.field = ui.field!!.copy(bikeAllowed = false)
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("Bicycle")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useKeyItem(GameAction.UseKeyItem(ItemRef("Bicycle")), ui.context()))
         assertEquals(UnavailableReason.CANNOT_USE_HERE, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(ui.game.presses.isEmpty(), ui.game.presses.toString())
     }
@@ -262,7 +262,7 @@ class FieldRecipesTest {
                 else -> screen
             }
         }
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("Bicycle")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useKeyItem(GameAction.UseKeyItem(ItemRef("Bicycle")), ui.context()))
         assertEquals(UnavailableReason.CANNOT_USE_HERE, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertIs<Screen.Overworld>(ui.game.screen)
         assertEquals(MovementMode.WALK, ui.field!!.movement)
@@ -277,7 +277,7 @@ class FieldRecipesTest {
         ui.game.data = StubGameData(items = mapOf(
             ItemId(476) to dev.kotlinds.pokemonclient.data.ItemInfo(ItemId(476), "Basement Key", dev.kotlinds.pokemonclient.data.ItemPocket.KEY_ITEMS, 0, usableFromBag = false),
         ))
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("item:476")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useKeyItem(GameAction.UseKeyItem(ItemRef("item:476")), ui.context()))
         assertEquals(UnavailableReason.NOT_USABLE_FROM_BAG, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(ui.game.presses.isEmpty(), ui.game.presses.toString())
     }
@@ -297,7 +297,7 @@ class FieldRecipesTest {
             }
         }
         ui.onB = { screen -> if (screen is Screen.ContextMenu) keyPocket else OVERWORLD }
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useKeyItem.run(GameAction.UseKeyItem(ItemRef("item:476")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useKeyItem(GameAction.UseKeyItem(ItemRef("item:476")), ui.context()))
         assertIs<ActionError.NotOnScreen>(failed.error)
         assertIs<Screen.Overworld>(ui.game.screen)
     }
@@ -318,7 +318,7 @@ class FieldRecipesTest {
                 else -> screen
             }
         }
-        val done = assertIs<ActionOutcome.Done>(PartyBagPlans.registerItem.run(GameAction.RegisterItem(ItemRef("Bicycle")), ui.context()))
+        val done = assertIs<ActionOutcome.Done>(Recipes.COMMON.registerItem(GameAction.RegisterItem(ItemRef("Bicycle")), ui.context()))
         assertEquals("registered on the second touch button (Y keeps Good Rod)", done.detail)
         assertIs<Screen.Overworld>(ui.game.screen)
     }
@@ -644,7 +644,7 @@ class FieldRecipesTest {
                 else -> screen
             }
         }
-        assertIs<ActionOutcome.Done>(PartyBagPlans.giveItem.run(GameAction.GiveItem(MonId(1, 1), ItemRef("Miracle Seed")), ui.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.giveItem(GameAction.GiveItem(MonId(1, 1), ItemRef("Miracle Seed")), ui.context()))
         assertEquals(239, ui.party.single().heldItem?.id?.value)
         assertIs<Screen.Overworld>(ui.game.screen)
     }
@@ -653,7 +653,7 @@ class FieldRecipesTest {
     fun mailIsNotGivenBecauseTheGameWantsAMessageWritten() {
         // Live: GIVE opens the mail editor, where an empty Mail is refused ("Please enter a phrase or word").
         val ui = ScriptedUi(OVERWORLD, party = listOf(mon(1)), bag = listOf(BagPocket("mail", listOf(item(146, "Air Mail", 2)))))
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.giveItem.run(GameAction.GiveItem(MonId(1, 1), ItemRef("Air Mail")), ui.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.giveItem(GameAction.GiveItem(MonId(1, 1), ItemRef("Air Mail")), ui.context()))
         assertEquals(UnavailableReason.MAIL_NEEDS_WRITING, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -680,7 +680,7 @@ class FieldRecipesTest {
         }
         // B on the question would keep the Mail held (it is a NO).
         ui.onB = { screen -> if (screen is Screen.YesNo) grid(ui.party) else OVERWORLD }
-        assertIs<ActionOutcome.Done>(PartyBagPlans.takeItem.run(GameAction.TakeItem(MonId(1, 1)), ui.context()))
+        assertIs<ActionOutcome.Done>(Recipes.COMMON.takeItem(GameAction.TakeItem(MonId(1, 1)), ui.context()))
         assertTrue(sentToPc)
         assertEquals(null, ui.party.single().heldItem)
     }

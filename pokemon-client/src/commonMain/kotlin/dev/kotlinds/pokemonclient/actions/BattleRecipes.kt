@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.actions
 
 import dev.kotlinds.pokemonclient.console.Button
+import dev.kotlinds.pokemonclient.data.MachineId
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BattleOutcome
 import dev.kotlinds.pokemonclient.state.BattleState
@@ -10,13 +11,15 @@ import dev.kotlinds.pokemonclient.state.ItemId
 import dev.kotlinds.pokemonclient.state.LearnQuestion
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MonId
+import dev.kotlinds.pokemonclient.state.PartyMon
 import dev.kotlinds.pokemonclient.state.PartyPurpose
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.TextSource
 
 /**
  * The recipes of the battle actions: `attack`, `run`, `keep_battling`, `switch`, `throw_ball`, `learn_move`, and the
- * battle half of `use_item` ([useItemInBattle]). A family of the chain of [RecipeBase], above [BasicRecipes].
+ * battle half of `use_item` ([useItemInBattle]), with the steps the bag recipes share with them (the move lists of
+ * PP items, [forgetRefusal]). A family of the chain of [RecipeBase], above [BasicRecipes].
  */
 abstract class BattleRecipes internal constructor() : BasicRecipes() {
 
@@ -288,7 +291,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
     /**
      * After "X wants to learn Y" (in or after a battle, or when evolving): forgets [GameAction.LearnMove.forget], or
      * gives up learning the new move when it's null. The move to forget is checked before anything is pressed
-     * ([PartyBagPlans.forgetRefusal], like `teach`): an HM move or a move it doesn't know is refused on the question,
+     * ([forgetRefusal], like `teach`): an HM move or a move it doesn't know is refused on the question,
      * which stays on screen for the next call. Started from the list of moves to forget (left open by an earlier
      * call), it picks there, or cancels it to give up the new move.
      */
@@ -305,7 +308,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
         if (state.battle != null) return
         val menus = state.screen is Screen.Bag || state.screen is Screen.PartyGrid || state.screen is Screen.ContextMenu ||
             (state.screen as? Screen.Dialogue)?.source == TextSource.MENU
-        if (menus) PartyBagPlans.closeToOverworld(context)
+        if (menus) closeToOverworld(context)
     }
 
     /** [learnMove] up to the answer, the menus it was started from left as they are. */
@@ -318,7 +321,7 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
         val prompt = state.screen as? Screen.YesNo
         // Who learns: the prompt says (its MoveOffer), or the list is about it.
         val learner = (prompt?.learning?.mon ?: (state.screen as? Screen.MoveSelect)?.mon)?.let { id -> state.party.firstOrNull { it.id == id } }
-        if (forget != null && learner != null) PartyBagPlans.forgetRefusal(context, learner, forget)?.let { return ActionOutcome.Failed(it) }
+        if (forget != null && learner != null) forgetRefusal(context, learner, forget)?.let { return ActionOutcome.Failed(it) }
         val toList = when {
             // Giving up from the list: CANCEL (the cursor checked) leads to "give up on Y?".
             state.screen is Screen.MoveSelect && forget == null ->
@@ -366,6 +369,24 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
             if (after.screen is Screen.MoveSelect) ActionOutcome.Failed(ActionError.Timeout("still on the move list"))
             else ActionOutcome.Done("forgot ${forget.raw}")
         }
+    }
+
+    /**
+     * Why teaching [mon] with [forget] would fail on the "forget a move" question, before any menu: four moves and no
+     * [forget] ([ActionError.ForgetNeeded], listing the moves it can forget), a [forget] it doesn't know
+     * ([ActionError.InvalidParameter]) or an HM move ([ActionError.HmCannotForget]: the game never lets one go). Null
+     * when the teaching can go on (fewer than four moves: [forget] isn't needed and is ignored). A step of
+     * `learn_move` and `teach`.
+     */
+    internal open fun forgetRefusal(context: PlanContext, mon: PartyMon, forget: MoveRef?): ActionError? {
+        if (mon.moves.size < MAX_MOVES) return null
+        // HM moves, by id from the game's machine table (never by name): the moves of HM01..HM08.
+        val hms = context.game.data?.let { data -> MachineId.all.filter { it.isHm }.mapNotNull(data::machineMove).toSet() }.orEmpty()
+        val forgettable = mon.moves.filter { it.move.id !in hms }
+        if (forget == null) return ActionError.ForgetNeeded(mon.displayName, forgettable.map { "move:${it.move.id.value} ${it.move.name}" })
+        val known = mon.moves.firstOrNull { matchesRef(forget.raw, "move", it.move.id.value, it.move.name) }
+            ?: return ActionError.InvalidParameter("forget", forget.raw, forgettable.map { "move:${it.move.id.value} ${it.move.name}" })
+        return if (known.move.id in hms) ActionError.HmCannotForget(known.move.name) else null
     }
 
     private fun keepAnswer(prompt: Screen.YesNo): String = if (prompt.entries.any { it.id == "option:keep" }) "option:keep" else "option:no"
@@ -421,8 +442,8 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
             target = target ?: MonId.parse(mon)
             context.navigator.choose(Screen.PartyGrid::class, "the Pokémon") { it.id == mon }
         }.andThen { after ->
-            if (!PartyBagPlans.isMoveList(after.screen)) return@andThen Step.Done(after)
-            PartyBagPlans.chooseMove(context, after.screen as Screen.Selectable, action.move)
+            if (!isMoveList(after.screen)) return@andThen Step.Done(after)
+            chooseMove(context, after.screen as Screen.Selectable, action.move)
         }
         if (reached is Step.Failed) {
             backToCommand(context)
@@ -442,12 +463,31 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
         return ActionOutcome.Done("used item:${itemId.value}" + (target?.let { " on $it" } ?: "") + (said?.let { ": $it" } ?: ""))
     }
 
+    /**
+     * "Restore which move?" lists: the field one (moves + QUIT) and the battle one (moves + CANCEL). A step of
+     * `use_item` (both halves).
+     */
+    internal open fun isMoveList(screen: Screen): Boolean =
+        screen is Screen.ListMenu && screen.entries.any { it.id.startsWith("move:") } && screen.entries.all { it.id.startsWith("move:") || it.id.startsWith("option:") || it.id.startsWith("slot:") }
+
+    /**
+     * Picks [move] on a "Restore which move?" list (typed error listing the moves when it's missing or unknown). A step
+     * of `use_item` (both halves).
+     */
+    internal open fun chooseMove(context: PlanContext, list: Screen.Selectable, move: MoveRef?): Step<GameState> {
+        val moves = list.entries.filter { it.id.startsWith("move:") }
+        val entry = move?.let { ref ->
+            moves.firstOrNull { e -> matchesRef(ref.raw, "move", e.id.removePrefix("move:").toIntOrNull() ?: -1, e.label.substringBefore(" (")) }
+        } ?: return Step.Failed(ActionError.InvalidParameter("move", move?.raw ?: "none", moves.map { "${it.id} = ${it.label}" }))
+        return context.navigator.choose(list::class, entry.label) { it.id == entry.id }
+    }
+
     /** The item screens still open: the game refused the item (back to the bag, the item's USE menu or the party). */
     private fun stillInBag(screen: Screen): Boolean = when (screen) {
         is Screen.Bag -> true
         is Screen.PartyGrid -> screen.purpose == PartyPurpose.BATTLE_USE_ITEM
         is Screen.ContextMenu -> screen.entries.any { it.id == "option:use" }
-        is Screen.ListMenu -> PartyBagPlans.isMoveList(screen)
+        is Screen.ListMenu -> isMoveList(screen)
         else -> false
     }
 
@@ -490,6 +530,9 @@ abstract class BattleRecipes internal constructor() : BasicRecipes() {
         const val CONFIRM_FRAMES = 120
 
         const val MAX_BACK_PRESSES = 8
+
+        /** Moves a Pokémon knows at most. */
+        const val MAX_MOVES = 4
         const val MAX_MESSAGES = 6
     }
 }

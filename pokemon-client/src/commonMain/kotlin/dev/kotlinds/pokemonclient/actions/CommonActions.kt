@@ -178,7 +178,7 @@ object CommonActions {
             ),
         ),
         modes = assisted,
-        availability = { state -> if (PartyBagPlans.inField(state) && state.party.size > 1) Availability.Available(mapOf("pokemon" to monChoices(state))) else Availability.Hidden },
+        availability = { state -> if (ActionConditions.inField(state) && state.party.size > 1) Availability.Available(mapOf("pokemon" to monChoices(state))) else Availability.Hidden },
         parse = { json -> parseReorderParty(json) },
     ))
 
@@ -190,7 +190,7 @@ object CommonActions {
         availability = { state ->
             val holders = state.party.filter { it.heldItem != null }
             when {
-                !PartyBagPlans.inField(state) -> Availability.Hidden
+                !ActionConditions.inField(state) -> Availability.Hidden
                 holders.isEmpty() -> Availability.Unavailable(UnavailableReason.NO_STOCK, "No Pokémon holds an item")
                 else -> Availability.Available(mapOf("pokemon" to holders.map { Choice(it.id.toString(), "${it.displayName} (${it.heldItem?.name})") }))
             }
@@ -206,7 +206,7 @@ object CommonActions {
             Parameter("item", ParameterType.STRING, "The item: its id (item:17) or its name."),
         ),
         modes = assisted,
-        availability = { state -> if (PartyBagPlans.inField(state)) Availability.Available(mapOf("pokemon" to monChoices(state))) else Availability.Hidden },
+        availability = { state -> if (ActionConditions.inField(state)) Availability.Available(mapOf("pokemon" to monChoices(state))) else Availability.Hidden },
         parse = { json -> GameAction.GiveItem(mon(json, "pokemon"), ItemRef(string(json, "item"))) },
     ))
 
@@ -233,7 +233,7 @@ object CommonActions {
         availability = { state ->
             when {
                 state.battle != null -> if (ActionConditions.canUseItemInBattle(state)) Availability.Available(itemChoices(state, inBattle = true)) else Availability.Hidden
-                PartyBagPlans.inField(state) -> Availability.Available(itemChoices(state, inBattle = false))
+                ActionConditions.inField(state) -> Availability.Available(itemChoices(state, inBattle = false))
                 else -> Availability.Hidden
             }
         },
@@ -278,7 +278,7 @@ object CommonActions {
         parameters = emptyList(),
         modes = assisted,
         availability = { state ->
-            locked(state, StartMenuFeature.SAVE) ?: if (PartyBagPlans.inField(state)) Availability.Available() else Availability.Hidden
+            locked(state, StartMenuFeature.SAVE) ?: if (ActionConditions.inField(state)) Availability.Available() else Availability.Hidden
         },
         parse = { GameAction.SaveGame },
     ))
@@ -531,9 +531,9 @@ object CommonActions {
         ),
         modes = assisted,
         availability = { state ->
-            if (ShopPlans.stage(state) == null) return@spec Availability.Hidden
+            if (ActionConditions.shopStage(state) == null) return@spec Availability.Hidden
             // Clerk by clerk (never one list mixing two counters): an item sold by several says by whom.
-            val stock = ShopPlans.stock(state)
+            val stock = ActionConditions.shopStock(state)
             // A line sold out is shown by the list but can't be bought: not offered.
             val sellers = stock.flatMap { s -> s.items.filter { !it.soldOut }.map { Triple(it, s.clerk, s.currency) } }.groupBy({ it.first.item.id }, { it })
             Availability.Available(if (sellers.isEmpty()) emptyMap() else mapOf("item" to sellers.values.map { lines ->
@@ -654,7 +654,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             val machines = state.bag.orEmpty().firstOrNull { it.name == "tms_hms" }?.items.orEmpty()
-            if (!PartyBagPlans.inField(state) || machines.isEmpty()) Availability.Hidden
+            if (!ActionConditions.inField(state) || machines.isEmpty()) Availability.Hidden
             else Availability.Available(mapOf("item" to machines.map { Choice("item:${it.item.id.value}", it.item.name) }, "pokemon" to monChoices(state)))
         },
         parse = { json -> GameAction.Teach(ItemRef(string(json, "item")), mon(json, "pokemon"), json["forget"]?.jsonPrimitive?.contentOrNull?.let(::MoveRef)) },
@@ -668,7 +668,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             val keys = state.bag.orEmpty().firstOrNull { it.name == "key_items" }?.items.orEmpty()
-            if (!PartyBagPlans.inField(state) || keys.isEmpty()) Availability.Hidden
+            if (!ActionConditions.inField(state) || keys.isEmpty()) Availability.Hidden
             else Availability.Available(mapOf("item" to keys.map { Choice("item:${it.item.id.value}", it.item.name) }))
         },
         parse = { json -> GameAction.UseKeyItem(ItemRef(string(json, "item"))) },
@@ -681,7 +681,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             val keys = state.bag.orEmpty().firstOrNull { it.name == "key_items" }?.items.orEmpty()
-            if (!PartyBagPlans.inField(state) || keys.isEmpty()) Availability.Hidden
+            if (!ActionConditions.inField(state) || keys.isEmpty()) Availability.Hidden
             else Availability.Available(mapOf("item" to keys.map { Choice("item:${it.item.id.value}", it.item.name + if (state.registeredItems.firstOrNull() == it.item.id) " (on Y)" else "") }))
         },
         parse = { json -> GameAction.RegisterItem(ItemRef(string(json, "item"))) },
@@ -723,7 +723,7 @@ object CommonActions {
         ),
         modes = assisted,
         availability = { state ->
-            if (!PartyBagPlans.inField(state)) return@spec Availability.Hidden
+            if (!ActionConditions.inField(state)) return@spec Availability.Hidden
             // The game's rules as the state read them (GameState.fieldMoves: the move known, the badge): the moves of
             // this action only (Fly and the moves walks use have their own ways).
             val access = state.fieldMoves.orEmpty().filterKeys { it.use == FieldMoveUse.ACTION }
@@ -772,7 +772,7 @@ object CommonActions {
         modes = assisted,
         availability = { state ->
             locked(state, StartMenuFeature.OPTIONS)?.let { return@spec it }
-            if (!PartyBagPlans.inField(state) && !ActionConditions.isOptionsScreen(state)) return@spec Availability.Hidden
+            if (!ActionConditions.inField(state) && !ActionConditions.isOptionsScreen(state)) return@spec Availability.Hidden
             val now = state.options
             Availability.Available(now?.let {
                 mapOf(

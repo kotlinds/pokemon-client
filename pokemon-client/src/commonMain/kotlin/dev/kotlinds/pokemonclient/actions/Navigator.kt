@@ -273,3 +273,9 @@ sealed interface Step<out T> {
     data class Done<T>(val value: T) : Step<T>
     data class Failed(val error: ActionError) : Step<Nothing>
 }
+
+/** Chains a navigation step into another one. */
+internal inline fun <T, R> Step<T>.andThen(next: (T) -> Step<R>): Step<R> = when (this) {
+    is Step.Done -> next(value)
+    is Step.Failed -> this
+}

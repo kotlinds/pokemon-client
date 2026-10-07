@@ -1,5 +1,12 @@
 package dev.kotlinds.pokemonclient.actions
 
+import dev.kotlinds.pokemonclient.console.Button
+import dev.kotlinds.pokemonclient.state.Entry
+import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.MenuKind
+import dev.kotlinds.pokemonclient.state.PartyPurpose
+import dev.kotlinds.pokemonclient.state.Screen
+
 /**
  * The root of every game's recipes: one method per action type, and [perform], the single dispatch from an action
  * to its method.
@@ -16,8 +23,14 @@ package dev.kotlinds.pokemonclient.actions
  * - a recipe that carries out another action as one of its steps (talking to the nurse for `heal`, typing a
  *   nickname for `throw_ball`...) goes through the same object: it calls that action's method (`enterText(...)`, a
  *   virtual call), or, from a family still held as values, [PlanContext.run] → [PlanContext.recipes] (the game's
- *   recipes) → [perform]; so the game's own recipe is played there too, never the common one behind its back. This is also why the families of recipes are a chain of classes and never delegate (`by`): in
- *   a delegate, `this` is the delegate, and its nested calls would skip the game's overrides.
+ *   recipes) → [perform]; so the game's own recipe is played there too, never the common one behind its back. This
+ *   is also why the families of recipes are a chain of classes and never delegate (`by`): in a delegate, `this` is
+ *   the delegate, and its nested calls would skip the game's overrides;
+ * - the screens many recipes go through (the start menu, the party, the bag, the way back to the field...) are steps
+ *   of the chain, `internal open` methods ([openStartMenuEntry], [openParty], [bagItem], [closeToOverworld], and the
+ *   families' own), called the same virtual way by the recipes and by the walking engine ([PlanContext.recipes]): a
+ *   game whose menu differs overrides that one step, and every recipe going through it plays the game's own way,
+ *   none of them copied. There is one method per step, never a static copy of it beside the chain.
  *
  * Every member is `internal`: the recipes run only through [ActionRegistry.execute] (availability checked first) or
  * as a step of another recipe; they are not part of the library's API, and every game lives in this module. The
@@ -236,4 +249,86 @@ abstract class RecipeBase internal constructor() {
     internal abstract fun watchHallOfFame(action: GameAction.WatchHallOfFame, context: PlanContext): ActionOutcome
 
     // endregion
+
+    // region Field menus: the steps every family goes through
+
+    // How the start menu, the party and the bag are reached and left: the steps a game whose menus differ overrides
+    // (a start menu read as a list instead of touched...), so every recipe going through them plays the game's own way
+    // without being copied. Here, the lowest layer, because recipes of every family (and the walking engine, through
+    // [PlanContext.recipes]) use them.
+
+    /** Opens the start menu (X) from the overworld and picks [entryId], or does nothing if already there. */
+    internal open fun openStartMenuEntry(context: PlanContext, entryId: String): Step<GameState> {
+        var state = context.navigator.settle()
+        if (state.screen is Screen.Overworld) {
+            context.scope.tap(Button.X)
+            context.navigator.awaitChange(state.screen)
+            state = context.navigator.settle()
+        }
+        if ((state.screen as? Screen.ListMenu)?.kind != MenuKind.START_MENU) {
+            return Step.Failed(ActionError.UnexpectedScreen("the start menu", state.screen))
+        }
+        return context.navigator.choose(Screen.ListMenu::class, entryId) { it.id == entryId }
+    }
+
+    /** The field party grid (from the overworld, or already open). */
+    internal open fun openParty(context: PlanContext): Step<GameState> {
+        val state = context.navigator.settle()
+        if ((state.screen as? Screen.PartyGrid)?.purpose == PartyPurpose.FIELD) return Step.Done(state)
+        return openStartMenuEntry(context, "option:pokemon")
+    }
+
+    /**
+     * Opens the bag on the pocket holding [item] and turns pages until the item is on screen; returns its entry.
+     */
+    internal open fun bagItem(context: PlanContext, item: ItemRef): Step<Entry> {
+        val owned = context.state().bag.orEmpty().flatMap { pocket -> pocket.items.map { pocket.name to it } }
+            .firstOrNull { (_, stack) -> matchesRef(item.raw, "item", stack.item.id.value, stack.item.name) }
+            ?: return Step.Failed(ActionError.Unavailable(UnavailableReason.UNKNOWN_ITEM, "There's no ${item.raw} in the bag"))
+        val (pocket, stack) = owned
+        val opened = (context.state().screen as? Screen.Bag)?.let { Step.Done(context.state()) } ?: openStartMenuEntry(context, "option:bag")
+        if (opened is Step.Failed) return opened
+        var bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen))
+        if (bag.pocket != pocket) {
+            val tab = "pocket:$pocket"
+            when (val switched = context.navigator.choose(Screen.Bag::class, pocket) { it.id == tab }) {
+                is Step.Failed -> return switched
+                is Step.Done -> bag = switched.value.screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", switched.value.screen))
+            }
+        }
+        val itemId = "item:${stack.item.id.value}"
+        repeat(bag.pages.coerceAtLeast(1)) {
+            bag.entries.firstOrNull { it.id == itemId }?.let { return Step.Done(it) }
+            // Not on this page: turn the page with the (touch) arrow, then look again.
+            val next = bag.entries.firstOrNull { it.id == "page:next" }?.touch ?: return@repeat
+            val before = bag
+            context.scope.touch(next)
+            context.navigator.awaitChange(before)
+            bag = context.navigator.settle().screen as? Screen.Bag ?: return Step.Failed(ActionError.UnexpectedScreen("the bag", context.state().screen))
+        }
+        return Step.Failed(ActionError.NotOnScreen(stack.item.name, "the $pocket pocket", bag.entries.map { it.label }))
+    }
+
+    /** Presses B until the player can walk again (at most a few times), reading every message on the way. */
+    internal open fun closeToOverworld(context: PlanContext, maxPresses: Int = MAX_CLOSE_PRESSES) {
+        repeat(maxPresses) {
+            val state = context.navigator.settle()
+            when (state.screen) {
+                is Screen.Overworld -> return
+                // A question about learning a move (Rare Candy...) is the agent's to answer: B would give the move up.
+                is Screen.YesNo, is Screen.MoveSelect -> if (state.battle == null && ActionConditions.isLearnPrompt(state)) return else context.scope.tap(Button.B)
+                is Screen.Dialogue, is Screen.PressToContinue -> context.scope.tap(Button.A)
+                // The Pokégear has no B: its Close button is touched.
+                is Screen.Viewer -> state.screen.exit.touch?.let { context.scope.touch(it) } ?: context.scope.tap(state.screen.exit.button ?: Button.B)
+                else -> context.scope.tap(Button.B)
+            }
+            context.navigator.awaitChange(state.screen, maxFrames = 60)
+        }
+    }
+
+    // endregion
+
+    private companion object {
+        const val MAX_CLOSE_PRESSES = 8
+    }
 }

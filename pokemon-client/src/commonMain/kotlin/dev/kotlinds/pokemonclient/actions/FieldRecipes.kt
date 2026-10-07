@@ -9,10 +9,10 @@ import dev.kotlinds.pokemonclient.state.kind
 
 /**
  * The recipes of the field's menus: `set_options` and `open_menu`. A family of the chain of [RecipeBase], above
- * [BattleRecipes]. The other field recipes (`fly`, `fish`, `use_field_move`, `save_game`, `tune_radio`) still play
+ * [ServiceRecipes]. The other field recipes (`fly`, `fish`, `use_field_move`, `save_game`, `tune_radio`) still play
  * their family's value from [Recipes] until they move here.
  */
-abstract class FieldRecipes internal constructor() : BattleRecipes() {
+abstract class FieldRecipes internal constructor() : ServiceRecipes() {
 
     /**
      * The OPTIONS screen: start menu → OPTIONS, then for each setting asked for, the row (UP / DOWN) and the value
@@ -27,7 +27,7 @@ abstract class FieldRecipes internal constructor() : BattleRecipes() {
             action.battleStyle?.let { add("battle_style" to it.name.lowercase()) }
         }
         if (wanted.isEmpty()) return ActionOutcome.Failed(ActionError.InvalidParameter("options", "none", listOf("text_speed", "battle_scene", "battle_style")))
-        var step = PartyBagPlans.openStartMenuEntry(context, "option:options").andThen {
+        var step = openStartMenuEntry(context, "option:options").andThen {
             context.navigator.advanceUntil(OPTIONS_WAITS) { ActionConditions.isOptionsScreen(it) }
         }
         for ((row, value) in wanted + (EXIT_ROW to CONFIRM)) {
@@ -38,7 +38,7 @@ abstract class FieldRecipes internal constructor() : BattleRecipes() {
         }.andThen {
             context.navigator.advanceUntil(OPTIONS_WAITS) { !ActionConditions.isOptionsScreen(it) && (it.screen is Screen.Overworld || it.screen is Screen.ListMenu) }
         }
-        PartyBagPlans.closeToOverworld(context)
+        closeToOverworld(context)
         return step.then {
             val options = context.state().options
             val ok = options == null || (
@@ -70,7 +70,7 @@ abstract class FieldRecipes internal constructor() : BattleRecipes() {
 
     /** Opens the start menu (X) and picks the entry; checks something else is on screen after. */
     override fun openMenu(action: GameAction.OpenMenu, context: PlanContext): ActionOutcome =
-        PartyBagPlans.openStartMenuEntry(context, action.entry).then { state ->
+        openStartMenuEntry(context, action.entry).then { state ->
             val screen = state.screen
             if ((screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU) {
                 ActionOutcome.Failed(ActionError.UnexpectedScreen("${action.entry} opened", screen))

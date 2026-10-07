@@ -30,23 +30,12 @@ import dev.kotlinds.pokemonclient.state.sameAs
  * ([dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes], then the game's own). The availability of an action is not a
  * recipe: it is the common contract ([ActionSpec.availability], built on [ActionConditions]), the same for every game.
  *
- * The top of the chain of families ([BasicRecipes], [BattleRecipes], [FieldRecipes]...): it holds the recipes of the
- * game as a whole (soft reset, continuing the saved game, the starter, the Hall of Fame). The families not moved into
- * the chain yet still play their existing recipe value (`PartyBagPlans`, `ShopPlans`...) from here.
+ * The top of the chain of families ([BasicRecipes], [BattleRecipes], [BagPartyRecipes], [ServiceRecipes],
+ * [FieldRecipes]): it holds the recipes of the game as a whole (soft reset, continuing the saved game, the starter, the
+ * Hall of Fame). The families not moved into the chain yet still play their existing recipe value (`MovePlans`,
+ * `FieldPlans`...) from here.
  */
 open class Recipes internal constructor() : FieldRecipes() {
-
-    // region Bag and party
-
-    override fun useItem(action: GameAction.UseItem, context: PlanContext) = PartyBagPlans.useItem.run(action, context)
-    override fun teach(action: GameAction.Teach, context: PlanContext) = PartyBagPlans.teach.run(action, context)
-    override fun reorderParty(action: GameAction.ReorderParty, context: PlanContext) = PartyBagPlans.reorderParty.run(action, context)
-    override fun giveItem(action: GameAction.GiveItem, context: PlanContext) = PartyBagPlans.giveItem.run(action, context)
-    override fun takeItem(action: GameAction.TakeItem, context: PlanContext) = PartyBagPlans.takeItem.run(action, context)
-    override fun useKeyItem(action: GameAction.UseKeyItem, context: PlanContext) = PartyBagPlans.useKeyItem.run(action, context)
-    override fun registerItem(action: GameAction.RegisterItem, context: PlanContext) = PartyBagPlans.registerItem.run(action, context)
-
-    // endregion
 
     // region Moving
 
@@ -55,19 +44,6 @@ open class Recipes internal constructor() : FieldRecipes() {
     override fun step(action: GameAction.Step, context: PlanContext) = MovePlans.step.run(action, context)
     override fun findEncounter(action: GameAction.FindEncounter, context: PlanContext) = MovePlans.findEncounter.run(action, context)
     override fun push(action: GameAction.Push, context: PlanContext) = PushPlans.push(action, context)
-
-    // endregion
-
-    // region Services: Pokémon Center, PC, Poké Mart
-
-    override fun heal(action: GameAction.Heal, context: PlanContext) = FieldPlans.heal.run(action, context)
-    override fun pc(action: GameAction.Pc, context: PlanContext) = PcPlans.pc.run(action, context)
-    override fun deposit(action: GameAction.Deposit, context: PlanContext) = PcPlans.deposit.run(action, context)
-    override fun withdraw(action: GameAction.Withdraw, context: PlanContext) = PcPlans.withdraw.run(action, context)
-    override fun release(action: GameAction.Release, context: PlanContext) = PcPlans.release.run(action, context)
-    override fun buy(action: GameAction.Buy, context: PlanContext) = ShopPlans.buy.run(action, context)
-    override fun sell(action: GameAction.Sell, context: PlanContext) = ShopPlans.sell.run(action, context)
-    override fun setQuantity(action: GameAction.SetQuantity, context: PlanContext) = ShopPlans.setQuantity.run(action, context)
 
     // endregion
 

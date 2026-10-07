@@ -35,8 +35,8 @@ object MoreActions {
         ),
         modes = assisted,
         availability = { state ->
-            val atShop = ShopPlans.stage(state).let { it == ShopPlans.Stage.OVERWORLD || it == ShopPlans.Stage.CLERK_MENU } ||
-                (state.screen is Screen.Bag && state.field != null && ShopPlans.stage(state.copy(screen = Screen.Overworld(awaiting = Awaiting.INPUT))) != null)
+            val atShop = ActionConditions.shopStage(state).let { it == ActionConditions.ShopStage.OVERWORLD || it == ActionConditions.ShopStage.CLERK_MENU } ||
+                (state.screen is Screen.Bag && state.field != null && ActionConditions.shopStage(state.copy(screen = Screen.Overworld(awaiting = Awaiting.INPUT))) != null)
             if (!atShop) return@spec Availability.Hidden
             Availability.Available(mapOf("item" to state.bag.orEmpty().filter { it.name != "key_items" }.flatMap { it.items }
                 .map { Choice("item:${it.item.id.value}", "${it.item.name} x${it.quantity}") }))

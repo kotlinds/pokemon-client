@@ -123,7 +123,7 @@ object PokegearActions {
             }
         }
         if (!action.close) return@ActionPlan ActionOutcome.Done(detail)
-        PartyBagPlans.closeToOverworld(context)
+        context.recipes.closeToOverworld(context)
         val after = context.navigator.settle()
         if (after.screen !is Screen.Overworld) {
             return@ActionPlan ActionOutcome.Failed(ActionError.UnexpectedScreen("the field after closing the Pokégear", after.screen))
@@ -161,7 +161,7 @@ object PokegearActions {
                     if (state.battle != null) return Step.Failed(ActionError.Unavailable(UnavailableReason.IN_BATTLE, "Not during a battle"))
                     // Opening the Pokégear while the phone rings answers the call: the agent decides (advance_dialogue).
                     if (screen.incomingCall != null) return Step.Failed(ActionError.Interrupted(InterruptionCause.PHONE_CALL, "the phone rings (${screen.incomingCall.caller}): answer it first"))
-                    val opened = PartyBagPlans.openStartMenuEntry(context, GEAR_ENTRY)
+                    val opened = context.recipes.openStartMenuEntry(context, GEAR_ENTRY)
                     if (opened is Step.Failed) return opened
                 }
                 is Screen.Animation -> context.scope.step(10)

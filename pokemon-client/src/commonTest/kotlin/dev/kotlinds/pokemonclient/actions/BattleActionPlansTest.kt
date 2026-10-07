@@ -128,7 +128,7 @@ class BattleActionPlansTest {
                 else -> screen
             }
         }
-        val outcome = PartyBagPlans.useItem.run(GameAction.UseItem(ItemRef("Ether"), MonId(2, 1), MoveRef("Icy Wind")), ui.game.context())
+        val outcome = Recipes.COMMON.useItem(GameAction.UseItem(ItemRef("Ether"), MonId(2, 1), MoveRef("Icy Wind")), ui.game.context())
         assertIs<ActionOutcome.Done>(outcome)
         assertEquals(listOf("option:bag", "pocket:hp_pp_restore", "item:38", "option:use", "mon:00000002.00000001", "move:196"), chosen)
     }
@@ -172,7 +172,7 @@ class BattleActionPlansTest {
             }
         }
         ui.onB = { command }
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useItem.run(GameAction.UseItem(ItemRef("item:38"), MonId(1, 1), MoveRef("move:85")), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useItem(GameAction.UseItem(ItemRef("item:38"), MonId(1, 1), MoveRef("move:85")), ui.game.context()))
         assertEquals(UnavailableReason.NO_EFFECT, assertIs<ActionError.Unavailable>(failed.error).reason)
         assertIs<Screen.BattleCommand>(ui.game.screen)
     }
@@ -192,7 +192,7 @@ class BattleActionPlansTest {
             }
         }
         ui.onB = { command }
-        val failed = assertIs<ActionOutcome.Failed>(PartyBagPlans.useItem.run(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), ui.game.context()))
+        val failed = assertIs<ActionOutcome.Failed>(Recipes.COMMON.useItem(GameAction.UseItem(ItemRef("Ether"), MonId(1, 1)), ui.game.context()))
         val error = assertIs<ActionError.InvalidParameter>(failed.error)
         assertEquals("move", error.parameter)
         assertTrue(error.allowed.any { "move:85" in it })
