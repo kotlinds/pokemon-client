@@ -37,7 +37,7 @@ See [docs/adding-a-game.md](docs/adding-a-game.md).
 - Closed sets are sealed classes / interfaces or enums, not raw strings. Strings are converted to types at the
   boundary only (e.g. an action received as JSON is parsed once into a `GameAction`, unknown values rejected with a
   typed error, never silently aliased).
-- Clear layers behind interfaces (`ConsolePort`, `PokemonGame`, plans, registry). KDoc on public types and on
+- Clear layers behind interfaces (`ConsolePort`, `PokemonGame`, recipes, registry). KDoc on public types and on
   anything non-obvious; comments explain **why**, with decompilation references when the behaviour comes from the game.
 - **Safety by construction first.** When a design can make a mistake impossible (the compiler or the structure
   rules it out), prefer it over a design that relies on a convention to follow and to check in review. Examples:

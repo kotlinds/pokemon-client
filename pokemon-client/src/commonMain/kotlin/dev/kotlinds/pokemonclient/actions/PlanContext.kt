@@ -4,14 +4,27 @@ import dev.kotlinds.pokemonclient.PokemonGame
 import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.state.GameState
 
-/** What a recipe works with. */
-class PlanContext(
+/**
+ * What a recipe works with: the [scope] it presses in, the [game] it plays, the [navigator] reading that game, and the
+ * [settings] of the application.
+ *
+ * Built by the library only (the constructor is `internal`: [ActionRegistry.execute] makes one per action, [with] a
+ * variant of it), always with the navigator of its own [game] (`Navigator(scope, game)`, never given apart): a game,
+ * written in this library or in its own project, only receives a context in its overrides, never makes one. So a
+ * context's [state] is always decoded by its [game], and the recipes it runs are always that game's ([recipes]).
+ */
+class PlanContext private constructor(
     val scope: ActionScope,
     val game: PokemonGame,
-    val navigator: Navigator = Navigator(scope, game),
+    /** Reads [game] through [scope] ([Navigator.state]); one per context and its [with] variants (its warp watch). */
+    val navigator: Navigator,
     /** What the application allows the recipes to do by themselves ([ActionSettings]). */
-    val settings: ActionSettings = ActionSettings(),
+    val settings: ActionSettings,
 ) {
+    /** A context playing [game] through [scope], read by a new navigator of that same game. */
+    internal constructor(scope: ActionScope, game: PokemonGame, settings: ActionSettings = ActionSettings()) :
+        this(scope, game, Navigator(scope, game), settings)
+
     /**
      * The recipes of [game] ([PokemonGame.recipes]): the only recipes this context runs. The entries of the recipes
      * ([RecipeBase.perform], [RecipeBase.closeToOverworld], [RecipeBase.activateKeyItem]: the registry, the walking
@@ -24,7 +37,10 @@ class PlanContext(
     /** The current state (decoded from this frame). */
     fun state(): GameState = navigator.state()
 
-    /** The same context with other [settings] (a step run with some freedom taken away, e.g. no puzzle solving). */
+    /**
+     * The same context with other [settings] (a step run with some freedom taken away, e.g. no puzzle solving): same
+     * game, same navigator (the warps it noted and the watchers it tells are the action's).
+     */
     fun with(settings: ActionSettings): PlanContext = PlanContext(scope, game, navigator, settings)
 }
 

@@ -602,7 +602,7 @@ object CommonActions {
     /** Boolean parameter [key] of [json], [default] when absent or not a boolean. */
     private fun bool(json: JsonObject, key: String, default: Boolean = false) = json[key]?.jsonPrimitive?.booleanOrNull ?: default
 
-    /** `item` + `quantity`, then every {item, quantity} of `items` (empty when nothing is named: the plan lists the shop). */
+    /** `item` + `quantity`, then every {item, quantity} of `items` (empty when nothing is named: the recipe lists the shop). */
     private fun purchases(json: JsonObject): List<Purchase> {
         fun one(obj: JsonObject): Purchase? {
             val item = obj["item"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null

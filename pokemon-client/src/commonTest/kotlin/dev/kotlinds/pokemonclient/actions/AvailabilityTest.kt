@@ -159,7 +159,7 @@ class AvailabilityTest {
                 // Nothing enumerated that the execution would refuse.
                 if (def.type in enumerated) assertIs<Availability.Available>(toRun, where)
                 // What isn't listed at all is refused too, each with its own reason.
-                val sample = sample(action) ?: continue
+                val sample = sample(def)
                 val expected = when (toRun) {
                     Availability.Hidden -> UnavailableReason.WRONG_SCREEN to "$action isn't possible on this screen"
                     is Availability.NotInThisGame -> UnavailableReason.NOT_SUPPORTED_BY_GAME to toRun.detail
@@ -170,7 +170,7 @@ class AvailabilityTest {
             }
             // The execution refuses what isn't available, with the listed reason, without a press.
             for ((action, listed) in unavailable) {
-                val sample = sample(action) ?: continue
+                val sample = sample(CommonActions.definitions.single { it.spec.name == action })
                 val refused = assertIs<ActionOutcome.Failed>(registry.execute(sample, game.scope(), game), "$action on \"$name\"")
                 assertEquals(listed.reason, assertIs<ActionError.Unavailable>(refused.error).reason, "$action on \"$name\"")
             }
@@ -178,15 +178,11 @@ class AvailabilityTest {
         }
     }
 
-    /** One instance of the actions refused above (any parameters: the refusal comes before them). */
-    private fun sample(action: String): GameAction? = when (action) {
-        "tune_radio" -> TuneRadio(RadioStation.POKEMON_MUSIC)
-        "run" -> GameAction.Run
-        "save_game" -> GameAction.SaveGame
-        "set_options" -> GameAction.SetOptions()
-        "open_menu" -> GameAction.OpenMenu("option:bag")
-        else -> null
-    }
+    /**
+     * An instance of [def]'s action type, for every action ([Witness]: complete by construction; any parameters, the
+     * refusal comes before them).
+     */
+    private fun sample(def: ActionDefinition<*>): GameAction = Witness.entries.single { def.type.isInstance(it.action) }.action
 
     /**
      * Every action's availability is its own method of the recipes (`<action>Availability`), never another

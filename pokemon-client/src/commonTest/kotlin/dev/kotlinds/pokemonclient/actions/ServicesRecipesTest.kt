@@ -385,8 +385,8 @@ class ServicesRecipesTest {
     fun buyGoesToTheClerkWhoSellsTheItem() {
         val ui = twoClerks()
         val state = ui.game.state(ui.game.screen)
-        assertEquals("person:5", (ui.game.recipes.clerkFor(state, listOf(Purchase(ItemRef("item:4"), 10))) as Step.Done).value?.id)
-        assertEquals("person:3", (ui.game.recipes.clerkFor(state, listOf(Purchase(ItemRef("Potion"), 1))) as Step.Done).value?.id, "the nearest of those who sell it")
+        assertEquals("person:5", (ActionConditions.clerkFor(state, listOf(Purchase(ItemRef("item:4"), 10))) as Step.Done).value?.id)
+        assertEquals("person:3", (ActionConditions.clerkFor(state, listOf(Purchase(ItemRef("Potion"), 1))) as Step.Done).value?.id, "the nearest of those who sell it")
         // Nobody sells it: refused before moving, with each clerk's items.
         val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Buy(listOf(Purchase(ItemRef("item:2"), 1))), ui.context()))
         val error = assertIs<ActionError.InvalidParameter>(failed.error)

@@ -23,8 +23,11 @@ import dev.kotlinds.pokemonclient.state.Screen
  *   compile until every game has a recipe for it;
  * - the recipes and the shared steps are `protected`: outside the chain they are reached only through the entries of
  *   the companion ([perform], [closeToOverworld], [activateKeyItem]), which take the context alone and run the
- *   recipes of the context's own game ([PlanContext.recipes]). No code can combine one game's recipes with another
- *   game's context: a recipe always runs on the recipes its context's game plays;
+ *   recipes of the context's own game ([PlanContext.recipes]). And a [PlanContext] is built by the library only
+ *   (internal constructor, its navigator always made from its own game): a game, whatever module it is written in,
+ *   only receives contexts, each one handed to the recipes of its own game. So no code outside this library can
+ *   combine one game's recipes with another game's context, not even a game's recipes calling their own protected
+ *   methods: the only contexts they ever hold are their game's;
  * - a recipe that carries out another action as one of its steps (talking to the nurse for `heal`, typing a
  *   nickname for `throw_ball`...) calls that action's method on the same object (`enterText(...)`, a virtual call:
  *   the object is the context's game's recipes, since that is the only way in), and the walking engine, which lives

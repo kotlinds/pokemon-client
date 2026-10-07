@@ -25,12 +25,15 @@ import dev.kotlinds.pokemonclient.console.Platform
 import dev.kotlinds.pokemonclient.runtime.ActionScope
 import dev.kotlinds.pokemonclient.runtime.InputProbe
 import dev.kotlinds.pokemonclient.state.Awaiting
+import dev.kotlinds.pokemonclient.state.Cursor
 import dev.kotlinds.pokemonclient.state.GameState
+import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MonId
 import dev.kotlinds.pokemonclient.state.Named
 import dev.kotlinds.pokemonclient.state.PartyMon
 import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.SpeciesId
+import dev.kotlinds.pokemonclient.state.Topology
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -58,6 +61,9 @@ class ExternalGameRecipesTest {
         /** The screen the game shows (walking by default). */
         var screen: Screen = Screen.Overworld(awaiting = Awaiting.INPUT)
 
+        /** Whether START opens the start menu from the field (false: the game ignores it). */
+        var startOpensMenu = true
+
         override val name = "External"
 
         override fun state(memory: Memory) = GameState(
@@ -84,11 +90,16 @@ class ExternalGameRecipesTest {
                 }
             }
 
-            /** This game opens its menu with START from the field, whatever the entry asked: its steps end in the outcome ([then]). */
+            /**
+             * This game opens its menu with START from the field, whatever the entry asked: pressed, then the screen
+             * read back (never done blindly), and its steps end in the outcome ([then]).
+             */
             override fun openMenu(action: GameAction.OpenMenu, context: PlanContext): ActionOutcome =
                 walking(context).andThen { state ->
-                    context.scope.tap(Button.START)
-                    Step.Done(state)
+                    context.navigator.press(Button.START, state.screen) // pressed, then the screen awaited to change
+                    val menu = context.navigator.settle()
+                    if ((menu.screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU) Step.Done(menu)
+                    else Step.Failed(ActionError.UnexpectedScreen("the start menu", menu.screen))
                 }.then { ActionOutcome.Done("opened ${action.entry} with START") }
 
             /** This game saves only at its save points: never from the field ([ActionConditions.inField]), hidden elsewhere. */
@@ -109,8 +120,10 @@ class ExternalGameRecipesTest {
             override val revision get() = frame
             override fun step(frames: Int, input: InputFrame) = repeat(frames) {
                 frame++
-                presses += input.buttons - held
+                val pressed = input.buttons - held
+                presses += pressed
                 held = input.buttons
+                if (Button.START in pressed && startOpensMenu && screen is Screen.Overworld) screen = startMenu()
             }
             override fun memorySize(region: MemoryRegion) = 16
             override fun read(region: MemoryRegion, offset: Int, length: Int, into: ByteArray) = Unit
@@ -120,6 +133,8 @@ class ExternalGameRecipesTest {
         }
 
         fun scope() = ActionScope(console, inputProbe)
+
+        private fun startMenu() = Screen.ListMenu(MenuKind.START_MENU, emptyList(), Cursor.At(0), Topology.vertical(0))
 
         private fun mon(n: Long) = PartyMon(
             MonId(n, 1), n.toInt() - 1, Named(SpeciesId(155), "CYNDAQUIL"), null, 5, 20, 20, null, listOf("Fire"), null, null, emptyList(), emptyMap(), 0, null, false,
@@ -176,9 +191,16 @@ class ExternalGameRecipesTest {
         val done = assertIs<ActionOutcome.Done>(registry.execute(GameAction.OpenMenu("option:pokemon"), game.scope(), game))
         assertEquals("opened option:pokemon with START", done.detail)
         assertEquals(listOf(Button.START), game.presses)
+        assertEquals(MenuKind.START_MENU, assertIs<Screen.ListMenu>(game.screen).kind)
+
+        // START ignored by the game (the field still on screen): read back, the typed error, never "done".
+        val ignoring = ExternalGame().also { it.startOpensMenu = false }
+        val notOpened = assertIs<ActionError.UnexpectedScreen>(assertIs<ActionOutcome.Failed>(registry.execute(GameAction.OpenMenu("option:pokemon"), ignoring.scope(), ignoring)).error)
+        assertEquals("the start menu", notOpened.expected)
+        assertEquals(listOf(Button.START), ignoring.presses, "pressed once, then read back")
 
         // Not walking freely (the start menu is open): the step fails, the chain stops, nothing is pressed.
-        val inMenu = ExternalGame().also { it.screen = Screen.ListMenu(dev.kotlinds.pokemonclient.state.MenuKind.START_MENU, emptyList(), dev.kotlinds.pokemonclient.state.Cursor.At(0), dev.kotlinds.pokemonclient.state.Topology.vertical(0)) }
+        val inMenu = ExternalGame().also { it.screen = Screen.ListMenu(MenuKind.START_MENU, emptyList(), Cursor.At(0), Topology.vertical(0)) }
         val failed = assertIs<ActionError.UnexpectedScreen>(assertIs<ActionOutcome.Failed>(registry.execute(GameAction.OpenMenu("option:pokemon"), inMenu.scope(), inMenu)).error)
         assertEquals("the field", failed.expected)
         assertTrue(inMenu.presses.isEmpty(), "stopped before any press")

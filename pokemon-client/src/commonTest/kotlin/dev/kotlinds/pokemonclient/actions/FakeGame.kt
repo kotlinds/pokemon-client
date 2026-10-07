@@ -115,6 +115,11 @@ fun withFieldMoves(state: GameState, rules: (FieldMoveKind) -> FieldMoveSupport 
 /**
  * The common recipes with the shared bag step ([RecipeBase.bagItem], protected) opened to a test, played on the game
  * they are given to ([PokemonGame.recipes]): [bagItemOf] refuses a context of another game.
+ *
+ * The check stays although [PlanContext]'s constructor is internal: that rules out a foreign context for a game
+ * written outside the library, but this helper lives in the library's own tests, which build contexts themselves
+ * (`FakeGame.context()`), and it opens a protected step to any caller. Without the check a test could hand it a
+ * context of another game and exercise a combination the library never makes.
  */
 internal class BagStepRecipes : Recipes() {
     fun bagItemOf(context: PlanContext, item: ItemRef): Step<dev.kotlinds.pokemonclient.state.Entry> {

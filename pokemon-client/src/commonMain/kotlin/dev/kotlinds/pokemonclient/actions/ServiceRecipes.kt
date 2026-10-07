@@ -541,36 +541,10 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     // a time (read back after each press), confirm; finally leave with B (it picks SEE YA!). The result is checked on
     // the bag and the money, never on the clerk's words.
 
-    /** True when [items] has the item [ref] names (`item:<id>` or its name). */
-    private fun sells(items: List<ShopItem>, ref: ItemRef) = items.any { matchesRef(ref.raw, "item", it.item.id.value, it.item.name) }
-
-    /**
-     * The clerk to buy [purchases] from, walking in from the field: the nearest one whose catalog has them all; else
-     * the nearest whose catalog isn't known (talking shows it). Null when the player is at a counter already (the
-     * shop list or the clerk's menu: that clerk). A known set of clerks none of whom sells them all is refused
-     * before moving, with what each one sells.
-     */
-    internal fun clerkFor(state: GameState, purchases: List<Purchase>): Step<FieldObject?> {
-        if (ActionConditions.shopStage(state) != ShopStage.OVERWORLD) return Step.Done(null)
-        val all = ActionConditions.shopClerks(state)
-        all.firstOrNull { c -> c.catalog?.let { items -> purchases.all { sells(items, it.item) } } == true }?.let { return Step.Done(it) }
-        all.firstOrNull { it.catalog == null }?.let { return Step.Done(it) }
-        if (all.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no shop clerk here", "go to a Poké Mart"))
-        val missing = purchases.firstOrNull { p -> all.none { c -> sells(c.catalog.orEmpty(), p.item) } } ?: purchases.first()
-        val allowed = all.flatMap { c -> c.catalog.orEmpty().map { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""}, ${c.id})" } }
-        // Every line sold, but by different clerks: one buy per clerk.
-        val split = purchases.all { p -> all.any { c -> sells(c.catalog.orEmpty(), p.item) } }
-        return Step.Failed(
-            if (split) ActionError.Unavailable(UnavailableReason.NO_STOCK, "No single clerk here sells all of ${purchases.joinToString { it.item.raw }}: " +
-                describeStocks(all.mapNotNull { c -> c.catalog?.let { ShopStock(c, it) } }).removePrefix("nothing bought; "), "buy from each clerk in its own buy")
-            else ActionError.InvalidParameter("item", missing.item.raw, allowed),
-        )
-    }
-
     override fun buy(action: GameAction.Buy, context: PlanContext): ActionOutcome {
         val start = context.state()
         if (action.purchases.isEmpty()) return listCatalog(context, start)
-        val seller = clerkFor(start, action.purchases)
+        val seller = ActionConditions.clerkFor(start, action.purchases)
         if (seller is Step.Failed) return ActionOutcome.Failed(seller.error)
         val opened = openShop(context, (seller as Step.Done).value)
         if (opened is Step.Failed) {
@@ -637,7 +611,7 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
         val known = ActionConditions.shopStock(start).filter { it.items.isNotEmpty() }
         val unknown = if (atCounter) emptyList() else ActionConditions.shopClerks(start).filter { it.catalog == null }
         val canLearn = partyCanLearn(context, start)
-        if (known.isNotEmpty() && unknown.isEmpty()) return ActionOutcome.Done(describeStocks(known, canLearn))
+        if (known.isNotEmpty() && unknown.isEmpty()) return ActionOutcome.Done(ActionConditions.describeStocks(known, canLearn))
         val read = mutableListOf<ShopStock>()
         for (clerk in if (atCounter) listOf(null) else unknown) {
             val opened = openShop(context, clerk)
@@ -649,7 +623,7 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
         }
         val all = known + read
         return if (all.isEmpty()) ActionOutcome.Failed(ActionError.Unavailable(UnavailableReason.NO_STOCK, "The shop list shows nothing to buy"))
-        else ActionOutcome.Done(describeStocks(all, canLearn))
+        else ActionOutcome.Done(ActionConditions.describeStocks(all, canLearn))
     }
 
     /**
@@ -660,22 +634,6 @@ abstract class ServiceRecipes internal constructor() : MoveRecipes() {
     private fun partyCanLearn(context: PlanContext, state: GameState): (ItemId) -> List<String>? {
         val data = context.game.data?.takeIf { context.settings.pokedex } ?: return { null }
         return { item -> data.machineOf(item)?.let { MachineCompatibility.partyCanLearn(data, state.party, it).ifEmpty { listOf("nobody") } } }
-    }
-
-    /**
-     * "nothing bought; sold here: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)" for one clerk; with several,
-     * each clerk's own list: "nothing bought; person:3 sells: item:17 (Potion, ₽300); person:5 sells: item:4 (...)".
-     * A TM says who of the party can learn it when [canLearn] tells ("item:340 (TM13, ₽3000, party can learn: ...)").
-     */
-    private fun describeStocks(stocks: List<ShopStock>, canLearn: (ItemId) -> List<String>? = { null }): String {
-        fun items(stock: ShopStock) = stock.items.joinToString {
-            "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", " + stock.currency.format(p.toLong()) } ?: ""}" +
-                (if (it.soldOut) ", sold out" else "") +
-                (canLearn(it.item.id)?.let { who -> ", party can learn: ${who.joinToString()}" } ?: "") + ")"
-        }
-        val single = stocks.singleOrNull()
-        return if (single != null) "nothing bought; sold here: " + items(single)
-        else "nothing bought; " + stocks.joinToString("; ") { "${it.clerk?.id ?: "this clerk"} sells: " + items(it) }
     }
 
     /**

@@ -1,7 +1,5 @@
 package dev.kotlinds.pokemonclient.actions
 
-import dev.kotlinds.pokemonclient.Direction
-import dev.kotlinds.pokemonclient.console.TouchPoint
 import dev.kotlinds.pokemonclient.games.hgss.HgssGame
 import dev.kotlinds.pokemonclient.games.hgss.HgssRecipes
 import dev.kotlinds.pokemonclient.games.hgss.HgssVersion
@@ -9,8 +7,6 @@ import dev.kotlinds.pokemonclient.games.gen4.Gen4Recipes
 import dev.kotlinds.pokemonclient.games.platinum.PlatinumGame
 import dev.kotlinds.pokemonclient.games.platinum.PlatinumRecipes
 import dev.kotlinds.pokemonclient.games.platinum.PlatinumVersion
-import dev.kotlinds.pokemonclient.state.RadioStation
-import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.console.Button
 import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.BattleKind
@@ -127,42 +123,19 @@ class ActionRegistryTest {
 
     /**
      * Each Gen 4 game plays its own recipes, built on the Gen 4 ones ([Gen4Recipes]), one instance shared by every
-     * game object of that game (recipes are stateless). There is no shared common instance: a game must give its
-     * recipes ([dev.kotlinds.pokemonclient.PokemonGame.recipes] has no default, checked by the compiler), and two games
-     * built on the common recipes each have their own.
+     * game object of that game (recipes are stateless), never another game's. (That no recipes object is shared by
+     * default is the compiler's: [dev.kotlinds.pokemonclient.PokemonGame.recipes] has no default.)
      */
     @Test
     fun eachGen4GamePlaysItsOwnRecipesOnTheGen4Ones() {
         val hgss = HgssGame(HgssVersion.HEARTGOLD_US).recipes
         val platinum = PlatinumGame(PlatinumVersion.PLATINUM_US).recipes
-        assertIs<HgssRecipes>(hgss)
-        assertIs<PlatinumRecipes>(platinum)
+        assertIs<HgssRecipes>(assertIs<Gen4Recipes>(hgss))
+        assertIs<PlatinumRecipes>(assertIs<Gen4Recipes>(platinum))
         assertSame(hgss, HgssGame(HgssVersion.HEARTGOLD_US).recipes)
+        assertSame(platinum, PlatinumGame(PlatinumVersion.PLATINUM_US).recipes)
         assertTrue(hgss !== platinum)
-        assertTrue(FakeGame(Screen.Overworld(null, Awaiting.INPUT)).recipes !== FakeGame(Screen.Overworld(null, Awaiting.INPUT)).recipes)
     }
-
-    /**
-     * One instance of every action type ([GameAction] is sealed: [RecipeBase.perform] can't compile without a recipe
-     * for each, but a spec is found by type at run time). Kept by hand: a new action type adds its witness here.
-     */
-    private val witnesses: List<GameAction> = listOf(
-        GameAction.Press(Button.A), GameAction.Touch(TouchPoint(1, 1)), GameAction.Wait(1), GameAction.Drag(TouchPoint(1, 1), TouchPoint(2, 2)),
-        GameAction.AdvanceDialogue, GameAction.Choose("option:yes"), GameAction.EnterText("ABC"),
-        GameAction.Attack(MoveRef("move:33")), GameAction.Switch(MonId(1, 2)), GameAction.KeepBattling, GameAction.Run,
-        GameAction.ThrowBall(ItemRef("item:4")), GameAction.LearnMove(null),
-        GameAction.UseItem(ItemRef("item:17")), GameAction.Teach(ItemRef("item:328"), MonId(1, 2)), GameAction.ReorderParty(MonId(1, 2), 1),
-        GameAction.GiveItem(MonId(1, 2), ItemRef("item:17")), GameAction.TakeItem(MonId(1, 2)), GameAction.UseKeyItem(ItemRef("item:450")),
-        GameAction.RegisterItem(ItemRef("item:450")),
-        GameAction.GoTo(1, 1, null), GameAction.Interact("person:0"), GameAction.Step(Direction.NORTH), GameAction.FindEncounter,
-        GameAction.Push("person:0"),
-        GameAction.Heal, GameAction.Pc(emptyList()), GameAction.Deposit(MonId(1, 2)), GameAction.Withdraw(MonId(1, 2)),
-        GameAction.Release(MonId(1, 2), confirm = true), GameAction.Buy(emptyList()), GameAction.Sell(ItemRef("item:17"), 1),
-        GameAction.SetQuantity(1),
-        GameAction.Fly("New Bark Town"), GameAction.Fish(ItemRef("item:445")), GameAction.UseFieldMove(FieldMoveKind.CUT),
-        GameAction.SaveGame, GameAction.SetOptions(), GameAction.OpenMenu("option:bag"), TuneRadio(RadioStation.entries.first()),
-        GameAction.SoftReset, GameAction.ContinueGame, GameAction.ChooseStarter("starter:0"), GameAction.WatchHallOfFame,
-    )
 
     /**
      * Every action type has exactly one spec (what agents see), and every spec one action type: the contract the
@@ -170,11 +143,12 @@ class ActionRegistryTest {
      */
     @Test
     fun everyActionTypeHasExactlyOneSpec() {
-        assertEquals(witnesses.size, witnesses.map { it::class }.toSet().size, "one witness per action type")
-        for (action in witnesses) {
-            assertEquals(1, CommonActions.definitions.count { it.type.isInstance(action) }, "specs of ${action::class.simpleName}")
+        for (witness in Witness.entries) assertEquals(witness, witnessOf(witness.action), "the witness of ${witness.name} is of its own type")
+        assertEquals(Witness.entries.size, Witness.entries.map { it.action::class }.toSet().size, "one witness per action type")
+        for (witness in Witness.entries) {
+            assertEquals(1, CommonActions.definitions.count { it.type.isInstance(witness.action) }, "specs of ${witness.action::class.simpleName}")
         }
-        assertEquals(witnesses.size, CommonActions.definitions.size, "a spec without a witness: add it to the witnesses")
+        assertEquals(Witness.entries.size, CommonActions.definitions.size, "a spec of no action type")
         assertEquals(CommonActions.definitions.size, CommonActions.definitions.map { it.spec.name }.toSet().size, "two specs with one name")
     }
 

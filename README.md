@@ -14,7 +14,7 @@ to let AIs play Pokémon HeartGold / SoulSilver and Platinum.
 - **`pokemon-client`** (Kotlin Multiplatform, as much as possible in `commonMain`) knows Pokémon, not emulators. A game
   reads the RAM into one common, typed model: `GameState` with a sealed `Screen` (every menu has its entries with
   **stable, language-independent ids** like `option:yes`, `mon:8dd175d1.76f3a6fb`, `move:85`, its cursor and the exact
-  D-pad topology). Actions are typed (`GameAction`) and carried out by **plans** that never press blindly: the
+  D-pad topology). Actions are typed (`GameAction`) and carried out by **recipes** that never press blindly: the
   `Navigator` reads the cursor, moves it one verified tap at a time and confirms only on the target (3 corrections at
   most, then an explicit error). Movement uses the maps read from the **ROM** with
   [kotlinds](https://github.com/kotlinds/kotlinds) (tiles, heights, warps, events) with the live people and the game's
@@ -29,7 +29,7 @@ to let AIs play Pokémon HeartGold / SoulSilver and Platinum.
  ┌──────────────── pokemon-client (dev.kotlinds.pokemonclient) ───────────┐
  │ state: GameState, sealed Screen (entries, cursor, topology), events    │
  │ runtime: ActionScope (self-checking taps), Recorder                     │
- │ actions: Navigator (verified cursor moves), typed GameActions, plans,  │
+ │ actions: Navigator (verified cursor moves), typed GameActions, recipes,│
  │          ActionRegistry (schema, availability, typed errors)            │
  │ world: Area, Pathfinder (levels, ledges, surf, triggers)  view: MapView │
  │ data: GameData, Lookup, KnowledgeLevel                                  │
@@ -76,5 +76,5 @@ POKEMON_ROM=/path/to/rom.nds EMULATOR_CORE=desmume ./gradlew -q :pokemon-client-
 ## Adding a game
 
 See [docs/adding-a-game.md](docs/adding-a-game.md): implement `PokemonGame` (RAM → `GameState`, screen decoders,
-optionally `world` and `data` from the ROM) and register its ROM code in `PokemonGames`; the plans, the navigator and
+optionally `world` and `data` from the ROM) and register its ROM code in `PokemonGames`; the recipes, the navigator and
 the action registry work unchanged.

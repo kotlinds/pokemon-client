@@ -6,6 +6,7 @@ import dev.kotlinds.pokemonclient.state.Awaiting
 import dev.kotlinds.pokemonclient.state.FieldObject
 import dev.kotlinds.pokemonclient.state.GameState
 import dev.kotlinds.pokemonclient.state.IntroStage
+import dev.kotlinds.pokemonclient.state.ItemId
 import dev.kotlinds.pokemonclient.state.LearnQuestion
 import dev.kotlinds.pokemonclient.state.MenuKind
 import dev.kotlinds.pokemonclient.state.MoveContext
@@ -151,6 +152,49 @@ object ActionConditions {
     fun shopClerks(state: GameState): List<FieldObject> {
         val field = state.field ?: return emptyList()
         return field.objects.filter { it.role == PersonRole.CLERK }.sortedBy { kotlin.math.abs(it.x - field.x) + kotlin.math.abs(it.y - field.y) }
+    }
+
+    /** True when [items] has the item [ref] names (`item:<id>` or its name). */
+    private fun sells(items: List<ShopItem>, ref: ItemRef) = items.any { matchesRef(ref.raw, "item", it.item.id.value, it.item.name) }
+
+    /**
+     * The clerk to buy [purchases] from, walking in from the field: the nearest one whose catalog has them all; else
+     * the nearest whose catalog isn't known (talking shows it). Null when the player is at a counter already (the
+     * shop list or the clerk's menu: that clerk). A known set of clerks none of whom sells them all is refused
+     * before moving, with what each one sells. A pure function of the state, like the predicates above (the `buy`
+     * recipe reads it before moving).
+     */
+    internal fun clerkFor(state: GameState, purchases: List<Purchase>): Step<FieldObject?> {
+        if (ActionConditions.shopStage(state) != ShopStage.OVERWORLD) return Step.Done(null)
+        val all = ActionConditions.shopClerks(state)
+        all.firstOrNull { c -> c.catalog?.let { items -> purchases.all { sells(items, it.item) } } == true }?.let { return Step.Done(it) }
+        all.firstOrNull { it.catalog == null }?.let { return Step.Done(it) }
+        if (all.isEmpty()) return Step.Failed(ActionError.Unavailable(UnavailableReason.WRONG_SCREEN, "There is no shop clerk here", "go to a Poké Mart"))
+        val missing = purchases.firstOrNull { p -> all.none { c -> sells(c.catalog.orEmpty(), p.item) } } ?: purchases.first()
+        val allowed = all.flatMap { c -> c.catalog.orEmpty().map { "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", ₽$p" } ?: ""}, ${c.id})" } }
+        // Every line sold, but by different clerks: one buy per clerk.
+        val split = purchases.all { p -> all.any { c -> sells(c.catalog.orEmpty(), p.item) } }
+        return Step.Failed(
+            if (split) ActionError.Unavailable(UnavailableReason.NO_STOCK, "No single clerk here sells all of ${purchases.joinToString { it.item.raw }}: " +
+                describeStocks(all.mapNotNull { c -> c.catalog?.let { ShopStock(c, it) } }).removePrefix("nothing bought; "), "buy from each clerk in its own buy")
+            else ActionError.InvalidParameter("item", missing.item.raw, allowed),
+        )
+    }
+
+    /**
+     * "nothing bought; sold here: item:4 (Poké Ball, ₽200), item:17 (Potion, ₽300)" for one clerk; with several,
+     * each clerk's own list: "nothing bought; person:3 sells: item:17 (Potion, ₽300); person:5 sells: item:4 (...)".
+     * A TM says who of the party can learn it when [canLearn] tells ("item:340 (TM13, ₽3000, party can learn: ...)").
+     */
+    internal fun describeStocks(stocks: List<ShopStock>, canLearn: (ItemId) -> List<String>? = { null }): String {
+        fun items(stock: ShopStock) = stock.items.joinToString {
+            "item:${it.item.id.value} (${it.item.name}${it.price?.let { p -> ", " + stock.currency.format(p.toLong()) } ?: ""}" +
+                (if (it.soldOut) ", sold out" else "") +
+                (canLearn(it.item.id)?.let { who -> ", party can learn: ${who.joinToString()}" } ?: "") + ")"
+        }
+        val single = stocks.singleOrNull()
+        return if (single != null) "nothing bought; sold here: " + items(single)
+        else "nothing bought; " + stocks.joinToString("; ") { "${it.clerk?.id ?: "this clerk"} sells: " + items(it) }
     }
 
     /** The clerk the player faces (next to them, or across the counter: two tiles ahead). */
