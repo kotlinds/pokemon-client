@@ -55,6 +55,13 @@ kotlin {
         testRuns.named("test") {
             executionTask.configure {
                 useJUnitPlatform()
+                // The ROM test (GettingStartedTest) runs only when POKEMON_ROM is set and LIBRETRO_CORES holds the core:
+                // make them inputs so results with and without them aren't taken for each other from the build cache.
+                inputs.property("pokemonRom", System.getenv("POKEMON_ROM").orEmpty())
+                inputs.property("libretroCores", System.getenv("LIBRETRO_CORES").orEmpty())
+                // GettingStartedTest checks that the guide shows its code (its `// doc:` blocks, comments included).
+                inputs.file(rootProject.file("docs/getting-started.md"))
+                inputs.file("src/commonTest/kotlin/dev/kotlinds/pokemonclient/libretro/GettingStartedTest.kt")
             }
         }
     }

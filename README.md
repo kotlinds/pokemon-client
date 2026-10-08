@@ -46,10 +46,16 @@ to let AIs play Pokémon HeartGold / SoulSilver and Platinum.
 
 ```kotlin
 dependencies {
-    implementation("dev.kotlinds:pokemon-client:0.1.0")
-    implementation("dev.kotlinds:pokemon-client-libretro:0.1.0") // to run it on a libretro core (JVM)
+    implementation("dev.kotlinds:pokemon-client:0.1.1")
+    implementation("dev.kotlinds:pokemon-client-libretro:0.1.1") // to run it on a libretro core (JVM)
 }
 ```
+
+`main` (and the guide below) follows the next version, with the per-game recipes: until it is released, use the
+`-SNAPSHOT` published locally (see [Development](#development)).
+
+Next: [Getting started](docs/getting-started.md): boot a ROM on a libretro core, read the typed state and the agent's
+JSON view, list and execute actions (typed or from JSON), lookups.
 
 ## Development
 
@@ -62,7 +68,9 @@ provides (declared in `PlatformServices.kt`, `BundledResources.kt` and the tests
 that runs real threads. Files go through [kotlinx-io](https://github.com/Kotlin/kotlinx-io).
 
 Tests: `./gradlew jvmTest`. The tests reading a ROM run only when its path is given (they are skipped
-otherwise): `POKEMON_ROM` (HeartGold US) and `PLATINUM_ROM` (Platinum US). Coverage with `./gradlew koverHtmlReport`.
+otherwise): `POKEMON_ROM` (HeartGold US) and `PLATINUM_ROM` (Platinum US). The getting-started test also boots the
+game on DeSmuME: it needs `LIBRETRO_CORES`, a directory holding the core (a bench data directory's `cores/`; tests
+never download). Coverage with `./gradlew koverHtmlReport`.
 
 The headless **bench** (`runBench` in `dev.kotlinds.pokemonclient.libretro.bench`, see its KDoc; common code, started
 by `BenchMain.kt` on the JVM) runs commands and actions on a ROM without any app (`BENCH_WINDOW=1` shows it live,
@@ -75,6 +83,7 @@ POKEMON_ROM=/path/to/rom.nds EMULATOR_CORE=desmume ./gradlew -q :pokemon-client-
 
 ## Adding a game
 
-See [docs/adding-a-game.md](docs/adding-a-game.md): implement `PokemonGame` (RAM → `GameState`, screen decoders,
-optionally `world` and `data` from the ROM) and register its ROM code in `PokemonGames`; the recipes, the navigator and
-the action registry work unchanged.
+See [docs/adding-a-game.md](docs/adding-a-game.md): implement `PokemonGame` (RAM → `GameState`, screen decoders, its
+own `recipes` instance overriding only what the game does differently, optionally `world` and `data` from the ROM) and
+register its ROM code in `PokemonGames`; the navigator, the action registry and the actions' contract stay the same. A
+game can also be written in its own project first, against the published library.
