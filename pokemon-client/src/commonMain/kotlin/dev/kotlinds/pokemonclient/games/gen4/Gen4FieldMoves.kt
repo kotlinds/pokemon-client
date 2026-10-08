@@ -3,6 +3,7 @@ package dev.kotlinds.pokemonclient.games.gen4
 import dev.kotlinds.pokemonclient.state.MoveId
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
 import dev.kotlinds.pokemonclient.world.FieldMoveRule
+import dev.kotlinds.pokemonclient.world.FieldMoveSupport
 
 /**
  * The field moves of the Gen 4 engine: every Gen 4 game checks a field move outside battle the same way (a Pokémon of
@@ -17,10 +18,11 @@ object Gen4FieldMoves {
 
     /**
      * The rule of field move [kind] in a game whose field moves are [badges] (each one with the badge it needs, null
-     * for none: Teleport, Dig...); null when that game doesn't have the move.
+     * for none: Teleport, Dig...); [FieldMoveSupport.NotInGame] when that game doesn't have the move (missing from
+     * [badges]: Defog in HeartGold / SoulSilver, Whirlpool and Headbutt in Platinum).
      */
-    fun rule(kind: FieldMoveKind, badges: Map<FieldMoveKind, Badge?>): FieldMoveRule? =
-        if (kind !in badges) null else badges[kind].let { FieldMoveRule(MoveId(moveId(kind)), it?.name, it?.id) }
+    fun rule(kind: FieldMoveKind, badges: Map<FieldMoveKind, Badge?>): FieldMoveSupport =
+        if (kind !in badges) FieldMoveSupport.NotInGame else badges[kind].let { FieldMoveRule(MoveId(moveId(kind)), it?.name, it?.id) }
 
     /** The move id of [kind] (include/constants/moves.h, the same in every Gen 4 game). */
     fun moveId(kind: FieldMoveKind): Int = when (kind) {

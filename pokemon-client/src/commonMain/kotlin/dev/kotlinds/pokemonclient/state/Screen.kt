@@ -512,8 +512,15 @@ enum class IntroStage {
 /**
  * The inputs that pass an intro screen ([Screen.Intro]) right now: any one of [buttons], pressed once, or, when
  * [touchAnywhere], a touch anywhere on the bottom screen. Every one of them does the same thing.
+ *
+ * Never empty, by construction (an [IllegalArgumentException] otherwise): a screen that takes no input has none at
+ * all ([Screen.Intro.goesOnWith] null), and `continue_game` always has an input to try on a screen that has some.
  */
-data class IntroInputs(val buttons: Set<Button>, val touchAnywhere: Boolean = false)
+data class IntroInputs(val buttons: Set<Button>, val touchAnywhere: Boolean = false) {
+    init {
+        require(buttons.isNotEmpty() || touchAnywhere) { "an intro screen that goes on takes at least one input (else goesOnWith is null)" }
+    }
+}
 
 /** Kinds of [Screen.Animation]. */
 enum class AnimationKind {

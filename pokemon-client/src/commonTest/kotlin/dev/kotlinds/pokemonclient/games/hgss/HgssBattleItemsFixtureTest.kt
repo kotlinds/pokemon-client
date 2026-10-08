@@ -39,11 +39,11 @@ class HgssBattleItemsFixtureTest {
     fun theRightPokemonChoosesWithItsOwnMovesInDoubles() {
         val state = state("bt_double_cmd_right")
         assertEquals(BattlerRef.PLAYER_RIGHT, state.battle!!.actor)
-        val attack = ActionRegistry.of().available(state, ActionMode.ASSISTED).single { it.name == "attack" }
+        val attack = ActionRegistry.of().available(state, ActionMode.ASSISTED, HgssGame(HgssVersion.HEARTGOLD_US)).single { it.name == "attack" }
         // Kenya (Fearow): Fly, Attract, Assurance, Aerial Ace.
         assertEquals(listOf("move:19", "move:213", "move:372", "move:332"), attack.choices.getValue("move").map { it.value })
         // Both Pokémon on the field are already in battle.
-        val switch = ActionRegistry.of().available(state, ActionMode.ASSISTED).single { it.name == "switch" }
+        val switch = ActionRegistry.of().available(state, ActionMode.ASSISTED, HgssGame(HgssVersion.HEARTGOLD_US)).single { it.name == "switch" }
         assertTrue(switch.choices.getValue("pokemon").none { it.value == "mon:00006b5e.000003e9" || it.value == "mon:59e9db62.76f3a6fb" })
     }
 

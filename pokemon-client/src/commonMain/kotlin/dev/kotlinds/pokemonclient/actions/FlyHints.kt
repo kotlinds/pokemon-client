@@ -8,7 +8,7 @@ import dev.kotlinds.pokemonclient.world.Pathfinder
  * What the agent needs to know when Fly can't take it where it asks: the nearest place where Fly works (from a map
  * whose header doesn't allow it: [dev.kotlinds.pokemonclient.world.WorldSource.flyAllowed], the game's own flag), and destinations in another region (HGSS: Fly only reaches the region the player is in, Johto or
  * Kanto, except from Indigo Plateau). `fly` itself goes through Indigo Plateau once it was visited (see
- * [FieldPlans.fly]): the region errors below are for when it can't.
+ * [FieldRecipes.fly]): the region errors below are for when it can't.
  */
 internal object FlyHints {
 

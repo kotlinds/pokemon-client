@@ -17,7 +17,7 @@ import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.games.gen4.Gen4FieldMoves
 import dev.kotlinds.pokemonclient.games.hgss.HgssFieldMoves
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
-import dev.kotlinds.pokemonclient.world.FieldMoveRule
+import dev.kotlinds.pokemonclient.world.FieldMoveSupport
 import dev.kotlinds.pokemonclient.world.FieldMoves
 
 /**
@@ -53,15 +53,18 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
     /** The bicycle's item id (none by default). */
     override var bicycleItem: Int? = null
 
-    /** The game's own recipes ([PokemonGame.actionOverrides]): none by default. */
-    override var actionOverrides: List<RecipeOverride<*>> = emptyList()
+    /**
+     * How the game carries out the actions ([PokemonGame.recipes]): this game's own instance of the common recipes by
+     * default (never one shared with another game); a test replaces it with a subclass overriding what it checks.
+     */
+    override var recipes: Recipes = Recipes()
 
     /** The game's data, when a test needs some (see [StubGameData]). */
     override var data: GameData? = null
-    /** The game's field move rules (none by default); [hgssFieldMoves] for the real HeartGold / SoulSilver table. */
-    var fieldMoveRules: (FieldMoveKind) -> FieldMoveRule? = { null }
+    /** The game's field move rules (not declared by default: unknown); [hgssFieldMoves] for the real HeartGold / SoulSilver table. */
+    var fieldMoveRules: (FieldMoveKind) -> FieldMoveSupport = { FieldMoveSupport.Unknown }
 
-    override fun fieldMoveRule(move: FieldMoveKind): FieldMoveRule? = fieldMoveRules(move)
+    override fun fieldMoveRule(move: FieldMoveKind): FieldMoveSupport = fieldMoveRules(move)
 
     /** The scripted state, with the access to the field moves like a real game reads it ([GameState.fieldMoves]). */
     override fun state(memory: Memory): GameState = state(screen).let { it.copy(fieldMoves = FieldMoves.access(it, fieldMoveRules)) }
@@ -103,8 +106,24 @@ class FakeGame(var screen: Screen, var state: (Screen) -> GameState = { GameStat
 }
 
 /** HeartGold / SoulSilver's field move rules (the real table, [HgssFieldMoves]), for fakes standing in for it. */
-val hgssFieldMoves: (FieldMoveKind) -> FieldMoveRule? = { Gen4FieldMoves.rule(it, HgssFieldMoves.BADGES) }
+val hgssFieldMoves: (FieldMoveKind) -> FieldMoveSupport = { Gen4FieldMoves.rule(it, HgssFieldMoves.BADGES) }
 
 /** [state] with its field moves under [rules], as a real game reads it ([GameState.fieldMoves]). */
-fun withFieldMoves(state: GameState, rules: (FieldMoveKind) -> FieldMoveRule? = hgssFieldMoves): GameState =
+fun withFieldMoves(state: GameState, rules: (FieldMoveKind) -> FieldMoveSupport = hgssFieldMoves): GameState =
     state.copy(fieldMoves = FieldMoves.access(state, rules))
+
+/**
+ * The common recipes with the shared bag step ([RecipeBase.bagItem], protected) opened to a test, played on the game
+ * they are given to ([PokemonGame.recipes]): [bagItemOf] refuses a context of another game.
+ *
+ * The check stays although [PlanContext]'s constructor is internal: that rules out a foreign context for a game
+ * written outside the library, but this helper lives in the library's own tests, which build contexts themselves
+ * (`FakeGame.context()`), and it opens a protected step to any caller. Without the check a test could hand it a
+ * context of another game and exercise a combination the library never makes.
+ */
+internal class BagStepRecipes : Recipes() {
+    fun bagItemOf(context: PlanContext, item: ItemRef): Step<dev.kotlinds.pokemonclient.state.Entry> {
+        check(context.recipes === this) { "a context of another game" }
+        return bagItem(context, item)
+    }
+}

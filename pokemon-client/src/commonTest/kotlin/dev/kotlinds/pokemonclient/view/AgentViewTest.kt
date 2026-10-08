@@ -117,4 +117,20 @@ class AgentViewTest {
         view.describe(trainerBattle(1, shift, hp = 0), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)
         assertNull(view.describe(trainerBattle(2, shift), emptyList(), AgentOptions(), AgentView.Detail.COMPACT)["battle_style"])
     }
+
+    /**
+     * What an agent reads in Platinum's bedroom (a RAM fixture, no ROM): `tune_radio` (no Pokégear in this game) is in
+     * neither list, while Fly (in the game, not supported yet) keeps being listed unavailable when the field moves are
+     * known. The same JSON keys as in every game.
+     */
+    @Test
+    fun anActionTheGameDoesntHaveIsNeitherOfferedNorListedUnavailable() {
+        val platinum = dev.kotlinds.pokemonclient.games.platinum.PlatinumGame(dev.kotlinds.pokemonclient.games.platinum.PlatinumVersion.PLATINUM_US)
+        val bedroom = platinum.state(dev.kotlinds.pokemonclient.games.platinum.PlatinumFixtures.load("pt_bedroom"))
+        val json = AgentView(platinum).describe(bedroom, emptyList(), AgentOptions(), AgentView.Detail.STANDARD)
+        val offered = json["actions"]!!.jsonArray.map { it.toString() }
+        val unavailable = json["unavailable"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+        assertTrue(offered.none { "tune_radio" in it }, offered.toString())
+        assertTrue(unavailable.none { it.startsWith("tune_radio") }, unavailable.toString())
+    }
 }

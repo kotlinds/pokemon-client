@@ -52,7 +52,7 @@ class FlyAdvisorTest {
     private val far = FlyDestination("fly:5", FAR_TOWN, "Far Town")
 
     /** HGSS's Fly rule (the move, the Storm Badge by id). */
-    private val fly = hgssFieldMoves(FieldMoveKind.FLY)!!
+    private val fly = hgssFieldMoves(FieldMoveKind.FLY) as dev.kotlinds.pokemonclient.world.FieldMoveRule
 
     private fun state(destinations: List<FlyDestination>, x: Int = 0, badges: Set<Int> = setOf(fly.badgeId!!), knowsFly: Boolean = true) = GameState(
         0, OVERWORLD,

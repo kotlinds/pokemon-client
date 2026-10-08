@@ -195,6 +195,7 @@ class HgssLiveChecksFixtureTest {
             override val name = "Scripted"
             override fun state(memory: Memory) = current
             override val inputProbe = InputProbe { emptySet() }
+            override val recipes = dev.kotlinds.pokemonclient.actions.Recipes()
         }
         val recorder = Recorder(scripted, every = 1)
         val memory = HgssFixtures.load("ts_evo_stale_f124")

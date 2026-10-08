@@ -26,6 +26,7 @@ class RecorderPokegearTest {
             override val name = "Scripted"
             override fun state(memory: Memory) = current
             override val inputProbe = InputProbe { emptySet() }
+            override val recipes = dev.kotlinds.pokemonclient.actions.Recipes()
         }
         val recorder = Recorder(game, every = 1)
         val memory = ZeroMemory

@@ -1,6 +1,7 @@
 package dev.kotlinds.pokemonclient.view
 
 import dev.kotlinds.pokemonclient.PokemonGame
+import dev.kotlinds.pokemonclient.actions.ActionConditions
 import dev.kotlinds.pokemonclient.actions.ActionMode
 import dev.kotlinds.pokemonclient.actions.ActionRegistry
 import dev.kotlinds.pokemonclient.actions.ActionSettings
@@ -71,7 +72,7 @@ data class AgentOptions(
  * opponents this battle ([BattleKnowledge]), the fly suggestions (each costs a search of the world) and what a compact
  * answer already sent (the team, the position).
  */
-class AgentView(private val game: PokemonGame, private val registry: ActionRegistry = ActionRegistry.of(game)) {
+class AgentView(private val game: PokemonGame, private val registry: ActionRegistry = ActionRegistry.of()) {
 
     /** How much a description says. */
     enum class Detail {
@@ -171,7 +172,7 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
             if (party.isNotEmpty()) put("party_effectiveness", JsonArray(party.map { JsonPrimitive(it.line(battle.isDouble)) }))
         }
         battleKnowledge.describe(battle, data).takeIf { it.isNotEmpty() }?.let { put("opponents_known", JsonArray(it.map(::JsonPrimitive))) }
-        val balls = state.bag.orEmpty().firstOrNull { it.name == "balls" }?.items.orEmpty()
+        val balls = ActionConditions.ballsInBag(state)
         CatchChance.estimate(battle, balls, data)?.let { estimate ->
             put("catch", buildJsonObject {
                 put("catch_rate", estimate.catchRate)
@@ -217,14 +218,19 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
         if (story.blockers.isNotEmpty()) put(BLOCKED_BY, JsonArray(story.blockers.map { JsonPrimitive(blockedBy(it, state.field, walkthrough, hidden)) }))
     }
 
-    /** The actions possible now (names only in a compact answer), and those shown but not possible, with why. */
+    /**
+     * The actions possible now (names only in a compact answer), and those shown but not possible, with why
+     * ([dev.kotlinds.pokemonclient.actions.Availability.Unavailable]). Neither lists what is meaningless on this screen
+     * nor what the game doesn't have at all (`tune_radio` in a game without a Pokégear:
+     * [dev.kotlinds.pokemonclient.actions.Availability.NotInThisGame]): an agent trying one gets a typed refusal.
+     */
     private fun JsonObjectBuilder.actions(state: GameState, mode: ActionMode, detail: Detail) {
         if (detail == Detail.COMPACT) {
-            put("actions", JsonArray(registry.available(state, mode).map { JsonPrimitive(it.name) }))
+            put("actions", JsonArray(registry.available(state, mode, game).map { JsonPrimitive(it.name) }))
             return
         }
         put("actions", buildJsonArray {
-            registry.available(state, mode).forEach { a ->
+            registry.available(state, mode, game).forEach { a ->
                 add(buildJsonObject {
                     put("type", a.name)
                     if (detail == Detail.FULL) put("description", a.description)
@@ -234,7 +240,7 @@ class AgentView(private val game: PokemonGame, private val registry: ActionRegis
                 })
             }
         })
-        val unavailable = registry.unavailable(state, mode)
+        val unavailable = registry.unavailable(state, mode, game)
         if (unavailable.isNotEmpty()) {
             put("unavailable", JsonArray(unavailable.map { JsonPrimitive("${it.name}: ${it.detail}" + (it.hint?.let { h -> " ($h)" } ?: "")) }))
         }

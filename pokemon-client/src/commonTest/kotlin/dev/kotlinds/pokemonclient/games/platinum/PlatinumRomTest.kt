@@ -88,14 +88,15 @@ class PlatinumRomTest {
     @Test
     fun `field move rules are Platinum's`() {
         val game = PlatinumGame(PlatinumVersion.PLATINUM_US)
-        val fly = game.fieldMoveRule(FieldMoveKind.FLY)!!
+        val fly = assertIs<dev.kotlinds.pokemonclient.world.FieldMoveRule>(game.fieldMoveRule(FieldMoveKind.FLY))
         assertEquals(19, fly.move.value)
         assertEquals("Cobble" to 2, fly.badge to fly.badgeId)
-        assertNull(game.fieldMoveRule(FieldMoveKind.WHIRLPOOL))
-        assertNull(game.fieldMoveRule(FieldMoveKind.HEADBUTT))
+        // Moves Platinum doesn't have: known absent, never unknown.
+        assertEquals(dev.kotlinds.pokemonclient.world.FieldMoveSupport.NotInGame, game.fieldMoveRule(FieldMoveKind.WHIRLPOOL))
+        assertEquals(dev.kotlinds.pokemonclient.world.FieldMoveSupport.NotInGame, game.fieldMoveRule(FieldMoveKind.HEADBUTT))
         // Defog needs the Relic Badge (FieldMoves_CheckDefog); Teleport no badge (FieldMoves_CheckTeleport).
-        assertEquals(Triple(432, "Relic", 4), game.fieldMoveRule(FieldMoveKind.DEFOG)!!.let { Triple(it.move.value, it.badge, it.badgeId) })
-        assertEquals(100 to null, game.fieldMoveRule(FieldMoveKind.TELEPORT)!!.let { it.move.value to it.badge })
+        assertEquals(Triple(432, "Relic", 4), assertIs<dev.kotlinds.pokemonclient.world.FieldMoveRule>(game.fieldMoveRule(FieldMoveKind.DEFOG)).let { Triple(it.move.value, it.badge, it.badgeId) })
+        assertEquals(100 to null, assertIs<dev.kotlinds.pokemonclient.world.FieldMoveRule>(game.fieldMoveRule(FieldMoveKind.TELEPORT)).let { it.move.value to it.badge })
         // Without a ROM, the maps keep their own names.
         assertEquals("Twinleaf Town Player House 2F", game.mapName(415).toString())
     }
@@ -179,8 +180,9 @@ class PlatinumRomTest {
         val state = game.state(PlatinumFixtures.load("pt_bedroom"))
         val access = assertNotNull(state.fieldMoves)
         assertEquals(dev.kotlinds.pokemonclient.world.FieldMoveAccess.NotSupported, access[FieldMoveKind.FLY])
-        assertEquals(dev.kotlinds.pokemonclient.world.FieldMoveAccess.Unknown, access[FieldMoveKind.WHIRLPOOL])
-        val fly = dev.kotlinds.pokemonclient.actions.ActionRegistry.of().unavailable(state, dev.kotlinds.pokemonclient.actions.ActionMode.ASSISTED)
+        // A move Platinum doesn't have stays absent (not "unsupported"): no action using it exists in the game.
+        assertEquals(dev.kotlinds.pokemonclient.world.FieldMoveAccess.NotInGame, access[FieldMoveKind.WHIRLPOOL])
+        val fly = dev.kotlinds.pokemonclient.actions.ActionRegistry.of().unavailable(state, dev.kotlinds.pokemonclient.actions.ActionMode.ASSISTED, game)
             .singleOrNull { it.name == "fly" }
         if (state.screen is Screen.Overworld) {
             assertEquals(dev.kotlinds.pokemonclient.actions.UnavailableReason.NOT_SUPPORTED_BY_GAME, assertNotNull(fly).reason)

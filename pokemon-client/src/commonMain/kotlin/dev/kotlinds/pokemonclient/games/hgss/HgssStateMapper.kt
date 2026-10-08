@@ -200,6 +200,8 @@ class HgssStateMapper {
             warnings = warnings,
             registeredItems = state.registeredItems.map { id -> id.takeIf { it != 0 }?.let(::ItemId) },
             story = story(state),
+            // HeartGold / SoulSilver's Pokégear: its radio is `tune_radio`'s (its cards: PlayerInfo.pokegearCards).
+            pokegear = true,
         ).withBlockerRoles()
     }
 

@@ -12,9 +12,12 @@ import dev.kotlinds.pokemonclient.state.Screen
 import dev.kotlinds.pokemonclient.state.SpeciesId
 import dev.kotlinds.pokemonclient.world.FieldMoveAccess
 import dev.kotlinds.pokemonclient.world.FieldMoveKind
+import dev.kotlinds.pokemonclient.world.FieldMoveRule
+import dev.kotlinds.pokemonclient.world.FieldMoveSupport
 import dev.kotlinds.pokemonclient.world.FieldMoves
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 
 /** HeartGold / SoulSilver's field move rules: the Gen 4 move ids, HGSS's badges by id (src/field_move.c). */
@@ -24,8 +27,8 @@ class HgssFieldMovesTest {
     fun everyFieldMoveHasItsMoveAndBadge() {
         val game = HgssGame(HgssVersion.HEARTGOLD_US)
         // Every Gen 4 field move but Platinum's Defog.
-        assertNull(game.fieldMoveRule(FieldMoveKind.DEFOG))
-        val rules = (FieldMoveKind.entries - FieldMoveKind.DEFOG).associateWith { game.fieldMoveRule(it)!! }
+        assertEquals(FieldMoveSupport.NotInGame, game.fieldMoveRule(FieldMoveKind.DEFOG))
+        val rules = (FieldMoveKind.entries - FieldMoveKind.DEFOG).associateWith { assertIs<FieldMoveRule>(game.fieldMoveRule(it)) }
         assertEquals(19 to 4, rules.getValue(FieldMoveKind.FLY).let { it.move.value to it.badgeId }, "Fly: the Storm Badge")
         assertEquals(57 to 3, rules.getValue(FieldMoveKind.SURF).let { it.move.value to it.badgeId }, "Surf: the Fog Badge")
         assertEquals(15 to 1, rules.getValue(FieldMoveKind.CUT).let { it.move.value to it.badgeId }, "Cut: the Hive Badge")
@@ -54,10 +57,10 @@ class HgssFieldMovesTest {
         val read = FieldMoves.of(bare, game::fieldMoveRule)
         assertEquals(FieldMoveAccess.Usable(0, "PIDGEOT"), read[FieldMoveKind.FLY])
         assertEquals(FieldMoveAccess.NoPokemon, read[FieldMoveKind.SURF])
-        // A move without a badge is usable as soon as a Pokémon knows it; one the game doesn't have is Unknown.
+        // A move without a badge is usable as soon as a Pokémon knows it; one the game doesn't have is NotInGame.
         val teleporter = flyer.copy(moves = flyer.moves + KnownMove(Named(MoveId(100), "Teleport"), 20, 20, "Psychic"))
         assertEquals(FieldMoveAccess.Usable(0, "PIDGEOT"), FieldMoves.of(bare.copy(party = listOf(teleporter), player = null), game::fieldMoveRule)[FieldMoveKind.TELEPORT])
-        assertEquals(FieldMoveAccess.Unknown, read[FieldMoveKind.DEFOG])
+        assertEquals(FieldMoveAccess.NotInGame, read[FieldMoveKind.DEFOG])
         assertEquals(FieldMoveKind.entries.toSet(), read.keys)
         // A state the game read keeps its own reading.
         val filled = bare.copy(fieldMoves = mapOf(FieldMoveKind.FLY to FieldMoveAccess.Unknown))

@@ -58,7 +58,7 @@ class WatchHallOfFameRecipeTest {
 
     private fun run(ui: ScriptedUi, reports: MutableList<ActionProgress> = mutableListOf()): ActionOutcome {
         val scope = ActionScope(ui.game.console, ui.game.inputProbe, onProgress = { reports += it })
-        return HallOfFamePlans.watchHallOfFame.run(GameAction.WatchHallOfFame, PlanContext(scope, ui.game))
+        return RecipeBase.perform(GameAction.WatchHallOfFame, PlanContext(scope, ui.game))
     }
 
     @Test

@@ -22,13 +22,22 @@ import kotlin.math.abs
  * says which warp was taken and where the player is now. Holding on across a warp is what took the shuffled warps
  * twice (the "invisible double warp": arrived in front of another warp taken the same way, the held direction took it
  * back at once, and the walk saw the same map and tile as before).
+ *
+ * Public API: a game written in its own project uses these rules in its overrides (a step of its own that waits for
+ * the player, an availability saying "walking freely": [inControl], [takenOver], [awaitStill], [face],
+ * [closeNotice]), so its recipes wait, face and stop exactly like the common ones. The warp watch itself ([warpMark],
+ * [awaitOutcome], what a warp is: [isWarp], [inTransition]), the refused-step check of the `step` recipe
+ * ([takenAfterRefusal]) and the engine's frame counts stay internal to the walking engine: they work on the warps the
+ * [Navigator] noted from every state it decoded (its internal [WarpWatch]), engine state a recipe never handles. A
+ * game's recipe that moves the player calls the movement recipes on itself (`goTo(...)`, `step(...)`, protected
+ * methods of its own chain, overrides included), which watch the warps and the refusals.
  */
-internal object FieldControl {
+object FieldControl {
 
     /**
      * True when the player walks freely on the overworld and the game waits for input: no battle, no message, no
      * menu, no scene. The common condition of the field actions (whether maps are known or not: see
-     * [MovePlans.canWalk]).
+     * [ActionConditions.canWalk]).
      */
     fun inControl(state: GameState): Boolean =
         state.battle == null && state.screen is Screen.Overworld && state.screen.awaiting == Awaiting.INPUT
@@ -118,7 +127,7 @@ internal object FieldControl {
      * move's animation, a ride) see a Rock Climb, a waterfall or a cart cover several tiles between two readings,
      * with no transition.
      */
-    fun isWarp(world: WorldSource?, before: FieldState, after: FieldState, transitionSeen: Boolean, frames: Long): Boolean {
+    internal fun isWarp(world: WorldSource?, before: FieldState, after: FieldState, transitionSeen: Boolean, frames: Long): Boolean {
         if (before.mapId != after.mapId) {
             if (world == null) return true
             if (world.areaOf(before.mapId)?.id != world.areaOf(after.mapId)?.id) return true
@@ -131,11 +140,11 @@ internal object FieldControl {
      * True when [state] shows the game's map transition (the fade of a warp, a fall, a map load: the screen is a
      * [dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION]): what tells a warp from a long move ([isWarp]).
      */
-    fun inTransition(state: GameState): Boolean =
+    internal fun inTransition(state: GameState): Boolean =
         (state.screen as? Screen.Animation)?.kind == dev.kotlinds.pokemonclient.state.AnimationKind.TRANSITION
 
     /** The mark to take before a movement ([WarpWatch.mark]), the player's place read first (the last one known). */
-    fun warpMark(context: PlanContext): Int {
+    internal fun warpMark(context: PlanContext): Int {
         context.state()
         return context.navigator.warps.mark()
     }
@@ -148,7 +157,7 @@ internal object FieldControl {
      * "nothing happened") is what pressed on into a second warp. The warp taken, with where the player stands once
      * the game gives the control back; null when there was none (or a battle, a message, a menu came first).
      */
-    fun awaitOutcome(context: PlanContext, mark: Int): WarpWatch.Warped? {
+    internal fun awaitOutcome(context: PlanContext, mark: Int): WarpWatch.Warped? {
         val warps = context.navigator.warps
         // Already standing still with the control for long enough (the move's own wait saw it): no warp is starting.
         if (warps.since(mark) == null && warps.calmFrames >= STILL_FRAMES) return null
@@ -211,7 +220,7 @@ internal object FieldControl {
      * null when the player kept the control all along: the step really was refused (a wall, someone in the way). A
      * refused step and a scene starting look the same on the frame of the refusal.
      */
-    fun takenAfterRefusal(context: PlanContext): GameState? {
+    internal fun takenAfterRefusal(context: PlanContext): GameState? {
         repeat(REFUSAL_GRACE_FRAMES) {
             context.scope.step(1)
             val state = context.state()
@@ -299,19 +308,19 @@ internal object FieldControl {
     private const val NOTICE_WAIT_FRAMES = 8
 
     /** Frames in a row without moving after which a move is over (a bike may start one more tile by itself). */
-    const val STILL_FRAMES = 6
+    internal const val STILL_FRAMES = 6
 
     /** The longest move between two readings that is still walking (a ledge jump crosses two tiles). */
-    const val MAX_STRIDE = 2
+    internal const val MAX_STRIDE = 2
 
     /** Readings this many frames apart or fewer are consecutive ([isWarp]): no move on the map covers 3 tiles in them. */
-    const val CONSECUTIVE_FRAMES = 2L
+    internal const val CONSECUTIVE_FRAMES = 2L
 
     /** Longest wait for a warp to start and end once the player stopped on it (a ladder's climb, a fade, the arrival). */
-    const val WARP_FRAMES = 300
+    internal const val WARP_FRAMES = 300
 
     /** Longest wait for the player to stand still after a move (a step takes 8 frames running, 16 walking). */
-    const val SETTLE_FRAMES = 64
+    internal const val SETTLE_FRAMES = 64
 
     /** Frames after a turning tap before the facing is read again (the turn's animation). */
     private const val TURN_FRAMES = 8

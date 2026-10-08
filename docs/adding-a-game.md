@@ -1,7 +1,7 @@
 # Adding a game
 
 How to make another Pokémon game playable by every AI of the project (Platinum, Diamond/Pearl, Black/White, later a
-GBA game). The plans, the navigator, the action registry, the MCP server and the deciders are shared: a new game
+GBA game). The recipes, the navigator, the action registry, the MCP server and the deciders are shared: a new game
 only has to **read** itself into the common model, and (optionally) describe its maps and data from the ROM.
 
 Validated with Pokémon Platinum (USA), `games/platinum/`: intro, main menu, naming keyboard, field messages, position and
@@ -32,8 +32,8 @@ contract, and don't put generic things in `games/gen4/`.
 | `data` | `GameData` from the ROM: species, moves, items, type chart, machines, text | for `lookup` and effectiveness |
 | `scriptVariable(memory, id)`, `scriptFlag(memory, id)` | read a script variable / an event flag (active triggers, puzzles, quiet triggers). Gen 4: the save's `VarsFlags` (`Gen4SaveData` with the game's `Gen4SaveLayout`) | for triggers |
 | `mapName(id)` | the one `MapName` of a map (the place shown in game + the map's own name; `map:<id>` when unknown), shown by the state and the map view, matched by `go_to` and `fly` | for movement actions |
-| `actionOverrides` | the game's own recipes (`RecipeOverride.of<GameAction.X> { action, context -> ... }`), each replacing the common recipe of one action type for this game only; the action's spec (name, parameters, availability, description) stays the common one, so agents see the same contract. Empty by default. Every host builds its registry with `ActionRegistry.of(game)` (the app's sessions and MCP server, the bench, `AgentView`), so an override is always played, also when another recipe carries out that action as one of its steps (`context.run(action)`: `heal` and `buy` talk through `interact`); two recipes for one type, or a type that isn't a common action, are refused when the registry is built | only when the game's screens make a common recipe impossible |
-| `fieldMoveRule(kind)` | the move and badge of each field move, Fly included (Gen 4: give `fieldMoveBadges`, a map from each move the game has to the badge it needs, `null` for none: Teleport, Dig...; a move missing from the map is one the game doesn't have). A game whose party and party menu aren't decoded yet says so (`Gen4Game.partyRead = false`): every move is `FieldMoveAccess.NotSupported`, `fly` and `use_field_move` are listed unavailable (`NOT_SUPPORTED_BY_GAME`), routes don't use Surf, Cut... | for field moves and `fly` |
+| `recipes` | how the game carries out the actions, and when each can run: its own instance (required, no default: there is no shared recipes object) of a subclass of `Recipes` (a chain of classes: the common `Recipes`, then the generation's, `Gen4Recipes`, then the game's own, `HgssRecipes`, `PlatinumRecipes`), overriding only the methods of what it does differently (`override fun interact(action, context)`). One method per action, dispatched by an exhaustive `when` over the sealed `GameAction` in `RecipeBase`: a new action doesn't compile without a recipe. The common recipes are a chain of abstract families, one per file (`RecipeBase` → `BasicRecipes` → `BattleRecipes` → `BagPartyRecipes` → `MoveRecipes` → `ServiceRecipes` → `FieldRecipes` → `Recipes`), never delegated (`by`), so a call inside the chain is virtual. The recipes and the shared steps are `protected`: outside the chain they are reached only through `RecipeBase.perform(action, context)` (and `closeToOverworld` / `activateKeyItem` for the walking engine), which take the context alone and run the recipes of the context's own game (`PlanContext.recipes`); and a `PlanContext` is built by the library only (internal constructor, its navigator always made from its own game), so a game only ever receives its own game's contexts: one game's recipes can never run with another game's context, even when they call their own `protected` methods. Every action is played through the game's recipes: by `ActionRegistry.execute` (every host), when a recipe carries out another action as one of its steps (a method call on the same object: `heal`, `buy` and the PC talk through `interact(...)`, `teach` goes on with `learnMove(...)`), and when the walking engine needs one (a walk reapplies a Repel through `RecipeBase.perform`), so an override is always played. A game may also override a shared step rather than a whole action (`openStartMenuEntry`, `openParty`, `bagItem`, `closeToOverworld`, `activateKeyItem`, `openStorage`, `openShop`...): every recipe going through it plays the game's way. When an action can run is one method per action too (`<action>Availability(state)`, e.g. `tuneRadioAvailability`; the common rule by default, built on the helpers of `ActionConditions`), the single entry point read by the listing (`available`, `unavailable`, `enumerate`, given the game) and by `execute`: an action is never listed but refused, nor accepted but not listed. Its spec (name, parameters, ids, errors, description) stays the common one, so agents see the same contract; see "Overriding a condition". `Recipes` and `Gen4Recipes` have a public constructor and what a game may override (the recipes, the shared steps, the `<action>Availability` methods) is `protected open`: a game can be written outside this library (see "Writing a game outside the library"), while nobody outside the chain can call them. A Gen 4 game must give its own `Gen4Recipes` subclass (`Gen4Game.recipes` is abstract), even empty | yes (`PokemonGame.recipes` has no default); a Gen 4 game: an empty `Gen4Recipes` subclass at first |
+| `fieldMoveRule(kind)` | the move and badge of each field move, Fly included: a `FieldMoveRule`, or `FieldMoveSupport.NotInGame` for a move the game doesn't have (the actions using only it don't exist in the game: `fly` without Fly, `push` without Strength, `use_field_move` without any of its moves are `Availability.NotInThisGame`), or `FieldMoveSupport.Unknown`, the default, when the game doesn't declare its field moves (`fly` and `use_field_move` hidden) (Gen 4: give `fieldMoveBadges`, a map from each move the game has to the badge it needs, `null` for none: Teleport, Dig...; a move missing from the map is one the game doesn't have, `NotInGame`). A game whose party and party menu aren't decoded yet says so (`Gen4Game.partyRead = false`): every move is `FieldMoveAccess.NotSupported`, `fly` and `use_field_move` are listed unavailable (`NOT_SUPPORTED_BY_GAME`), routes don't use Surf, Cut... | for field moves and `fly` |
 
 `GameState` fields a game fills when it can read them (null / empty means unknown, never "none"):
 
@@ -43,11 +43,103 @@ contract, and don't put generic things in `games/gen4/`.
 | `eventFlags` | every event flag of the save (`EventFlags`, one bulk read): which people of other maps are there (an exit whose arrival someone blocks, the reachability survey) | `Gen4SaveData.eventFlags()` |
 | `field.runningShoes`, `field.autoRun` | the running shoes owned (null: taken as owned) / switched on (the game runs whatever is pressed) | HGSS reads both; Platinum not yet (walks run by default) |
 | `player.badgeIds` | the badges by the game's id (rules check ids, never names) | HGSS |
+| `pokegear` | whether the game has a Pokégear (false: its Pokégear actions, `tune_radio`, don't exist in it, `Availability.NotInThisGame`: never listed, refused as `NOT_SUPPORTED_BY_GAME`; null: unknown, taken as present) | HGSS true, Platinum false (the Pokétch) |
 | `Screen.Dialogue.notice` | a message the game shows by itself on the field, outside any scene (`FieldNotice`: the Repel wearing off), told by the script that prints it (never its text): walks close it, then do what `on_repel_end` says (stop by default; `reapply` uses one of `PokemonGame.repelItems`, Gen 4: 77, 76, 79), any other message stops them | `Gen4Structs.SM_SCRIPT_ID`: HGSS `std_repel_wore_off` (2022), Platinum common script 32 (2032) |
 | `data.item(id).usableFromBag` | whether the bag offers USE (the item's field-use function): `use_key_item` refuses a key used by interacting (Basement Key) before opening the bag | HGSS item data (`fieldUseFunc`); Platinum has no `GameData` yet (unknown: tried) |
 
 Register the ROM's game code in `PokemonGames` (`pokemon-client`, not the app): the app, the MCP server and the
 bench all detect the game from the ROM (`POKEMON_ROM=roms/<game>.nds`).
+
+## Overriding a condition
+
+When an action can run is decided by one method per action in the recipes (`<action>Availability(state)`), read
+both by the listing and by the execution: overriding it in a game changes both at once, never one without the other.
+Before overriding, prefer data:
+
+- a **datum** that differs (a game without some device, a move's badge, an item id) goes into the typed state or a
+  named `PokemonGame` member that the common rule reads: `GameState.pokegear` (false in Platinum, which has the
+  Pokétch: the common rule says `tune_radio` isn't in the game), `fieldMoveBadges` → `fieldMoves` (Fly,
+  `use_field_move`), `startMenu` (what the story unlocked);
+- only a **rule** of the game itself that the state can't express is an override, of that one method, in the game's
+  recipes (`override fun saveGameAvailability(state: GameState): Availability`).
+
+A condition answers one of four cases (`Availability`), each listed and executed its own way; pick the one that says
+what is true in the game:
+
+| Case | When | Listed | Executed |
+|---|---|---|---|
+| `Available(choices, listed)` | the action can run now (`listed = false`: accepted, not worth offering here) | in `actions` | run |
+| `Unavailable(reason, detail, hint)` | the action exists and makes sense here, but can't run now: something to do first (a badge, a Pokémon knowing the move, the story unlocking it), or **the game has it but the library doesn't support it there yet** (`NOT_SUPPORTED_BY_GAME`: Platinum's Fly while its party menu isn't decoded) | in `unavailable`, with the detail | refused with that reason |
+| `Hidden` | the action exists in the game but means nothing on this screen (`attack` outside a battle) | nowhere | refused as `WRONG_SCREEN` |
+| `NotInThisGame(detail)` | **the game itself doesn't have the action**, on any screen (`tune_radio` in Platinum: no Pokégear; `fly` / `push` / `use_field_move` in a game without their field moves, `FieldMoveSupport.NotInGame`) | nowhere | refused at once as `NOT_SUPPORTED_BY_GAME`, with the detail |
+
+`NotInThisGame` is about the game, not the library: when the game has the thing and only the decoding is missing, say
+`Unavailable(NOT_SUPPORTED_BY_GAME, ...)` so agents know it exists. Return it before any screen check (the action is
+absent on every screen, so it is never refused as a wrong screen).
+
+Every override of a condition carries a KDoc saying what in the game differs and why (with a decompilation reference
+when it comes from the game), is stated in the PR / change description, and is tested on both sides: the game that
+overrides it (listed and refused or accepted accordingly by the registry) and another game keeping the common rule.
+What may vary is availability alone (whether the action can run, and its choices): the contract (action names,
+parameters, ids, errors, the JSON schema) stays common.
+
+## Writing a game outside the library
+
+A game can be written in its own project, against the published library, before it is contributed: implement
+`PokemonGame` and give it its own recipes, an instance of `Recipes` (or of a generation's, `Gen4Recipes`) overriding what
+the game does differently:
+
+```kotlin
+class MyGame : PokemonGame {
+    // ...
+    override val recipes: Recipes = object : Recipes() {
+        /** This game opens its party from its own menu (a step every party recipe goes through). */
+        override fun openParty(context: PlanContext): Step<GameState> = ...
+
+        /** This game saves only at its save points: never from the field. */
+        override fun saveGameAvailability(state: GameState): Availability = ...
+    }
+}
+```
+
+Recipes are instantiated, never shared globally: there is no common recipes object to point at, each game holds its
+own instance (`PokemonGame.recipes` is required). What is overridable is `protected open`: a game overrides it, but no
+one calls it from outside the chain, which is entered only through the registry (`ActionRegistry.execute`, with the
+availability checked first) and the entries of `RecipeBase` that take the context alone (and run its game's recipes).
+A game never builds a `PlanContext` (its constructor is internal): it receives one in each override, always its own
+game's, read by its own game's navigator.
+`pokemon-client-libretro`'s `ExternalGameRecipesTest` is such a game, written in another module. It writes its
+overrides with the same public helpers as the library's own recipes:
+
+- `Step.andThen` chains checked steps (a `Step.Failed` stops the chain), `Step.then` ends them in the action's
+  `ActionOutcome`;
+- `ActionConditions`: the predicates of the common `<action>Availability` rules (`inField`, `canWalk`, `shopStage`,
+  `monChoices`, `locked`...), so "in the field" means the same in every game;
+- `FieldControl`: the walking engine's field rules (`inControl`, `takenOver`, `awaitStill`, `face`, `closeNotice`).
+  Its warp watch (`warpMark`, `awaitOutcome`, what a warp is: `isWarp`) and its tuning constants stay internal: engine
+  state of the `Navigator`, never handled by a recipe; a game's step that moves the player calls the movement recipes
+  on itself (`goTo(...)`, `step(...)`), which watch the warps.
+- `Navigator` (`context.navigator`): every press a recipe makes is read back (CONTRIBUTING §4): `press(button,
+  before)` presses then waits for the screen to change, `settle()` returns the screen waiting for input, `choose(...)`
+  moves a cursor and confirms only on the target.
+
+```kotlin
+override fun openMenu(action: GameAction.OpenMenu, context: PlanContext): ActionOutcome =
+    walking(context).andThen { state ->
+        context.navigator.press(Button.START, state.screen) // pressed, then the screen awaited to change
+        val menu = context.navigator.settle()
+        if ((menu.screen as? Screen.ListMenu)?.kind == MenuKind.START_MENU) Step.Done(menu)
+        else Step.Failed(ActionError.UnexpectedScreen("the start menu", menu.screen))
+    }.then { ActionOutcome.Done("opened ${action.entry} with START") }
+
+override fun saveGameAvailability(state: GameState): Availability =
+    if (ActionConditions.inField(state)) Availability.Unavailable(UnavailableReason.CANNOT_USE_HERE, "...") else Availability.Hidden
+
+private fun walking(context: PlanContext): Step<GameState> {
+    val state = context.state()
+    return if (FieldControl.inControl(state)) Step.Done(state) else Step.Failed(ActionError.UnexpectedScreen("the field", state.screen))
+}
+```
 
 ## The rules
 
@@ -136,8 +228,11 @@ Never compare values that depend on the time of day (the RTC follows the host cl
    optional field at the end of a type when the model really lacks something.
 7. **Story table** (optional, walkthrough knowledge): ordered steps with typed conditions on flags / vars / badges.
 8. **Verify the shared recipes** on the new game with the bench (`act:{...}`): heal, buy, PC, battle actions, fly,
-   fish, teach, go_to... A recipe only needs a per-game override (`actionOverrides`) when the game's screens really
-   differ; prefer making the common recipe read what differs from the state (a typed field of the screen) first.
+   fish, teach, go_to... What differs is handled by its kind: a **datum** that differs (an item id, the side a PC is
+   used from, a touch point) goes through a `PokemonGame` member or the typed state, read by the common recipe; a
+   **procedure** that differs (another order of screens, a list menu instead of the touch screen) is an override in
+   the game's recipes (`<Game>Recipes`), only of what differs: preferably of a shared step (the start menu, the bag,
+   the party...) rather than of a whole action.
 
 ## What Platinum doesn't read yet
 
@@ -163,5 +258,5 @@ The same actions are offered as in HeartGold / SoulSilver; what can't work yet i
   generic, the meaning of the ids is per game).
 - The bench's `raw`, `rawmon`, `box`, `where`, `watch`, `fish`, `world` commands and the music-during-pauses checks
   read HGSS structures: they refuse other games.
-- Rod item ids (`CommonActions.RODS`) and `bicycleItem` are the Gen 4 ids; `pcFacing` (a PC used from the south) is
+- Rod item ids (`ActionConditions.RODS`) and `bicycleItem` are the Gen 4 ids; `pcFacing` (a PC used from the south) is
   the Gen 4 rule, set in `Gen4Game` (a game that doesn't set it is used from any side).

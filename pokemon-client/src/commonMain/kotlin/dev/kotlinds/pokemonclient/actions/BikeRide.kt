@@ -8,7 +8,7 @@ import dev.kotlinds.pokemonclient.world.TileKind
 
 /**
  * The `bike` option of `go_to` / `step`: gets on the bicycle before walking, with the registered button when it's
- * registered (Y / its touch button), else bag → the Bicycle → USE ([PartyBagPlans.activateKeyItem]). Called again
+ * registered (Y / its touch button), else bag → the Bicycle → USE ([BagPartyRecipes.activateKeyItem]). Called again
  * after each warp (entering a building gets the player off; leaving it doesn't put them back on).
  *
  * Never an error: where cycling isn't possible (indoors, no bicycle, the game says no) the walk goes on on foot and
@@ -49,9 +49,9 @@ internal object BikeRide {
 
     /** Uses the bicycle [item] and tells whether the movement became [wanted] ([RODE]) or why not. */
     private fun toggle(context: PlanContext, item: Int, wanted: MovementMode): String {
-        val used = PartyBagPlans.activateKeyItem(context, ItemRef("item:$item"))
+        val used = RecipeBase.activateKeyItem(context, ItemRef("item:$item"))
         // A refusal is a message ("no cycling here"): read it, back to the field.
-        PartyBagPlans.closeToOverworld(context)
+        RecipeBase.closeToOverworld(context)
         val now = context.navigator.settle().field
         val on = wanted == MovementMode.BIKE
         return when {

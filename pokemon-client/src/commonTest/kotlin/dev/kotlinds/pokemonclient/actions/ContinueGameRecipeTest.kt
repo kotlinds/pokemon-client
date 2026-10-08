@@ -18,6 +18,7 @@ import dev.kotlinds.pokemonclient.state.TextSource
 import dev.kotlinds.pokemonclient.state.Topology
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -72,6 +73,31 @@ class ContinueGameRecipeTest {
         return ui
     }
 
+    /**
+     * An intro screen that goes on takes at least one input, by construction: `continue_game` cycles through them
+     * (`IntroInput.nth`, modulo their number), so an empty [IntroInputs] can't be built (a screen taking no input has
+     * none: [Screen.Intro.goesOnWith] null); one button alone, or a touch alone, is fine.
+     */
+    @Test
+    fun anIntroScreenThatGoesOnTakesAtLeastOneInput() {
+        assertFailsWith<IllegalArgumentException> { IntroInputs(emptySet()) }
+        assertFailsWith<IllegalArgumentException> { IntroInputs(emptySet(), touchAnywhere = false) }
+        assertEquals(setOf(Button.A), IntroInputs(setOf(Button.A)).buttons)
+        assertTrue(IntroInputs(emptySet(), touchAnywhere = true).touchAnywhere)
+    }
+
+    /** A screen passed by a touch alone: `continue_game` touches it (no button to try first). */
+    @Test
+    fun aScreenPassedByATouchAloneIsTouched() {
+        val touchOnly = Screen.Intro(IntroStage.TITLE_SCREEN, Awaiting.INPUT, IntroInputs(emptySet(), touchAnywhere = true))
+        val ui = game(touchOnly)
+        val touched = mutableListOf<TouchPoint>()
+        ui.game.onTouch = { point, screen -> touched += point; if (screen == touchOnly) mainMenu(Cursor.At(0)) else screen }
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
+        assertTrue(touched.isNotEmpty(), "the title screen takes only a touch")
+        assertTrue(ui.game.presses.none { it != Button.A }, "only A (CONTINUE) pressed: ${ui.game.presses}")
+    }
+
     @Test
     fun waitsUntilTheTitleScreenTakesInputThenContinues() {
         val ui = game(titleLoading, readyAt = 40)
@@ -79,7 +105,7 @@ class ContinueGameRecipeTest {
         val press = ui.game.onPress
         ui.game.onPress = { button, screen -> pressedAt += ui.frame; press(button, screen) }
 
-        val outcome = SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context())
+        val outcome = RecipeBase.perform(GameAction.ContinueGame, ui.context())
 
         val done = assertIs<ActionOutcome.Done>(outcome)
         assertEquals("continued the saved game, at map 1 8,13", done.detail)
@@ -90,14 +116,14 @@ class ContinueGameRecipeTest {
     @Test
     fun theMainMenuReachedByTouchIsHandledLikeTheOther() {
         val ui = game(titleReady, viaTouch = true)
-        assertIs<ActionOutcome.Done>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
         assertTrue(ui.field != null)
     }
 
     @Test
     fun anIgnoredInputIsFollowedByTheNextOneTheScreenTakes() {
         val ui = game(titleReady, title = { it == Button.START })
-        assertIs<ActionOutcome.Done>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
         assertEquals(listOf(Button.A, Button.START, Button.A), ui.game.presses)
     }
 
@@ -105,14 +131,14 @@ class ContinueGameRecipeTest {
     fun aTouchIsTriedWhenTheButtonsAreIgnored() {
         val ui = game(titleReady, title = { false })
         ui.game.onTouch = { _, screen -> if (screen == titleReady) mainMenu(Cursor.Hidden) else screen }
-        assertIs<ActionOutcome.Done>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
         assertEquals(listOf(TouchPoint(128, 96)), ui.game.touches)
     }
 
     @Test
     fun aTitleScreenThatIgnoresEveryInputEndsInAnExplicitError() {
         val ui = game(titleReady, title = { false })
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
         val error = assertIs<ActionError.InputIgnored>(outcome.error)
         assertEquals("intro:title_screen", error.screen)
         assertEquals(listOf("press a", "press start", "touch 128,96", "press a"), error.tried)
@@ -123,7 +149,7 @@ class ContinueGameRecipeTest {
     fun aCommunicationErrorOnTheMainMenuIsReported() {
         val ui = ScriptedUi(Screen.Intro(IntroStage.MAIN_MENU, Awaiting.ANIMATION))
         ui.game.onFrame = { frame, screen -> if (frame >= 10) Screen.PressToContinue(ContinueReason.COMMUNICATION_ERROR) else screen }
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
         assertEquals(ActionError.CommunicationError, outcome.error)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -132,7 +158,7 @@ class ContinueGameRecipeTest {
     fun withoutASaveTheNewGameIntroIsReported() {
         val ui = ScriptedUi(loading)
         ui.game.onFrame = { frame, screen -> if (frame >= 10) Screen.Dialogue(TextSource.INTRO, null, "Hello there!", Awaiting.INPUT) else screen }
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
         assertEquals(ActionError.NoSavedGame, outcome.error)
         assertTrue(ui.game.presses.isEmpty())
     }
@@ -142,7 +168,7 @@ class ContinueGameRecipeTest {
         val registry = ActionRegistry.of()
         fun offered(screen: Screen, inField: Boolean = false): Boolean {
             val state = GameState(0, screen, null, emptyList(), null, null, if (inField) field(1, 1, Direction.NORTH) else null)
-            return registry.available(state, ActionMode.ASSISTED).any { it.name == "continue_game" }
+            return registry.available(state, ActionMode.ASSISTED, FakeGame(screen)).any { it.name == "continue_game" }
         }
         assertTrue(offered(titleReady))
         assertTrue(offered(titleLoading))
@@ -157,7 +183,7 @@ class ContinueGameRecipeTest {
     @Test
     fun refusedOutsideTheIntro() {
         val ui = ScriptedUi(OVERWORLD).also { it.field = field(1, 1, Direction.NORTH) }
-        val outcome = assertIs<ActionOutcome.Failed>(SystemPlans.continueGame.run(GameAction.ContinueGame, ui.context()))
+        val outcome = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.ContinueGame, ui.context()))
         assertIs<ActionError.UnexpectedScreen>(outcome.error)
     }
 }

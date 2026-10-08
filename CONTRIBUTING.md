@@ -18,7 +18,10 @@ A client written for one game must work with every game with zero game-specific 
 - a game-specific concept is either mapped onto the common one, or added to the common model **for all games**, with
   an explicit "absent / unknown" value for the games that don't have it (yet);
 - game differences live in `games/<game>` (addresses, decoders, data tables), and what the Gen 4 engine shares lives
-  in `games/gen4`.
+  in `games/gen4`;
+- keep as much as possible common: code moves down to a generation (`gen4`, later `gen3`, `gen5`...) or to a game
+  only when a game that really differs is added, not in anticipation. Values that only one generation uses today
+  may stay common until then.
 
 See [docs/adding-a-game.md](docs/adding-a-game.md).
 
@@ -34,7 +37,7 @@ See [docs/adding-a-game.md](docs/adding-a-game.md).
 - Closed sets are sealed classes / interfaces or enums, not raw strings. Strings are converted to types at the
   boundary only (e.g. an action received as JSON is parsed once into a `GameAction`, unknown values rejected with a
   typed error, never silently aliased).
-- Clear layers behind interfaces (`ConsolePort`, `PokemonGame`, plans, registry). KDoc on public types and on
+- Clear layers behind interfaces (`ConsolePort`, `PokemonGame`, recipes, registry). KDoc on public types and on
   anything non-obvious; comments explain **why**, with decompilation references when the behaviour comes from the game.
 - **Safety by construction first.** When a design can make a mistake impossible (the compiler or the structure
   rules it out), prefer it over a design that relies on a convention to follow and to check in review. Examples:

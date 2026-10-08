@@ -122,7 +122,7 @@ class PuzzleSolvingTest {
     fun goToFailsWithPuzzleLeftToAgentAndNeverStepsOnTheLift() {
         val game = PuzzleGame(liftRoom, 0, 1, lift)
         val off = game.context(ActionSettings(solvePuzzles = false))
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(4, 1, null), off))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(4, 1, null), off))
         val error = assertIs<ActionError.Unavailable>(failed.error)
         assertEquals(UnavailableReason.PUZZLE_LEFT_TO_AGENT, error.reason)
         assertTrue("lift" in error.hint.orEmpty(), error.toString())
@@ -138,7 +138,7 @@ class PuzzleSolvingTest {
         val room = area("......")
         val pad = PuzzleState(PuzzleKind.TELEPORT_PADS, "rule", teleports = listOf(PuzzleTeleport("teleport:0", TeleportKind.PAD, listOf(PuzzleTile(2, 0)), PuzzleTile(5, 0))))
         val game = PuzzleGame(room, 0, 0, pad, pads = mapOf((2 to 0) to (5 to 0)))
-        val done = assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(null, null, "teleport:0"), game.context()))
+        val done = assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(null, null, "teleport:0"), game.context()))
         val said = done.detail.orEmpty()
         assertFalse("stopped on the way" in said || "took" in said, said)
         assertEquals(5 to 0, game.x to game.y)
@@ -152,7 +152,7 @@ class PuzzleSolvingTest {
         val hidden = game.context(ActionSettings(revealHidden = false))
         assertNull(MovePlans.resolve(hidden, "hidden_item:3", null, null))
         assertNull(MovePlans.resolve(hidden, "sign:3", null, null))
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.goTo.run(GameAction.GoTo(null, null, "hidden_item:3"), hidden))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.GoTo(null, null, "hidden_item:3"), hidden))
         assertFalse("hidden_item:3" in assertIs<ActionError.InvalidParameter>(failed.error).allowed)
         val revealed = game.context()
         assertEquals(3 to 0, MovePlans.resolve(revealed, "hidden_item:3", null, null)?.let { it.x to it.y })
@@ -166,7 +166,7 @@ class PuzzleSolvingTest {
         val game = PuzzleGame(map, 0, 0, null, listOf(part))
         val hidden = game.context(ActionSettings(revealHidden = false))
         assertNull(MovePlans.resolve(hidden, "examine:8", null, null))
-        val failed = assertIs<ActionOutcome.Failed>(MovePlans.interact.run(GameAction.Interact("examine:8"), hidden))
+        val failed = assertIs<ActionOutcome.Failed>(RecipeBase.perform(GameAction.Interact("examine:8"), hidden))
         assertFalse("examine:8" in assertIs<ActionError.InvalidParameter>(failed.error).allowed)
         val revealed = game.context()
         val target = assertIs<MovePlans.Target>(MovePlans.resolve(revealed, "examine:8", null, null))
@@ -177,7 +177,7 @@ class PuzzleSolvingTest {
         val cued = PuzzleGame(map, 0, 0, null, listOf(part.copy(cue = true)))
         assertEquals(2 to 1, MovePlans.resolve(cued.context(ActionSettings(revealHidden = false)), "examine:8", null, null)?.let { it.x to it.y })
         // Its tile is a wall: the walk to 3,1 goes round it by the top row.
-        assertIs<ActionOutcome.Done>(MovePlans.goTo.run(GameAction.GoTo(3, 1, null), revealed))
+        assertIs<ActionOutcome.Done>(RecipeBase.perform(GameAction.GoTo(3, 1, null), revealed))
         assertFalse((2 to 1) in game.visited, game.visited.toString())
     }
 }

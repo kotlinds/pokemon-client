@@ -27,7 +27,7 @@ class HgssGameClearFixtureTest {
 
     private fun state(fixture: String): GameState = game.state(HgssFixtures.load(fixture))
 
-    private fun offered(state: GameState) = registry.available(state, ActionMode.ASSISTED).map { it.name }
+    private fun offered(state: GameState) = registry.available(state, ActionMode.ASSISTED, game).map { it.name }
 
     @Test
     fun eachTeamMemberIsPresentedWithoutTakingInput() {

@@ -24,6 +24,7 @@ class PcSideTest {
     private fun game(facing: Direction?) = object : PokemonGame {
         override val name = "PC"
         override val inputProbe = InputProbe { emptySet() }
+        override val recipes = Recipes()
         override val world = ScriptedUi.world(3, 3, mapOf((1 to 1) to TileInfo(true, TileKind.Pc)))
         override val pcFacing = facing
         override fun state(memory: Memory) =

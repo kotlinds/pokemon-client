@@ -194,7 +194,7 @@ private class Bench(
 
     /** Frame of the last progress printed (see the scope's `onProgress`). */
     private var lastProgressPrint = Long.MIN_VALUE / 2
-    private val registry = ActionRegistry.of(game)
+    private val registry = ActionRegistry.of()
 
     /**
      * What the agent may know and do (`solve:on|off`, `reveal:on|off`, `hide:on|off`), like the app's settings: the
@@ -414,7 +414,7 @@ private class Bench(
             "reveal" -> options = options.copy(knowledge = if (arg != "off") KnowledgeLevel.POKEDEX_PLUS_WALKTHROUGH else KnowledgeLevel.POKEDEX)
             "hide" -> options = options.copy(hideDestinations = arg != "off")
             "view" -> agentView().forEach { (k, v) -> println("  $k: $v") }
-            "actions" -> registry.available(game.state(scope.memory()), options.mode).forEach { println("  $it") }
+            "actions" -> registry.available(game.state(scope.memory()), options.mode, game).forEach { println("  $it") }
             "pausemusic" -> pauseMusic.check(arg)
             "pausemusicstats" -> pauseMusic.stats(arg)
             "pausemusicload" -> pauseMusic.load(arg)
