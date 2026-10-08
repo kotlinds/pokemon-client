@@ -46,13 +46,10 @@ to let AIs play Pokémon HeartGold / SoulSilver and Platinum.
 
 ```kotlin
 dependencies {
-    implementation("dev.kotlinds:pokemon-client:0.1.1")
-    implementation("dev.kotlinds:pokemon-client-libretro:0.1.1") // to run it on a libretro core (JVM)
+    implementation("dev.kotlinds:pokemon-client:0.1.2")
+    implementation("dev.kotlinds:pokemon-client-libretro:0.1.2") // to run it on a libretro core (JVM)
 }
 ```
-
-`main` (and the guide below) follows the next version, with the per-game recipes: until it is released, use the
-`-SNAPSHOT` published locally (see [Development](#development)).
 
 Next: [Getting started](docs/getting-started.md): boot a ROM on a libretro core, read the typed state and the agent's
 JSON view, list and execute actions (typed or from JSON), lookups.
